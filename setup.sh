@@ -24,46 +24,56 @@ sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
 
-cat <<'ART'
-      |  |
-    .------.
-    | o  o |
-    |  __  |
-    |______|
-  .-|------|-.
-  | |      | |
-  | |      | |
-  | |      | |
-    | |  | |
-    | |  | |
-    | |  | |
-   [_]    [_]
-ART
+# Robot art (12 lines, padded to 24 chars)
+art=(
+"      |  |             "
+"    .------.           "
+"    | o  o |           "
+"    |  __  |           "
+"    |______|           "
+"  .-|------|-.         "
+"  | |      | |         "
+"  | |      | |         "
+"  | |      | |         "
+"    | |  | |           "
+"    | |  | |           "
+"    | |  | |           "
+"   [_]    [_]          "
+)
 
-echo ""
-echo "  Project  __ROBOT_PET_REPO__"
-echo "  Logs     __ROBOT_PET_LOG_DIR__"
-echo "  Code     /home/pi/robot-pet"
-echo "  Python   /home/pi/robot-pet/.venv"
-echo ""
-echo "  --- $(hostname) ---"
-echo "  Uptime   $(uptime -p 2>/dev/null || uptime | sed 's/.*up *//;s/,.*users.*//;s/  */ /g')"
-echo "  Load     $(awk '{print $1,$2,$3}' /proc/loadavg)  (1 / 5 / 15 min)"
-echo "  Memory   $(free -h | awk '/^Mem:/ {print $3 " used / " $2 " total (" $7 " avail)"}')"
-echo "  Disk /   $(df -h / | awk 'NR==2 {print $3 " used / " $2 " total (" $5 " full)"}')"
+# Build info lines
+info=()
+info+=("Project  __ROBOT_PET_REPO__")
+info+=("Logs     __ROBOT_PET_LOG_DIR__")
+info+=("Code     __ROBOT_PET_HOME__/robot-pet")
+info+=("Python   __ROBOT_PET_HOME__/robot-pet/.venv")
+info+=("")
+info+=("--- $(hostname) ---")
+info+=("Uptime   $(uptime -p 2>/dev/null || uptime | sed 's/.*up *//;s/,.*users.*//;s/  */ /g')")
+info+=("Load     $(awk '{print $1,$2,$3}' /proc/loadavg)  (1 / 5 / 15 min)")
+info+=("Memory   $(free -h | awk '/^Mem:/ {print $3 " used / " $2 " total (" $7 " avail)"}')")
+info+=("Disk /   $(df -h / | awk 'NR==2 {print $3 " used / " $2 " total (" $5 " full)"}')")
 if command -v vcgencmd >/dev/null 2>&1; then
-  echo "  SoC temp $(vcgencmd measure_temp 2>/dev/null | sed "s/temp=//")"
+  info+=("SoC temp $(vcgencmd measure_temp 2>/dev/null | sed 's/temp=//')")
 fi
 ips=$(hostname -I 2>/dev/null | awk '{gsub(/ /,", "); sub(/, $/,""); print}')
 if [[ -n "$ips" ]]; then
-  echo "  Addrs    $ips"
+  info+=("Addrs    $ips")
 fi
+
+# Print side by side
+echo ""
+max=${#art[@]}
+(( ${#info[@]} > max )) && max=${#info[@]}
+for ((i=0; i<max; i++)); do
+  printf "%s %s\n" "${art[i]:-                        }" "${info[i]:-}"
+done
 echo ""
 MOTD
 sudo sed -i \
   -e "s|__ROBOT_PET_REPO__|$REPO_HTTPS|g" \
   -e "s|__ROBOT_PET_LOG_DIR__|$LOG_DIR|g" \
-  -e "s|/home/pi|$HOME|g" \
+  -e "s|__ROBOT_PET_HOME__|$HOME|g" \
   /etc/update-motd.d/99-robot-pet
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 

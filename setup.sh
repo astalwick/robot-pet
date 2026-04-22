@@ -87,7 +87,8 @@ fi
 echo "[5/6] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
-pip install numpy pyserial gpiozero
+pip install numpy pyserial gpiozero evdev
+pip install git+https://github.com/basicmicro/roboclaw_python.git
 
 # Install and enable systemd services
 echo "[6/6] Installing systemd services..."

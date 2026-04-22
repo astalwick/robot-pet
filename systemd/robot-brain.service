@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/robot-pet
+WorkingDirectory=/home/pi/robot-pet/src
 ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot-brain.py
 Restart=always
 RestartSec=2

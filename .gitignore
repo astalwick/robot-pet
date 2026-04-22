@@ -1,32 +1,13 @@
-# --- Local / generated ---
-artifacts/
-data/
-
 # --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
+*.egg
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-pip-log.txt
-pip-delete-this-directory.txt
 
 # Virtual environments
 .venv/
@@ -41,30 +22,15 @@ env/
 .coverage
 htmlcov/
 .tox/
-.nox/
 coverage.xml
-*.cover
-.hypothesis/
 
-# Type checkers / linters (if you commit config but not cache)
-.dmypy.json
-dmypy.json
-
-# --- Secrets & machine-local config ---
+# --- Secrets & local config ---
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 secrets/
-.secrets/
-
-# --- Raspberry Pi / embedded (common clutter) ---
-*.img
-*.iso
-*.swp
-*.swo
-*~
 
 # --- IDE / editor ---
 .idea/
@@ -74,3 +40,12 @@ secrets/
 # --- OS ---
 .DS_Store
 Thumbs.db
+*~
+*.swp
+*.swo
+
+# --- Project-specific ---
+artifacts/
+data/
+*.img
+*.iso

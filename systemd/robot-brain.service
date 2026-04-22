@@ -1,0 +1,17 @@
+[Unit]
+Description=Robot Brain - main orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/main.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

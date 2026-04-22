@@ -3,7 +3,7 @@ set -euo pipefail
 
 PI_HOST="robot-pi.local"
 PI_USER="pi"
-SSH_KEY="$HOME/.ssh/id_github"
+SSH_KEY="$HOME/.ssh/id_ed25519"
 REPO_URL="git@github.com:astalwick/robot-pet.git"  # Adjust if needed
 REMOTE_PATH="~/robot-pet"
 
@@ -49,11 +49,11 @@ ssh "$PI_USER@$PI_HOST" 'ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/nul
 
 # Run apt update and upgrade
 echo "[5/7] Running apt update && apt full-upgrade (this may take a while)..."
-ssh "$PI_USER@$PI_HOST" 'sudo apt update && sudo apt full-upgrade -y'
+ssh -t "$PI_USER@$PI_HOST" 'sudo apt update && sudo apt full-upgrade -y'
 
 # Reboot and wait for Pi to come back
 echo "[6/7] Rebooting Pi..."
-ssh "$PI_USER@$PI_HOST" 'sudo reboot' || true  # Will disconnect, that's expected
+ssh -t "$PI_USER@$PI_HOST" 'sudo reboot' || true  # Will disconnect, that's expected
 
 echo "    Waiting for Pi to come back online..."
 sleep 10  # Give it time to actually go down
@@ -65,7 +65,7 @@ echo "    Pi is back online!"
 
 # Clone repo and run setup.sh
 echo "[7/7] Cloning repo and running setup.sh..."
-ssh "$PI_USER@$PI_HOST" "
+ssh -t "$PI_USER@$PI_HOST" "
     if [[ -d $REMOTE_PATH ]]; then
         echo 'Repo already exists, pulling latest...'
         cd $REMOTE_PATH && git pull

@@ -51,20 +51,8 @@ ssh "$PI_USER@$PI_HOST" 'ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/nul
 echo "[5/7] Running apt update && apt full-upgrade (this may take a while)..."
 ssh -t "$PI_USER@$PI_HOST" 'sudo apt update && sudo apt full-upgrade -y'
 
-# Reboot and wait for Pi to come back
-echo "[6/7] Rebooting Pi..."
-ssh -t "$PI_USER@$PI_HOST" 'sudo reboot' || true  # Will disconnect, that's expected
-
-echo "    Waiting for Pi to come back online..."
-sleep 10  # Give it time to actually go down
-while ! ssh -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "echo 'Pi is back'" 2>/dev/null; do
-    echo "    Still waiting..."
-    sleep 5
-done
-echo "    Pi is back online!"
-
 # Clone repo and run setup.sh
-echo "[7/7] Cloning repo and running setup.sh..."
+echo "[6/7] Cloning repo and running setup.sh..."
 ssh -t "$PI_USER@$PI_HOST" "
     if [[ -d $REMOTE_PATH ]]; then
         echo 'Repo already exists, pulling latest...'
@@ -78,7 +66,20 @@ ssh -t "$PI_USER@$PI_HOST" "
     ./setup.sh
 "
 
+# Reboot to apply kernel updates, group membership, and start services cleanly
+echo "[7/7] Rebooting Pi..."
+ssh -t "$PI_USER@$PI_HOST" 'sudo reboot' || true
+
+echo "    Waiting for Pi to come back online..."
+sleep 10
+while ! ssh -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "echo 'Pi is back'" 2>/dev/null; do
+    echo "    Still waiting..."
+    sleep 5
+done
+
 echo ""
 echo "=== Initialization complete! ==="
 echo "SSH in with: ssh $PI_USER@$PI_HOST"
 echo "Repo is at: $REMOTE_PATH"
+echo ""
+echo "Service status: ssh $PI_USER@$PI_HOST 'sudo systemctl status robot-brain'"

@@ -10,16 +10,20 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/6] Installing base packages..."
+echo "[1/7] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv
 
+# Add user to dialout group for serial port access (idempotent)
+echo "[2/7] Adding $USER to dialout group..."
+sudo usermod -a -G dialout "$USER"
+
 # Create log directory (idempotent)
-echo "[2/6] Creating log directory at $LOG_DIR..."
+echo "[3/7] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[3/6] Installing login welcome message..."
+echo "[4/7] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -78,20 +82,19 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Set up Python venv (idempotent - only creates if missing)
-echo "[4/6] Setting up Python venv at $VENV_PATH..."
+echo "[5/7] Setting up Python venv at $VENV_PATH..."
 if [[ ! -d "$VENV_PATH" ]]; then
   python3 -m venv "$VENV_PATH"
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[5/6] Installing Python packages..."
+echo "[6/7] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
-pip install numpy pyserial gpiozero evdev
-pip install git+https://github.com/basicmicro/roboclaw_python.git
+pip install numpy pyserial gpiozero evdev basicmicro
 
 # Install and enable systemd services
-echo "[6/6] Installing systemd services..."
+echo "[7/7] Installing systemd services..."
 sudo cp "$REPO_DIR/systemd/"*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service

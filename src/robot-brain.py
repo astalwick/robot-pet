@@ -7,19 +7,28 @@ This is the parent service that starts on boot. Future services
     After=robot-brain.service
 """
 
-import time
 import sys
+import time
+
+from lib.log import setup_logging
+
+log = setup_logging("robot-brain")
+
 
 def main():
-    print("robot-brain starting", flush=True)
+    log.info("starting")
     
     while True:
-        print("robot-brain alive", flush=True)
+        log.info("alive")
         time.sleep(5)
+
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("robot-brain shutting down", flush=True)
+        log.info("shutting down")
         sys.exit(0)
+    except Exception:
+        log.exception("crashed")
+        sys.exit(1)

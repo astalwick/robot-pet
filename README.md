@@ -1,2 +1,71 @@
-1. Flash the pi
-2. Run ./initialize-pi.sh from Mac.
+# robo-pet
+
+A Raspberry Pi 5 robot: differential drive, voice interaction, eventually autonomous navigation.
+
+## Quick Start
+
+**From your Mac**, with a fresh Pi 5 running Raspberry Pi OS Lite:
+
+```bash
+./initialize-pi.sh
+```
+
+This sets up SSH keys, installs dependencies, configures UART, and starts the robot-brain service.
+
+**On the Pi**, once hardware is connected:
+
+```bash
+source ~/.robot-pet/.venv/bin/activate
+python scripts/configure-roboclaw.py  # First time: set up motor controller
+python scripts/test-motor.py          # Verify motors work
+python scripts/teleop.py              # Drive with WASD keys
+```
+
+## Project Structure
+
+```
+├── initialize-pi.sh       # Run from Mac to set up a fresh Pi
+├── setup.sh               # Run on Pi (called by initialize-pi.sh)
+├── systemd/               # Service unit files
+│   └── robot-brain.service
+├── src/
+│   ├── drivers/           # Hardware drivers (pure Python, ROS2-ready)
+│   │   ├── motor.py       # RoboClaw motor controller
+│   │   └── controller.py  # Xbox 360 gamepad
+│   ├── lib/               # Shared utilities
+│   │   └── log.py         # Logging setup
+│   └── robot-brain.py     # Main orchestrator service
+├── scripts/               # Manual test/config scripts
+│   ├── configure-roboclaw.py
+│   ├── test-motor.py
+│   └── teleop.py
+└── docs/
+    ├── ARCHITECTURE.md    # System design, ROS2 migration path
+    ├── phase-0-assembly-guide.md
+    ├── robot-build-gotchas.md
+    └── robot-shopping-list.md
+```
+
+## Hardware
+
+- **Brain:** Raspberry Pi 5 (4GB)
+- **Motion:** RoboClaw 2x7A + goBILDA 5203 motors + 96mm wheels
+- **Power:** 3S LiPo (motors) + USB-C power bank (Pi)
+
+See `docs/robot-shopping-list.md` for full BOM.
+
+## Architecture
+
+Designed for eventual ROS2 migration. Drivers in `src/drivers/` are pure Python classes with no framework dependencies—they'll drop directly into ROS2 nodes. The current systemd services are temporary scaffolding.
+
+See `docs/ARCHITECTURE.md` for details.
+
+## Development
+
+```bash
+# Deploy changes to Pi
+ssh pi@robot-pi.local 'cd ~/robot-pet && git pull && ./setup.sh'
+
+# View logs
+ssh pi@robot-pi.local 'journalctl -u robot-brain -f'
+```

@@ -1,10 +1,11 @@
 """
 Motor driver for RoboClaw 2x7A using the basicmicro library.
 
-Uses USB serial connection for differential drive control.
+Uses GPIO UART serial connection for differential drive control.
 
 Hardware setup:
-- RoboClaw connected via USB (shows as /dev/ttyACM0 typically)
+- RoboClaw connected via Pi GPIO UART (GPIO 14 TX, GPIO 15 RX)
+- Requires dtoverlay=disable-bt in /boot/firmware/config.txt
 - M1 = left motor, M2 = right motor (adjust if wired differently)
 - User must be in 'dialout' group: sudo usermod -a -G dialout $USER
 """
@@ -24,7 +25,7 @@ class MotorDriver:
     
     def __init__(
         self,
-        port: str = "/dev/ttyACM0",
+        port: str = "/dev/serial0",
         address: int = 0x80,
         baud: int = 38400,
     ):

@@ -46,11 +46,14 @@ def main():
             return
 
         print("ERROR: Connected, but could not read version.")
+        print(f"  - Port: {port}")
+        print(f"  - Address: 0x{address:02X}")
+        print(f"  - Baud: {baud}")
         print("  - Check the RoboClaw packet serial address is 0x80.")
         print("  - Check S1/S2 mode and baud rate in Motion Studio.")
         sys.exit(1)
     finally:
-        rc.Close()
+        rc.close()
 
 
 if __name__ == "__main__":

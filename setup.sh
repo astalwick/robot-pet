@@ -20,11 +20,17 @@ sudo usermod -a -G dialout "$USER"
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[3/8] Configuring UART for RoboClaw..."
 BOOT_CONFIG="/boot/firmware/config.txt"
+if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
+    echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
+    echo "    Added enable_uart=1 to $BOOT_CONFIG"
+else
+    echo "    UART already enabled"
+fi
 if ! grep -q "^dtoverlay=disable-bt" "$BOOT_CONFIG" 2>/dev/null; then
     echo "dtoverlay=disable-bt" | sudo tee -a "$BOOT_CONFIG" >/dev/null
     echo "    Added dtoverlay=disable-bt to $BOOT_CONFIG"
 else
-    echo "    UART already configured"
+    echo "    Bluetooth already disabled on UART"
 fi
 
 # Create log directory (idempotent)

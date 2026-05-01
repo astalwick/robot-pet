@@ -86,4 +86,4 @@ class MotorDriver:
     def cleanup(self):
         """Stop motors and release resources."""
         self.stop()
-        self.controller.Close()
+        self.controller.close()

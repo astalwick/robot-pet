@@ -30,6 +30,12 @@ LOW_VOLTAGE_CUTOFF = 96  # 9.6V in 0.1V units (3.2V/cell for 3S LiPo)
 CURRENT_LIMIT = 5000  # 5A in mA units
 
 
+def format_version(version):
+    if isinstance(version, bytes):
+        return version.decode("ascii", errors="replace").strip()
+    return str(version).strip()
+
+
 def main():
     print("=== RoboClaw Configuration ===")
     print("")
@@ -52,6 +58,17 @@ def main():
         print("  - Is /dev/serial0 available? (ls -l /dev/serial0)")
         print("  - Did you run setup.sh and reboot for UART fix?")
         sys.exit(1)
+
+    result = rc.ReadVersion(address)
+    if not result[0]:
+        print("ERROR: RoboClaw did not respond to ReadVersion.")
+        print("\nTroubleshooting:")
+        print("  - Is the RoboClaw switched on?")
+        print("  - Is the RoboClaw logic power available?")
+        print("  - Check wiring: Pi TX -> RoboClaw S1, Pi RX -> RoboClaw S2, common GND.")
+        rc.close()
+        sys.exit(1)
+    print(f"RoboClaw version: {format_version(result[1])}")
     
     # Read current battery voltage
     result = rc.ReadMainBatteryVoltage(address)

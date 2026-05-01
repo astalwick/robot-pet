@@ -13,6 +13,12 @@ Hardware setup:
 from basicmicro import Basicmicro
 
 
+def format_version(version):
+    if isinstance(version, bytes):
+        return version.decode("ascii", errors="replace").strip()
+    return str(version).strip()
+
+
 class MotorDriver:
     """
     Differential drive motor controller using RoboClaw 2x7A.
@@ -40,6 +46,12 @@ class MotorDriver:
         self.address = address
         self.controller = Basicmicro(port, baud)
         self.controller.Open()
+
+        result = self.controller.ReadVersion(self.address)
+        if not result[0]:
+            self.controller.close()
+            raise RuntimeError("RoboClaw did not respond to ReadVersion.")
+        self.version = format_version(result[1])
         
         # Stop motors on init
         self.stop()

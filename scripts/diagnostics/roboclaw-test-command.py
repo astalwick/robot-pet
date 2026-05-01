@@ -21,8 +21,21 @@ from basicmicro import Basicmicro
 MAX_DUTY = 32767
 
 
+def format_version(version):
+    if isinstance(version, bytes):
+        return version.decode("ascii", errors="replace").strip()
+    return str(version).strip()
+
+
 def parse_address(value):
     return int(value, 0)
+
+
+def read_version(rc, address):
+    result = rc.ReadVersion(address)
+    if result[0]:
+        return format_version(result[1])
+    return None
 
 
 def read_voltage(rc, address):
@@ -60,6 +73,13 @@ def main():
         sys.exit(1)
 
     try:
+        version = read_version(rc, args.address)
+        if not version:
+            print("ERROR: RoboClaw did not respond to ReadVersion.")
+            print("Check that it is powered on and wired to the Pi UART.")
+            sys.exit(1)
+        print(f"RoboClaw version: {version}")
+
         voltage = read_voltage(rc, args.address)
         if voltage:
             print(f"Main battery: {voltage:.1f}V")

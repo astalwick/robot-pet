@@ -10,15 +10,19 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/8] Installing base packages..."
+echo "[1/9] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv
 
 # Add user to dialout group for serial port access (idempotent)
-echo "[2/8] Adding $USER to dialout group..."
+echo "[2/9] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
+# Add user to input group for controller/gamepad access (idempotent)
+echo "[3/9] Adding $USER to input group..."
+sudo usermod -a -G input "$USER"
+
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
-echo "[3/8] Configuring UART for RoboClaw..."
+echo "[4/9] Configuring UART for RoboClaw..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
     echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
@@ -34,12 +38,12 @@ else
 fi
 
 # Create log directory (idempotent)
-echo "[4/8] Creating log directory at $LOG_DIR..."
+echo "[5/9] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[5/8] Installing login welcome message..."
+echo "[6/9] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -98,19 +102,19 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Set up Python venv (idempotent - only creates if missing)
-echo "[6/8] Setting up Python venv at $VENV_PATH..."
+echo "[7/9] Setting up Python venv at $VENV_PATH..."
 if [[ ! -d "$VENV_PATH" ]]; then
   python3 -m venv "$VENV_PATH"
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[7/8] Installing Python packages..."
+echo "[8/9] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 pip install numpy pyserial gpiozero evdev basicmicro
 
 # Install and enable systemd services
-echo "[8/8] Installing systemd services..."
+echo "[9/9] Installing systemd services..."
 sudo cp "$REPO_DIR/systemd/"*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service

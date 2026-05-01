@@ -15,6 +15,7 @@ MARKED WITH r, pishop.ca
 MARKED WITH w. walmart
 MARKET WITH s, staples
 MARKED WITH R, robotshop
+Marked with S, seeed studio
 
 - means ordered
 
@@ -97,9 +98,12 @@ Add audio/video I/O. Hook up cloud STT/TTS + LLM with a character card so the ro
 
 ### Hardware (~$75)
 
-- [ ] Raspberry Pi Camera Module 3 **Wide** (120° FOV) — ~$35 _(wide is what a moving robot needs — 66° standard is too narrow)_
-- [ ] ReSpeaker 2-Mic HAT — ~$25 _(far-field pickup out to 2–3m with beamforming; wake-word capable)_
-- [ ] Small USB speaker — ~$15 _(upgrade later if the robot sounds tinny)_
+- [r] Raspberry Pi Camera Module 3 **Wide** (120° FOV) — ~$35 _(wide is what a moving robot needs — 66° standard is too narrow)_
+- [S] reSpeaker Flex XVF3800 Circular-4 AI-Powered Microphone Array for Robotics & Embedded Applications - $70
+  - https://ca.robotshop.com/products/respeaker-flex-xvf3800-circular-4-ai-powered-microphone-array-for-robotics-embedded-applications?variant=47617041301655
+
+- [r] Small USB speaker — ~$15 _(upgrade later if the robot sounds tinny)_
+  - JST-PH 2-pin pigtail STILL NEED TO BUY THIS
 
 **Phase 1 subtotal: ~$75** _(deliverable: "it moves and holds a conversation")_
 
@@ -111,7 +115,8 @@ _(LED face deferred — aesthetic, non-blocking. Add whenever you're in the mood
 
 ### Core sensor suite (~$115)
 
-- [ ] 3× VL53L1X ToF distance sensors — ~$18 each (~$55) _(front-left, front-center, front-right. Laser ToF works on fabric/fur/carpet where ultrasonic fails.)_
+- [S] 3× VL53L1X ToF distance sensors — ~$18 each (~$55) _(front-left, front-center, front-right. Laser ToF works on fabric/fur/carpet where ultrasonic fails.)_
+- [S] TCA9548A multiplexer
 - [ ] BNO085 9-axis IMU with onboard fusion — ~$25 _(quaternion orientation directly; no sensor-fusion code to write. SparkFun Qwiic breakout is clean.)_
 - [ ] 3× VL53L0X downward-facing cliff sensors — ~$25 total _(stops the robot from launching itself down stairs. Required as soon as it's autonomous.)_
 - [ ] Bump sensor rig: microswitches + sprung front bumper — ~$10 _(last-resort "I actually hit something" insurance. Wait-and-see: if ToF + cliff sensors are catching everything, don't wire these up. If the robot bumps things, add them then.)_

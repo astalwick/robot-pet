@@ -5,9 +5,9 @@ Read the RoboClaw firmware version.
 Usage:
     cd ~/robot-pet
     source .venv/bin/activate
-    python scripts/read-version.py
-    python scripts/read-version.py --baud 2400
-    python scripts/read-version.py --scan
+    python scripts/diagnostics/roboclaw-read-version.py
+    python scripts/diagnostics/roboclaw-read-version.py --baud 2400
+    python scripts/diagnostics/roboclaw-read-version.py --scan
 """
 
 import argparse

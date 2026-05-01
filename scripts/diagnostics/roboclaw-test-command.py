@@ -8,8 +8,8 @@ Pi can write a motor command without moving the robot.
 Usage:
     cd ~/robot-pet
     source .venv/bin/activate
-    python scripts/test-command.py
-    python scripts/test-command.py --pulse
+    python scripts/diagnostics/roboclaw-test-command.py
+    python scripts/diagnostics/roboclaw-test-command.py --pulse
 """
 
 import argparse

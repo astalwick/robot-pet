@@ -4,7 +4,7 @@ Drive the RoboClaw in closed-loop velocity mode from an Xbox 360 controller.
 
 This uses RoboClaw's encoder/PID speed control instead of raw duty. Keep the
 wheels off the ground for first runs. RB is the deadman switch; releasing it
-sends zero speed.
+sends zero speed. Hold LB for turbo mode.
 
 Usage:
     cd ~/robot-pet
@@ -26,6 +26,7 @@ SIGNED_AXIS_MAX = 32768.0
 
 LEFT_Y = ecodes.ABS_Y
 RIGHT_X = ecodes.ABS_RX
+LB = 310
 RB = 311
 
 
@@ -107,12 +108,13 @@ def format_actual(value):
     return f"{value:+6d}"
 
 
-def print_status(forward, turn, deadman, target_m1, target_m2, actual_m1, actual_m2):
+def print_status(forward, turn, deadman, turbo, target_m1, target_m2, actual_m1, actual_m2):
     print(
         "\r"
         f"forward={forward:+.2f} "
         f"turn={turn:+.2f} "
         f"deadman={'held' if deadman else 'released'} "
+        f"mode={'turbo' if turbo else 'normal'} "
         f"target=({target_m1:+5d},{target_m2:+5d}) "
         f"actual=({format_actual(actual_m1)},{format_actual(actual_m2)})",
         end="",
@@ -127,7 +129,8 @@ def main():
     parser.add_argument("--address", type=parse_address, default=0x80, help="RoboClaw packet serial address")
     parser.add_argument("--baud", type=int, default=38400, help="RoboClaw serial baud rate")
     parser.add_argument("--qpps", type=int, default=2425, help="Configured RoboClaw max speed in encoder counts/sec")
-    parser.add_argument("--speed-scale", type=float, default=0.25, help="Fraction of --qpps allowed by this test")
+    parser.add_argument("--speed-scale", type=float, default=0.25, help="Normal-mode fraction of --qpps")
+    parser.add_argument("--turbo-scale", type=float, default=0.75, help="Turbo-mode fraction of --qpps while LB is held")
     parser.add_argument("--deadzone", type=float, default=0.15, help="Stick deadzone from 0.0 to 1.0")
     parser.add_argument("--status-interval", type=float, default=0.2, help="Seconds between actual speed refreshes")
     args = parser.parse_args()
@@ -138,10 +141,12 @@ def main():
         print("Pair the controller with the receiver, then run scripts/diagnostics/controller-test.py.")
         sys.exit(1)
 
-    speed_limit = int(args.qpps * args.speed_scale)
+    normal_speed_limit = int(args.qpps * args.speed_scale)
+    turbo_speed_limit = int(args.qpps * args.turbo_scale)
     forward = 0.0
     turn = 0.0
     deadman = False
+    turbo = False
     target_m1 = 0
     target_m2 = 0
     actual_m1 = None
@@ -154,7 +159,7 @@ def main():
     print("=== Controller RoboClaw Speed Test ===")
     print("")
     print("WHEELS OFF THE GROUND.")
-    print("RB is the deadman switch. Release RB or Ctrl+C to stop.")
+    print("RB is the deadman switch. Hold LB for turbo. Release RB or Ctrl+C to stop.")
     print("")
     print(f"Reading controller: {controller.path} ({controller.name})")
     print(f"Connecting to RoboClaw at {args.port} ({args.baud} baud, address 0x{args.address:02X})...")
@@ -184,9 +189,10 @@ def main():
             sys.exit(1)
 
         print(f"Configured QPPS cap: {args.qpps}")
-        print(f"Test speed scale: {args.speed_scale:.0%} ({speed_limit} counts/sec max target)")
+        print(f"Normal speed scale: {args.speed_scale:.0%} ({normal_speed_limit} counts/sec max target)")
+        print(f"Turbo speed scale: {args.turbo_scale:.0%} ({turbo_speed_limit} counts/sec max target)")
         print("")
-        print_status(forward, turn, deadman, target_m1, target_m2, actual_m1, actual_m2)
+        print_status(forward, turn, deadman, turbo, target_m1, target_m2, actual_m1, actual_m2)
 
         while True:
             ready, _, _ = select.select([controller.fd], [], [], 0.05)
@@ -198,10 +204,13 @@ def main():
                         forward = -normalize_axis(event.value, args.deadzone)
                     elif event.type == ecodes.EV_ABS and event.code == RIGHT_X:
                         turn = normalize_axis(event.value, args.deadzone)
+                    elif event.type == ecodes.EV_KEY and event.code == LB:
+                        turbo = event.value == 1
                     elif event.type == ecodes.EV_KEY and event.code == RB:
                         deadman = event.value == 1
 
             left, right = mix_arcade_drive(forward, turn)
+            speed_limit = turbo_speed_limit if turbo else normal_speed_limit
 
             if deadman:
                 target_m1 = int(left * speed_limit)
@@ -221,9 +230,9 @@ def main():
                 actual_m1, actual_m2 = read_motor_speed(rc, args.address)
                 last_status_at = now
 
-            display = (forward, turn, deadman, target_m1, target_m2, actual_m1, actual_m2)
+            display = (forward, turn, deadman, turbo, target_m1, target_m2, actual_m1, actual_m2)
             if display != last_display:
-                print_status(forward, turn, deadman, target_m1, target_m2, actual_m1, actual_m2)
+                print_status(forward, turn, deadman, turbo, target_m1, target_m2, actual_m1, actual_m2)
                 last_display = display
     except PermissionError:
         print("")

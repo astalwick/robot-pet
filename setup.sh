@@ -10,19 +10,19 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/10] Installing base packages..."
+echo "[1/11] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv
 
 # Add user to dialout group for serial port access (idempotent)
-echo "[2/10] Adding $USER to dialout group..."
+echo "[2/11] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
 # Add user to input group for controller/gamepad access (idempotent)
-echo "[3/10] Adding $USER to input group..."
+echo "[3/11] Adding $USER to input group..."
 sudo usermod -a -G input "$USER"
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
-echo "[4/10] Configuring UART for RoboClaw..."
+echo "[4/11] Configuring UART for RoboClaw..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
     echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
@@ -38,12 +38,12 @@ else
 fi
 
 # Create log directory (idempotent)
-echo "[5/10] Creating log directory at $LOG_DIR..."
+echo "[5/11] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[6/10] Installing login welcome message..."
+echo "[6/11] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -102,7 +102,7 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Configure interactive Bash sessions to start in robot-pet with the venv active.
-echo "[7/10] Configuring Bash login directory and venv..."
+echo "[7/11] Configuring Bash login directory, venv, and dashboard autostart..."
 BASHRC="$HOME/.bashrc"
 BASH_LOGIN_START="# >>> robot-pet login setup >>>"
 BASH_LOGIN_END="# <<< robot-pet login setup <<<"
@@ -118,23 +118,43 @@ cat >>"$BASHRC" <<'BASH_LOGIN'
 # >>> robot-pet login setup >>>
 cd "$HOME/robot-pet"
 source .venv/bin/activate
+if [[ $- == *i* && -n "${SSH_TTY:-}" && -z "${ROBOT_PET_NO_DASHBOARD:-}" && -z "${ROBOT_PET_DASHBOARD_STARTED:-}" ]]; then
+  export ROBOT_PET_DASHBOARD_STARTED=1
+  echo "Starting Robo-Pet dashboard. Press q to exit to shell."
+  python src/robot_dashboard.py
+fi
 # <<< robot-pet login setup <<<
 BASH_LOGIN
 
+# Install redeploy permissions for the dashboard action.
+echo "[8/11] Installing redeploy permissions..."
+chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
+SYSTEMCTL_PATH="$(command -v systemctl)"
+SUDOERS_TMP="$(mktemp)"
+cat >"$SUDOERS_TMP" <<SUDOERS
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
+SUDOERS
+sudo visudo -cf "$SUDOERS_TMP"
+sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy
+rm "$SUDOERS_TMP"
+
 # Set up Python venv (idempotent - only creates if missing)
-echo "[8/10] Setting up Python venv at $VENV_PATH..."
+echo "[9/11] Setting up Python venv at $VENV_PATH..."
 if [[ ! -d "$VENV_PATH" ]]; then
   python3 -m venv "$VENV_PATH"
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[9/10] Installing Python packages..."
+echo "[10/11] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 pip install numpy pyserial gpiozero evdev basicmicro textual rich
 
 # Install and enable systemd services
-echo "[10/10] Installing systemd services..."
+echo "[11/11] Installing systemd services..."
 sudo cp "$REPO_DIR/systemd/"*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service

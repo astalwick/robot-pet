@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only SSH dashboard for robot telemetry."""
+"""SSH dashboard for robot telemetry and safe redeploys."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -258,7 +260,7 @@ class RobotDashboard(App):
 
     """
 
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [("q", "quit", "Quit"), ("r", "redeploy", "Redeploy")]
 
     def __init__(self, socket_path: str):
         super().__init__()
@@ -276,6 +278,8 @@ class RobotDashboard(App):
         }
         self.max_current_amps = 0.0
         self.max_abs_speed_qpps = 1.0
+        self.redeploy_armed_until = 0.0
+        self.redeploy_running = False
 
     def compose(self) -> ComposeResult:
         yield Static(self._hud_waiting(), id="hud-header")
@@ -347,6 +351,55 @@ class RobotDashboard(App):
             return
         for line in process.stdout:
             self.call_from_thread(logs.write, line.rstrip())
+
+    def action_redeploy(self):
+        logs = self.query_one("#logs", RichLog)
+        now = time.monotonic()
+        if self.redeploy_running:
+            logs.write("Redeploy already running.")
+            return
+        if now > self.redeploy_armed_until:
+            self.redeploy_armed_until = now + 10.0
+            logs.write("Redeploy armed. Press r again within 10s to git fast-forward and restart robot services.")
+            return
+
+        self.redeploy_running = True
+        self.redeploy_armed_until = 0.0
+        logs.write("Starting redeploy...")
+        threading.Thread(target=self._redeploy_thread, daemon=True).start()
+
+    def _redeploy_thread(self):
+        logs = self.query_one("#logs", RichLog)
+        script = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "redeploy-robot.sh"))
+        env = {**os.environ, "ROBOT_PET_REPO_DIR": os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))}
+
+        try:
+            process = subprocess.Popen(
+                [script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                env=env,
+            )
+        except OSError as exc:
+            self.redeploy_running = False
+            self.call_from_thread(logs.write, f"Redeploy failed to start: {exc}")
+            return
+
+        if process.stdout is not None:
+            for line in process.stdout:
+                self.call_from_thread(logs.write, line.rstrip())
+
+        exit_code = process.wait()
+        self.redeploy_running = False
+        if exit_code == 0:
+            self.call_from_thread(logs.write, "Redeploy succeeded. Restarting dashboard...")
+            self.call_from_thread(self._restart_dashboard)
+        else:
+            self.call_from_thread(logs.write, f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
+
+    def _restart_dashboard(self):
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
     def apply_snapshot(self, snapshot: dict[str, Any]):
         self.last_snapshot = snapshot
@@ -805,7 +858,7 @@ class RobotDashboard(App):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Read-only robot telemetry dashboard.")
+    parser = argparse.ArgumentParser(description="Robot telemetry dashboard.")
     parser.add_argument("--socket", default=DEFAULT_SUBSCRIBE_SOCKET, help="Telemetry hub subscriber socket")
     return parser
 

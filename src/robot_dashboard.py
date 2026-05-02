@@ -597,14 +597,44 @@ class RobotDashboard(App):
         read_color = "green" if read_ok else "red"
         read_text = "ENCODER OK" if read_ok else "READ FAIL"
 
-        LW, GW, VW = 9, 13, 9
+        LABEL_W, COL_W, GW = 11, 14, 13
+
+        def styled(value: str, style: str = "") -> str:
+            return f"[{style}]{value}[/]" if style else value
+
+        def wheel_row(
+            label: str,
+            left_value: str,
+            right_value: str,
+            *,
+            align: str = ">",
+            left_style: str = "",
+            right_style: str = "",
+        ) -> str:
+            if align == "^":
+                left_cell = left_value.center(COL_W)
+                right_cell = right_value.center(COL_W)
+            elif align == "<":
+                left_cell = left_value.ljust(COL_W)
+                right_cell = right_value.ljust(COL_W)
+            else:
+                left_cell = left_value.rjust(COL_W)
+                right_cell = right_value.rjust(COL_W)
+            return (
+                f"  [dim]{label:<{LABEL_W}}[/] "
+                f"{styled(left_cell, left_style)}   {styled(right_cell, right_style)}"
+            )
 
         lines = [
             f"[bold cyan]{GLYPH_WHEEL} DRIVETRAIN[/]  [{read_color}]{read_glyph} {read_text}[/]",
+            "",
+            f"  {'':<{LABEL_W}} "
+            f"[bold cyan]{'L WHEEL':^{COL_W}}[/]   "
+            f"[bold cyan]{'R WHEEL':^{COL_W}}[/]",
         ]
 
+        wheel_data: dict[str, dict[str, Any]] = {}
         for side in ("left", "right"):
-            label = "L" if side == "left" else "R"
             cmd = wheels.get(f"{side}_command")
             target, actual, error = self._wheel_qpps(wheels, side)
             current = wheels.get(f"{side}_current_amps")
@@ -617,32 +647,34 @@ class RobotDashboard(App):
                 elif ratio > 0.10:
                     track_style = "yellow"
 
-            cmd_bar = bipolar_bar(cmd, width=6)  # 13 chars wide
-            speed_spark = sparkline(
-                self.history[f"{side}_actual"],
-                width=GW,
-                limit=self.max_abs_speed_qpps,
-                absolute=True,
-            )
-            current_bar = bar(current, limit=5.0, width=GW) if current is not None else " " * GW
-
-            lines.extend([
-                "",
-                f"  [bold cyan]{label} wheel[/]    "
-                f"[dim]target[/] {fmt(target, digits=0):>6}    "
-                f"[dim]err[/] [{track_style}]{fmt(error, digits=0):>6}[/]",
-                self._row("cmd", cmd_bar, fmt(cmd, digits=2),
-                          label_w=LW, gauge_w=GW, value_w=VW),
-                self._row("actual", speed_spark, fmt(actual, digits=0),
-                          label_w=LW, gauge_w=GW, value_w=VW,
-                          gauge_style="cyan", value_style=track_style),
-                self._row("current", current_bar, fmt(current, "A", 2),
-                          label_w=LW, gauge_w=GW, value_w=VW),
-            ])
+            wheel_data[side] = {
+                "cmd": bipolar_bar(cmd, width=6),
+                "target": fmt(target, digits=0),
+                "actual": fmt(actual, digits=0),
+                "error": fmt(error, digits=0),
+                "current": fmt(current, "A", 2),
+                "load": bar(current, limit=5.0, width=GW) if current is not None else " " * GW,
+                "track_style": track_style,
+            }
 
         lines.extend([
+            wheel_row("cmd", wheel_data["left"]["cmd"], wheel_data["right"]["cmd"], align="^"),
+            wheel_row("target", wheel_data["left"]["target"], wheel_data["right"]["target"]),
+            wheel_row("actual", wheel_data["left"]["actual"], wheel_data["right"]["actual"]),
+            wheel_row(
+                "error",
+                wheel_data["left"]["error"],
+                wheel_data["right"]["error"],
+                left_style=wheel_data["left"]["track_style"],
+                right_style=wheel_data["right"]["track_style"],
+            ),
+            wheel_row("amps", wheel_data["left"]["current"], wheel_data["right"]["current"]),
+            wheel_row("load", wheel_data["left"]["load"], wheel_data["right"]["load"], align="^"),
             "",
-            f"  [dim]current trend[/]   "
+            f"  [dim]{'speed trend':<{LABEL_W}}[/] "
+            f"L [cyan]{sparkline(self.history['left_actual'], width=GW, limit=self.max_abs_speed_qpps, absolute=True)}[/]  "
+            f"R [cyan]{sparkline(self.history['right_actual'], width=GW, limit=self.max_abs_speed_qpps, absolute=True)}[/]",
+            f"  [dim]{'current trend':<{LABEL_W}}[/] "
             f"L [cyan]{sparkline(self.history['left_current'], width=GW)}[/]  "
             f"R [cyan]{sparkline(self.history['right_current'], width=GW)}[/]",
         ])

@@ -597,7 +597,7 @@ class RobotDashboard(App):
         read_color = "green" if read_ok else "red"
         read_text = "ENCODER OK" if read_ok else "READ FAIL"
 
-        LABEL_W, COL_W, GW = 11, 14, 13
+        LABEL_W, COL_W, GW = 13, 13, 13
 
         def styled(value: str, style: str = "") -> str:
             return f"[{style}]{value}[/]" if style else value
@@ -671,7 +671,7 @@ class RobotDashboard(App):
             wheel_row("amps", wheel_data["left"]["current"], wheel_data["right"]["current"]),
             wheel_row("load", wheel_data["left"]["load"], wheel_data["right"]["load"], align="^"),
             "",
-            f"  [dim]{'speed trend':<{LABEL_W}}[/] "
+            f"  [dim]{'speed   trend':<{LABEL_W}}[/] "
             f"L [cyan]{sparkline(self.history['left_actual'], width=GW, limit=self.max_abs_speed_qpps, absolute=True)}[/]  "
             f"R [cyan]{sparkline(self.history['right_actual'], width=GW, limit=self.max_abs_speed_qpps, absolute=True)}[/]",
             f"  [dim]{'current trend':<{LABEL_W}}[/] "

@@ -5,6 +5,7 @@ import argparse
 import signal
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -14,7 +15,7 @@ from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
 from drivers.motor import MotorDriver
 from lib.log import setup_logging
-from telemetry.messages import controller_message, gamepad_teleop_update, motor_battery_message, wheel_message
+from telemetry.messages import controller_message, gamepad_teleop_update, link_loop_message, motor_battery_message, wheel_message
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
@@ -67,6 +68,10 @@ class GamepadTeleopRunner:
             speed_scale=config.speed_scale,
             turbo_scale=config.turbo_scale,
         )
+        self.read_results: deque[bool] = deque(maxlen=50)
+        self.consecutive_read_failures = 0
+        self.last_good_read_at: float | None = None
+        self.loop_samples: deque[float] = deque(maxlen=25)
 
     def request_stop(self, *_args):
         self.stop_requested = True
@@ -126,11 +131,12 @@ class GamepadTeleopRunner:
         idle_released = False
 
         while not self.stop_requested and not disconnected.is_set():
+            now = self.clock()
+            self.loop_samples.append(now)
             command = self.policy.motion_from_state(controller.state)
             wheels = self.mixer.mix(command)
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
-            now = self.clock()
 
             if target_is_zero:
                 if closed_loop_active:
@@ -173,6 +179,7 @@ class GamepadTeleopRunner:
         motor.stop()
 
     def _publish_telemetry(self, state, wheels, target, motor):
+        now = self.clock()
         left_actual = None
         right_actual = None
         left_current = None
@@ -191,6 +198,9 @@ class GamepadTeleopRunner:
             log.warning("telemetry read failed: %s", exc)
             read_ok = False
 
+        self._record_read_result(read_ok, now)
+        telemetry_latency_ms = (self.clock() - now) * 1000.0
+
         message = gamepad_teleop_update(
             controller=controller_message(state),
             wheels=wheel_message(
@@ -205,11 +215,41 @@ class GamepadTeleopRunner:
                 read_ok=read_ok,
             ),
             motor_battery=motor_battery_message(pack_voltage),
+            link_loop=link_loop_message(
+                read_success_rate=self._read_success_rate(),
+                consecutive_read_failures=self.consecutive_read_failures,
+                last_good_read_age_seconds=(
+                    now - self.last_good_read_at if self.last_good_read_at is not None else None
+                ),
+                telemetry_latency_ms=telemetry_latency_ms,
+                command_loop_hz=self._command_loop_hz(),
+            ),
         )
         try:
             self.telemetry_publisher(self.config.telemetry_socket, message)
         except Exception as exc:
             log.warning("telemetry publish failed: %s", exc)
+
+    def _record_read_result(self, read_ok: bool, now: float):
+        self.read_results.append(read_ok)
+        if read_ok:
+            self.consecutive_read_failures = 0
+            self.last_good_read_at = now
+        else:
+            self.consecutive_read_failures += 1
+
+    def _read_success_rate(self) -> float | None:
+        if not self.read_results:
+            return None
+        return sum(1 for result in self.read_results if result) / len(self.read_results)
+
+    def _command_loop_hz(self) -> float | None:
+        if len(self.loop_samples) < 2:
+            return None
+        elapsed = self.loop_samples[-1] - self.loop_samples[0]
+        if elapsed <= 0:
+            return None
+        return (len(self.loop_samples) - 1) / elapsed
 
     def _controller_factory(self):
         return ControllerDriver(deadzone=0.0, device_path=self.config.device)

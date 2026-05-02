@@ -47,6 +47,7 @@ GLYPH_GAMEPAD = "◈"
 GLYPH_WHEEL = "◎"
 GLYPH_CPU = "▣"
 GLYPH_SIGNAL = "◉"
+GLYPH_LINK = "◉"
 
 
 def fmt(value: Any, suffix: str = "", digits: int = 1) -> str:
@@ -97,6 +98,14 @@ def fmt_age(last_seen: float | None, now: float) -> str:
     if age < 10:
         return f"{age:.1f}s ago"
     return f"{int(age)}s ago"
+
+
+def fmt_relative_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "never"
+    if seconds < 10:
+        return f"{seconds:.1f}s ago"
+    return f"{int(seconds)}s ago"
 
 
 def bar(value: float | None, limit: float = 1.0, width: int = 10, absolute: bool = True) -> str:
@@ -221,8 +230,13 @@ class RobotDashboard(App):
     }
 
     #wheels-panel {
-        height: 1fr;
+        height: 2fr;
         border: heavy #0a4f6a;
+    }
+
+    #link-panel {
+        height: auto;
+        border: heavy #0a5f5a;
     }
 
     #logs {
@@ -262,6 +276,7 @@ class RobotDashboard(App):
                 yield Static("", id="controller-panel", classes="panel")
             with Vertical(id="right"):
                 yield Static("", id="wheels-panel", classes="panel")
+                yield Static("", id="link-panel", classes="panel")
         yield RichLog(id="logs", wrap=True, highlight=True)
         yield Footer()
 
@@ -276,6 +291,7 @@ class RobotDashboard(App):
         self._render_power_waiting()
         self._render_controller_waiting()
         self._render_wheels_waiting()
+        self._render_link_waiting()
 
         threading.Thread(target=self._telemetry_thread, daemon=True).start()
         threading.Thread(target=self._logs_thread, daemon=True).start()
@@ -298,6 +314,11 @@ class RobotDashboard(App):
     def _render_wheels_waiting(self):
         self.query_one("#wheels-panel", Static).update(
             Text.from_markup(f"[bold cyan]{GLYPH_WHEEL} DRIVETRAIN[/]  [dim]awaiting link[/]")
+        )
+
+    def _render_link_waiting(self):
+        self.query_one("#link-panel", Static).update(
+            Text.from_markup(f"[bold cyan]{GLYPH_LINK} LINK / LOOP HEALTH[/]  [dim]awaiting link[/]")
         )
 
     def _telemetry_thread(self):
@@ -328,10 +349,12 @@ class RobotDashboard(App):
         controller = snapshot.get("controller") or {}
         wheels = snapshot.get("wheels") or {}
         battery = snapshot.get("motor_battery") or {}
+        link_loop = snapshot.get("link_loop") or {}
         if not gamepad_live:
             controller = {}
             wheels = {}
             battery = {"status": "stale"}
+            link_loop = {"status": "stale"}
 
         hud = self.query_one("#hud-header", Static)
         hud.update(self._hud_banner(snapshot, sources, gamepad_status, system_status, controller, wheels, battery))
@@ -340,6 +363,7 @@ class RobotDashboard(App):
         self._render_battery(battery)
         self._render_controller(controller)
         self._render_wheels(wheels)
+        self._render_link_loop(link_loop)
 
     def _source_label(self, source: dict[str, Any]) -> str:
         return "stale" if source.get("stale", True) else "live"
@@ -682,6 +706,75 @@ class RobotDashboard(App):
         ])
 
         self.query_one("#wheels-panel", Static).update(Text.from_markup("\n".join(lines)))
+
+    def _render_link_loop(self, link_loop: dict[str, Any]):
+        status = self._link_loop_status(link_loop)
+        if status == "live":
+            status_glyph = GLYPH_OK
+            status_color = "green"
+            status_text = "LIVE"
+        elif status == "degraded":
+            status_glyph = GLYPH_WARN
+            status_color = "yellow"
+            status_text = "DEGRADED"
+        else:
+            status_glyph = GLYPH_ERR
+            status_color = "red"
+            status_text = "STALE"
+
+        success_rate = link_loop.get("read_success_rate")
+        success_percent = f"{success_rate * 100:.0f}% ok" if success_rate is not None else "--"
+        success_bar = bar(success_rate, limit=1.0, width=10, absolute=False) if success_rate is not None else " " * 10
+
+        failures = link_loop.get("consecutive_read_failures")
+        failure_text = f"{failures} streak" if failures is not None else "--"
+        failure_bar = bar(failures, limit=10, width=10, absolute=False) if failures is not None else " " * 10
+
+        latency = link_loop.get("telemetry_latency_ms")
+        latency_text = f"{latency:.0f}ms" if latency is not None else "--"
+        latency_bar = bar(latency, limit=100.0, width=10, absolute=False) if latency is not None else " " * 10
+
+        loop_hz = link_loop.get("command_loop_hz")
+        loop_text = f"{loop_hz:.1f} Hz" if loop_hz is not None else "--"
+        loop_bar = bar(loop_hz, limit=20.0, width=10, absolute=False) if loop_hz is not None else " " * 10
+
+        GW, VW = 10, 11
+        lines = [
+            f"[bold cyan]{GLYPH_LINK} LINK / LOOP HEALTH[/]  [{status_color}]{status_glyph} {status_text}[/]",
+            self._row("roboclaw", success_bar, success_percent, gauge_w=GW, value_w=VW, value_style=status_color),
+            self._row(
+                "last good",
+                "",
+                fmt_relative_seconds(link_loop.get("last_good_read_age_seconds")),
+                gauge_w=GW,
+                value_w=VW,
+            ),
+            self._row("failures", failure_bar, failure_text, gauge_w=GW, value_w=VW, value_style=status_color),
+            self._row("telemetry", latency_bar, latency_text, gauge_w=GW, value_w=VW),
+            self._row("drive loop", loop_bar, loop_text, gauge_w=GW, value_w=VW),
+        ]
+        self.query_one("#link-panel", Static).update(Text.from_markup("\n".join(lines)))
+
+    def _link_loop_status(self, link_loop: dict[str, Any]) -> str:
+        if link_loop.get("status") == "stale":
+            return "stale"
+
+        success_rate = link_loop.get("read_success_rate")
+        failures = link_loop.get("consecutive_read_failures")
+        last_good_age = link_loop.get("last_good_read_age_seconds")
+        latency = link_loop.get("telemetry_latency_ms")
+
+        if success_rate is None:
+            return "stale"
+        if success_rate < 0.5 or (failures is not None and failures >= 5) or (
+            last_good_age is not None and last_good_age >= 5
+        ):
+            return "stale"
+        if success_rate < 0.9 or (failures is not None and failures > 0) or (
+            latency is not None and latency > 100
+        ):
+            return "degraded"
+        return "live"
 
 
 

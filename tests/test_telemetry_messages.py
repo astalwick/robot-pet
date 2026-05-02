@@ -13,6 +13,7 @@ from telemetry.messages import (
     controller_message,
     decode_json_line,
     encode_json_line,
+    link_loop_message,
     motor_battery_message,
     motor_battery_status,
     stale_label,
@@ -77,6 +78,15 @@ class TelemetryMessagesTest(unittest.TestCase):
 
         self.assertEqual(message["left_error_qpps"], 10)
         self.assertEqual(message["right_error_qpps"], -5)
+
+    def test_link_loop_message_includes_health_metrics(self):
+        message = link_loop_message(0.8, 2, 0.4, 8.5, 20.0)
+
+        self.assertEqual(message["read_success_rate"], 0.8)
+        self.assertEqual(message["consecutive_read_failures"], 2)
+        self.assertEqual(message["last_good_read_age_seconds"], 0.4)
+        self.assertEqual(message["telemetry_latency_ms"], 8.5)
+        self.assertEqual(message["command_loop_hz"], 20.0)
 
 
 class SocketClientTest(unittest.TestCase):

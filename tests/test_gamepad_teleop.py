@@ -269,6 +269,10 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertEqual(message["wheels"]["left_actual_qpps"], 230)
         self.assertEqual(message["wheels"]["left_current_amps"], 1.2)
         self.assertEqual(message["motor_battery"]["pack_voltage"], 11.7)
+        self.assertEqual(message["link_loop"]["read_success_rate"], 1.0)
+        self.assertEqual(message["link_loop"]["consecutive_read_failures"], 0)
+        self.assertIsNotNone(message["link_loop"]["telemetry_latency_ms"])
+        self.assertIsNotNone(message["link_loop"]["command_loop_hz"])
 
     def test_optional_telemetry_read_failure_does_not_stop_driving(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
@@ -298,6 +302,8 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertGreaterEqual(motor.commands.count((250, 250)), 2)
         self.assertFalse(published[0]["wheels"]["read_ok"])
         self.assertIsNone(published[0]["motor_battery"]["pack_voltage"])
+        self.assertEqual(published[0]["link_loop"]["read_success_rate"], 0.0)
+        self.assertEqual(published[0]["link_loop"]["consecutive_read_failures"], 1)
 
     def test_telemetry_publish_failure_does_not_stop_driving(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)

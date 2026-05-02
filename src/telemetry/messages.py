@@ -115,11 +115,28 @@ def wheel_message(
     }
 
 
+def link_loop_message(
+    read_success_rate: float | None,
+    consecutive_read_failures: int,
+    last_good_read_age_seconds: float | None,
+    telemetry_latency_ms: float | None,
+    command_loop_hz: float | None,
+) -> dict[str, Any]:
+    return {
+        "read_success_rate": read_success_rate,
+        "consecutive_read_failures": consecutive_read_failures,
+        "last_good_read_age_seconds": last_good_read_age_seconds,
+        "telemetry_latency_ms": telemetry_latency_ms,
+        "command_loop_hz": command_loop_hz,
+    }
+
+
 def gamepad_teleop_update(
     controller: dict[str, Any],
     wheels: dict[str, Any],
     motor_battery: dict[str, Any],
     now: float | None = None,
+    link_loop: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "source_update",
@@ -128,4 +145,5 @@ def gamepad_teleop_update(
         "controller": controller,
         "wheels": wheels,
         "motor_battery": motor_battery,
+        "link_loop": link_loop,
     }

@@ -218,6 +218,7 @@ class TelemetryHub:
             "controller": gamepad_data.get("controller"),
             "wheels": gamepad_data.get("wheels"),
             "motor_battery": gamepad_data.get("motor_battery"),
+            "link_loop": gamepad_data.get("link_loop"),
             "pi": self.system_health,
         }
 

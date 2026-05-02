@@ -39,6 +39,8 @@ sudo systemctl status gamepad-teleop
 journalctl -u gamepad-teleop -f
 ```
 
+The service publishes read-only dashboard telemetry to `robot-telemetry.service` at 5 Hz. Telemetry is best-effort; if the hub is stopped or restarting, driving continues.
+
 Restart it after changing code:
 
 ```bash

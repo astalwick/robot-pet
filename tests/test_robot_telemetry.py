@@ -1,0 +1,122 @@
+import asyncio
+import os
+import sys
+import tempfile
+import unittest
+from types import SimpleNamespace
+
+ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(ROOT, "src"))
+
+from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
+from telemetry.messages import decode_json_line, gamepad_teleop_update
+from telemetry.socket_client import publish_message
+
+
+class PiHealthTest(unittest.TestCase):
+    def test_parse_meminfo_returns_used_and_total_mb(self):
+        meminfo = "MemTotal:        4096000 kB\nMemAvailable:    1024000 kB\n"
+
+        self.assertEqual(parse_meminfo(meminfo), (3000, 4000))
+
+    def test_sample_pi_health_uses_injected_readers(self):
+        def read_file(path):
+            return {
+                "/proc/uptime": "1234.56 100.0\n",
+                "/proc/loadavg": "0.22 0.30 0.40 1/100 123\n",
+                "/proc/meminfo": "MemTotal:        4096000 kB\nMemAvailable:    1024000 kB\n",
+                "/sys/class/thermal/thermal_zone0/temp": "48500\n",
+            }.get(path)
+
+        def command_runner(command):
+            if command == ["vcgencmd", "get_throttled"]:
+                return "throttled=0x0"
+            return None
+
+        health = sample_pi_health(
+            read_file=read_file,
+            disk_usage=lambda _path: SimpleNamespace(total=100, used=18, free=82),
+            command_runner=command_runner,
+        )
+
+        self.assertEqual(health["uptime_seconds"], 1234)
+        self.assertEqual(health["load_1m"], 0.22)
+        self.assertEqual(health["memory_used_mb"], 3000)
+        self.assertEqual(health["disk_used_percent"], 18.0)
+        self.assertEqual(health["soc_temp_c"], 48.5)
+        self.assertEqual(health["throttled_flags"], "0x0")
+        self.assertIsNone(health["power_bank_charge"])
+
+
+class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.publish_socket = os.path.join(self.tmpdir.name, "pub.sock")
+        self.subscribe_socket = os.path.join(self.tmpdir.name, "sub.sock")
+        self.hub = TelemetryHub(
+            publish_socket=self.publish_socket,
+            subscribe_socket=self.subscribe_socket,
+            rate_hz=20.0,
+            stale_timeout=1.0,
+            sampler=lambda: {"uptime_seconds": 1, "power_bank_charge": None},
+        )
+        await self.hub.start()
+
+    async def asyncTearDown(self):
+        await self.hub.stop()
+        self.tmpdir.cleanup()
+
+    async def test_publisher_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        message = gamepad_teleop_update(
+            controller={"connected": True},
+            wheels={"left_target_qpps": 100},
+            motor_battery={"pack_voltage": 11.7, "cell_voltage": 3.9, "status": "ok"},
+        )
+
+        self.assertTrue(publish_message(self.publish_socket, message))
+        snapshot = await self._read_until(reader, lambda item: item["controller"] == {"connected": True})
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["wheels"]["left_target_qpps"], 100)
+        self.assertFalse(snapshot["sources"]["gamepad_teleop"]["stale"])
+
+    async def test_source_is_marked_stale_after_timeout(self):
+        self.hub.stale_timeout = 0.05
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                gamepad_teleop_update({}, {}, {"pack_voltage": None, "cell_voltage": None, "status": "unknown"}),
+            )
+        )
+        await asyncio.sleep(0.08)
+
+        snapshot = self.hub.build_snapshot()
+
+        self.assertTrue(snapshot["sources"]["gamepad_teleop"]["stale"])
+
+    async def test_hub_keeps_running_after_subscriber_disconnects(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+        writer.close()
+        await writer.wait_closed()
+
+        await self.hub.broadcast(self.hub.build_snapshot())
+
+        self.assertTrue(self.hub._servers)
+
+    async def _read_until(self, reader, predicate):
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while asyncio.get_running_loop().time() < deadline:
+            line = await asyncio.wait_for(reader.readline(), timeout=1.0)
+            snapshot = decode_json_line(line)
+            if predicate(snapshot):
+                return snapshot
+        self.fail("timed out waiting for telemetry snapshot")
+
+
+if __name__ == "__main__":
+    unittest.main()

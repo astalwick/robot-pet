@@ -1,7 +1,7 @@
 [Unit]
 Description=Gamepad Teleop - RoboClaw closed-loop speed control
-After=robot-brain.service
-Wants=robot-brain.service
+After=robot-brain.service robot-telemetry.service
+Wants=robot-brain.service robot-telemetry.service
 
 [Service]
 Type=simple

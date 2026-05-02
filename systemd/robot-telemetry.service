@@ -1,0 +1,20 @@
+[Unit]
+Description=Robot Telemetry Hub
+After=robot-brain.service
+Wants=robot-brain.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_telemetry.py
+Restart=always
+RestartSec=2
+RuntimeDirectory=robot-pet
+RuntimeDirectoryMode=0755
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

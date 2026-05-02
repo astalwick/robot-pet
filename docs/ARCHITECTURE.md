@@ -24,7 +24,10 @@ src/
 │   └── controller.py     # ControllerDriver class
 ├── lib/                  # Shared utilities
 │   └── log.py            # Logging setup (journald-friendly)
+├── telemetry/            # Local JSON/socket telemetry helpers
 ├── robot-brain.py        # systemd service - orchestrator (temporary)
+├── robot_telemetry.py    # systemd service - local telemetry hub (temporary)
+├── robot_dashboard.py    # foreground SSH Textual dashboard
 └── gamepad_teleop.py     # systemd service - boot-ready gamepad teleop (temporary)
 
 systemd/
@@ -99,17 +102,22 @@ src/
 | Service | Purpose | Status |
 |---------|---------|--------|
 | `robot-brain` | Orchestrator / behavior state machine | Stub |
+| `robot-telemetry` | In-memory local telemetry hub for dashboard clients | Active |
 | `gamepad-teleop` | Xbox controller to RoboClaw closed-loop speed teleop | Active |
+| `robot-dashboard` | Foreground SSH TUI for telemetry and logs | Manual tool |
 | `robot-motion` | Autonomous motor control | Not yet created |
 | `robot-sensors` | Sensor reading | Not yet created |
+
+`robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility, and the dashboard is an observe-only client. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 
 ## Logging
 
 All services log to stdout/stderr. systemd captures output to journald.
 
 - View logs: `journalctl -u robot-brain -f`
+- View telemetry logs: `journalctl -u robot-telemetry -f`
 - View gamepad teleop logs: `journalctl -u gamepad-teleop -f`
-- View multiple: `journalctl -u robot-brain -u gamepad-teleop -f`
+- View multiple: `journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -f`
 - Format: `LEVEL service-name: message`
 
 Timestamps come from journald, not the application.

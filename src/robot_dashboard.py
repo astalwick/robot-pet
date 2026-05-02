@@ -597,18 +597,11 @@ class RobotDashboard(App):
         read_color = "green" if read_ok else "red"
         read_text = "ENCODER OK" if read_ok else "READ FAIL"
 
+        LW, GW, VW = 9, 13, 9
+
         lines = [
             f"[bold cyan]{GLYPH_WHEEL} DRIVETRAIN[/]  [{read_color}]{read_glyph} {read_text}[/]",
-            "",
         ]
-
-        # Per-side block: cmd bar 13 chars, spd spark 13 chars, cur bar 6 chars.
-        # Using identical 13-char gauge widths makes cmd and spd line up vertically.
-        SUB = 4   # sub-label column ("cmd ", "tgt ", "spd ")
-        BAR_W = 6   # bipolar bar half-width (full = 2*BAR_W+1 = 13)
-        SPARK_W = 13
-        CUR_W = 6
-        VAL_W = 7
 
         for side in ("left", "right"):
             label = "L" if side == "left" else "R"
@@ -616,38 +609,43 @@ class RobotDashboard(App):
             target, actual, error = self._wheel_qpps(wheels, side)
             current = wheels.get(f"{side}_current_amps")
 
-            error_style = "green"
+            track_style = "green"
             if error is not None:
                 ratio = abs(error) / max(abs(target or 0), 1)
                 if ratio > 0.25:
-                    error_style = "red"
+                    track_style = "red"
                 elif ratio > 0.10:
-                    error_style = "yellow"
+                    track_style = "yellow"
 
-            cmd_bar = bipolar_bar(cmd, width=BAR_W)
+            cmd_bar = bipolar_bar(cmd, width=6)  # 13 chars wide
             speed_spark = sparkline(
                 self.history[f"{side}_actual"],
-                width=SPARK_W,
+                width=GW,
                 limit=self.max_abs_speed_qpps,
                 absolute=True,
             )
-            current_bar = bar(current, limit=5.0, width=CUR_W) if current is not None else " " * CUR_W
+            current_bar = bar(current, limit=5.0, width=GW) if current is not None else " " * GW
 
             lines.extend([
-                f"  [bold]{label}[/] [dim]{'cmd':<{SUB}}[/]{cmd_bar} {fmt(cmd, digits=2):>{VAL_W}}",
-                f"    [dim]{'tgt':<{SUB}}[/]{fmt(target, digits=0):>{VAL_W}}    "
-                f"[dim]{'act':<{SUB}}[/]{fmt(actual, digits=0):>{VAL_W}}    "
-                f"[dim]{'err':<{SUB}}[/][{error_style}]{fmt(error, digits=0):>{VAL_W}}[/]",
-                f"    [dim]{'spd':<{SUB}}[/][cyan]{speed_spark}[/] "
-                f"[dim]{'cur':<{SUB}}[/]{current_bar} {fmt(current, 'A', 2):>{VAL_W}}",
                 "",
+                f"  [bold cyan]{label} wheel[/]    "
+                f"[dim]target[/] {fmt(target, digits=0):>6}    "
+                f"[dim]err[/] [{track_style}]{fmt(error, digits=0):>6}[/]",
+                self._row("cmd", cmd_bar, fmt(cmd, digits=2),
+                          label_w=LW, gauge_w=GW, value_w=VW),
+                self._row("actual", speed_spark, fmt(actual, digits=0),
+                          label_w=LW, gauge_w=GW, value_w=VW,
+                          gauge_style="cyan", value_style=track_style),
+                self._row("current", current_bar, fmt(current, "A", 2),
+                          label_w=LW, gauge_w=GW, value_w=VW),
             ])
 
-        lines.append(
+        lines.extend([
+            "",
             f"  [dim]current trend[/]   "
-            f"L [cyan]{sparkline(self.history['left_current'], width=SPARK_W)}[/]  "
-            f"R [cyan]{sparkline(self.history['right_current'], width=SPARK_W)}[/]"
-        )
+            f"L [cyan]{sparkline(self.history['left_current'], width=GW)}[/]  "
+            f"R [cyan]{sparkline(self.history['right_current'], width=GW)}[/]",
+        ])
 
         self.query_one("#wheels-panel", Static).update(Text.from_markup("\n".join(lines)))
 

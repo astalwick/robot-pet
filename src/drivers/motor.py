@@ -11,13 +11,21 @@ Hardware setup:
 """
 
 from collections.abc import Callable
+import logging
 from typing import Any
+
+
+log = logging.getLogger(__name__)
 
 
 def format_version(version):
     if isinstance(version, bytes):
         return version.decode("ascii", errors="replace").strip()
     return str(version).strip()
+
+
+def is_recoverable_roboclaw_error(exc: Exception) -> bool:
+    return exc.__class__.__name__ == "PacketTimeoutError"
 
 
 class MotorDriver:
@@ -90,7 +98,13 @@ class MotorDriver:
             left_qpps: M1 target speed; positive means robot-forward
             right_qpps: M2 target speed; positive means robot-forward
         """
-        return bool(self.controller.SpeedM1M2(self.address, int(left_qpps), int(right_qpps)))
+        try:
+            return bool(self.controller.SpeedM1M2(self.address, int(left_qpps), int(right_qpps)))
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw speed command timed out: %s", exc)
+                return False
+            raise
 
     def read_wheel_speeds(self) -> tuple[int | None, int | None]:
         """Read actual closed-loop wheel speeds from RoboClaw encoders."""
@@ -102,8 +116,14 @@ class MotorDriver:
     
     def stop(self):
         """Immediately stop both motors."""
-        self.controller.DutyM1(self.address, 0)
-        self.controller.DutyM2(self.address, 0)
+        try:
+            self.controller.DutyM1(self.address, 0)
+            self.controller.DutyM2(self.address, 0)
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw stop command timed out: %s", exc)
+                return
+            raise
     
     def get_battery_voltage(self) -> float | None:
         """Read main battery voltage. Returns None on read failure."""

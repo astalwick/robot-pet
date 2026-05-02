@@ -43,6 +43,20 @@ class FakeRoboClaw:
         return True, -456
 
 
+class PacketTimeoutError(Exception):
+    pass
+
+
+class TimeoutRoboClaw(FakeRoboClaw):
+    def SpeedM1M2(self, address, left_qpps, right_qpps):
+        self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
+        raise PacketTimeoutError("timed out")
+
+    def DutyM1(self, address, duty):
+        self.calls.append(("DutyM1", address, duty))
+        raise PacketTimeoutError("timed out")
+
+
 class MotorDriverTest(unittest.TestCase):
     def test_set_wheel_speeds_uses_roboclaw_speed_m1m2(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
@@ -67,6 +81,20 @@ class MotorDriverTest(unittest.TestCase):
 
         self.assertIn(("DutyM1", 0x80, 0), fake.calls)
         self.assertIn(("DutyM2", 0x80, 0), fake.calls)
+
+    def test_set_wheel_speeds_returns_false_on_roboclaw_timeout(self):
+        fake = TimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertFalse(driver.set_wheel_speeds(100, 100))
+
+    def test_cleanup_ignores_roboclaw_timeout_while_closing(self):
+        fake = TimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        driver.cleanup()
+
+        self.assertIn(("close",), fake.calls)
 
 
 if __name__ == "__main__":

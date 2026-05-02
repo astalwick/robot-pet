@@ -87,6 +87,9 @@ class FakeMotor:
             raise RuntimeError("current failed")
         return 1.2, 1.1
 
+    def stop(self):
+        self.commands.append(("duty", 0, 0))
+
     def cleanup(self):
         self.cleaned_up = True
 
@@ -155,6 +158,37 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         self.assertGreaterEqual(motor.commands.count((250, 250)), 2)
         self.assertEqual(motor.commands[-1], (0, 0))
+
+    def test_idle_after_motion_releases_to_zero_duty_once(self):
+        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
+        controller = FakeController(state)
+        motor = FakeMotor()
+        current_time = 0.0
+        sleeps = 0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time, sleeps
+            sleeps += 1
+            current_time += 0.1
+            if sleeps == 1:
+                state.rb = False
+            elif sleeps == 5:
+                runner.request_stop()
+
+        runner = GamepadTeleopRunner(
+            TeleopConfig(qpps=1000, idle_release_delay=0.2),
+            sleep=sleep,
+            clock=clock,
+        )
+
+        runner._run_connected(controller, motor)
+
+        self.assertEqual(motor.commands.count((250, 250)), 1)
+        self.assertEqual(motor.commands.count((0, 0)), 2)
+        self.assertEqual(motor.commands.count(("duty", 0, 0)), 1)
 
     def test_run_forever_retries_failed_initial_zero_before_motion(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)

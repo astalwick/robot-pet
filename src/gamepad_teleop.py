@@ -40,6 +40,7 @@ class TeleopConfig:
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     telemetry_interval: float = 0.2
+    idle_release_delay: float = 0.25
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
 
 
@@ -120,18 +121,37 @@ class GamepadTeleopRunner:
         disconnected = threading.Event()
         controller.start(on_disconnect=disconnected.set)
         next_telemetry = self.clock() + self.config.telemetry_interval
+        closed_loop_active = False
+        idle_started_at = self.clock()
+        idle_released = False
 
         while not self.stop_requested and not disconnected.is_set():
             command = self.policy.motion_from_state(controller.state)
             wheels = self.mixer.mix(command)
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
-
-            if not motor.set_wheel_speeds(target.left_qpps, target.right_qpps):
-                log.error("RoboClaw speed command was not acknowledged")
-                self._safe_zero_speed(motor)
-                return
-
+            target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
             now = self.clock()
+
+            if target_is_zero:
+                if closed_loop_active:
+                    if not motor.set_wheel_speeds(0, 0):
+                        log.error("RoboClaw zero-speed command was not acknowledged")
+                        self._safe_zero_speed(motor)
+                        return
+                    closed_loop_active = False
+                    idle_started_at = now
+                    idle_released = False
+                elif not idle_released and now - idle_started_at >= self.config.idle_release_delay:
+                    self._release_idle(motor)
+                    idle_released = True
+            else:
+                if not motor.set_wheel_speeds(target.left_qpps, target.right_qpps):
+                    log.error("RoboClaw speed command was not acknowledged")
+                    self._safe_zero_speed(motor)
+                    return
+                closed_loop_active = True
+                idle_released = False
+
             if now >= next_telemetry:
                 telemetry_started = self.clock()
                 self._publish_telemetry(controller.state, wheels, target, motor)
@@ -148,6 +168,9 @@ class GamepadTeleopRunner:
 
     def _safe_zero_speed(self, motor):
         motor.set_wheel_speeds(0, 0)
+
+    def _release_idle(self, motor):
+        motor.stop()
 
     def _publish_telemetry(self, state, wheels, target, motor):
         left_actual = None
@@ -212,6 +235,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loop-interval", type=float, default=0.05, help="Main control loop interval in seconds")
     parser.add_argument("--retry-interval", type=float, default=1.0, help="Hardware reconnect retry interval in seconds")
     parser.add_argument("--telemetry-interval", type=float, default=0.2, help="Telemetry publish interval in seconds")
+    parser.add_argument("--idle-release-delay", type=float, default=0.25, help="Seconds after stopping before releasing to zero duty")
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET, help="Telemetry hub publisher socket")
     return parser
 
@@ -230,6 +254,7 @@ def main():
         loop_interval=args.loop_interval,
         retry_interval=args.retry_interval,
         telemetry_interval=args.telemetry_interval,
+        idle_release_delay=args.idle_release_delay,
         telemetry_socket=args.telemetry_socket,
     )
     runner = GamepadTeleopRunner(config)

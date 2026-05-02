@@ -457,6 +457,26 @@ class RobotDashboard(App):
             return "caution", notes
         return "ready", ["manual drive only"]
 
+    def _row(
+        self,
+        label: str,
+        gauge: str = "",
+        value: str = "",
+        *,
+        label_w: int = 9,
+        gauge_w: int = 12,
+        value_w: int = 11,
+        value_style: str = "",
+        gauge_style: str = "",
+    ) -> str:
+        """Render a label / gauge / value row with fixed-width columns."""
+        label_part = f"[dim]{label:<{label_w}}[/]"
+        gauge_padded = gauge.ljust(gauge_w)
+        gauge_part = f"[{gauge_style}]{gauge_padded}[/]" if gauge_style else gauge_padded
+        value_padded = value.rjust(value_w)
+        value_part = f"[{value_style}]{value_padded}[/]" if value_style else value_padded
+        return f"  {label_part} {gauge_part} {value_part}"
+
     def _render_pi(self, pi: dict[str, Any]):
         throttle_val = pi.get("throttled_flags")
         throttle_ok = throttle_val in {None, "0x0", "0"}
@@ -464,23 +484,39 @@ class RobotDashboard(App):
         throttle_glyph = GLYPH_OK if throttle_ok else GLYPH_WARN
 
         temp = pi.get("soc_temp_c")
-        temp_color = "green" if temp is not None and temp < 70 else ("yellow" if temp is not None and temp < 80 else "red")
+        if temp is None:
+            temp_color = ""
+        elif temp < 70:
+            temp_color = "green"
+        elif temp < 80:
+            temp_color = "yellow"
+        else:
+            temp_color = "red"
 
         load = pi.get("load_1m")
-        load_bar = bar(load, limit=4.0, width=8) if load is not None else "░" * 8
+        load_bar = bar(load, limit=4.0, width=10) if load is not None else " " * 10
 
         mem_used = pi.get("memory_used_mb") or 0
         mem_total = pi.get("memory_total_mb") or 1
-        mem_bar = bar(mem_used, limit=mem_total, width=8)
+        mem_bar = bar(mem_used, limit=mem_total, width=10)
+        mem_str = f"{int(mem_used)}/{int(mem_total)}MB"
 
+        GW, VW = 10, 12
         lines = [
             f"[bold cyan]{GLYPH_CPU} CORE SYSTEMS[/]  [dim]pi rail / compute[/]",
-            f"  [dim]uptime[/]   {fmt(pi.get('uptime_seconds'), 's', digits=0):>10}",
-            f"  [dim]load[/]     {load_bar} {fmt(load):>5}",
-            f"  [dim]memory[/]   {mem_bar} {fmt(mem_used, 'MB', 0):>6} / {fmt(mem_total, 'MB', 0)}",
-            f"  [dim]disk[/]     {fmt(pi.get('disk_used_percent'), '%'):>10}",
-            f"  [dim]soc temp[/] [{temp_color}]{fmt(temp, '°C'):>10}[/]",
-            f"  [dim]throttle[/] [{throttle_color}]{throttle_glyph} {throttle_val or '0x0'}[/]",
+            self._row("uptime", "", fmt(pi.get("uptime_seconds"), "s", digits=0), gauge_w=GW, value_w=VW),
+            self._row("load", load_bar, fmt(load), gauge_w=GW, value_w=VW),
+            self._row("memory", mem_bar, mem_str, gauge_w=GW, value_w=VW),
+            self._row("disk", "", fmt(pi.get("disk_used_percent"), "%"), gauge_w=GW, value_w=VW),
+            self._row("soc temp", "", fmt(temp, "°C"), gauge_w=GW, value_w=VW, value_style=temp_color),
+            self._row(
+                "throttle",
+                "",
+                f"{throttle_glyph} {throttle_val or '0x0'}",
+                gauge_w=GW,
+                value_w=VW,
+                value_style=throttle_color,
+            ),
         ]
         self.query_one("#pi-panel", Static).update(Text.from_markup("\n".join(lines)))
 
@@ -491,18 +527,18 @@ class RobotDashboard(App):
         pack_v = battery.get("pack_voltage")
         cell_v = battery.get("cell_voltage")
 
-        # Voltage bar (assuming 3S LiPo: 9.0V empty, 12.6V full)
-        v_bar = bar(pack_v - 9.0, limit=3.6, width=12, absolute=False) if pack_v is not None else "░" * 12
+        GW, VW = 14, 8
 
-        # Sparkline for voltage history
-        v_spark = sparkline(self.history["pack_voltage"], width=16)
+        # Voltage bar (assuming 3S LiPo: 9.0V empty, 12.6V full)
+        v_bar = bar(pack_v - 9.0, limit=3.6, width=GW, absolute=False) if pack_v is not None else " " * GW
+        v_spark = sparkline(self.history["pack_voltage"], width=GW)
 
         lines = [
             f"[bold yellow]{GLYPH_POWER} POWER RAIL[/]  [{status_style(status)}]{status_glyph} {status.upper()}[/]",
-            f"  [dim]pack[/]      {v_bar} [bold]{fmt(pack_v, 'V', 2):>7}[/]",
-            f"  [dim]cell est[/]  {fmt(cell_v, 'V', 2):>18}",
-            f"  [dim]trend[/]     [cyan]{v_spark}[/]",
-            f"  [dim]peak amps[/] {fmt(self.max_current_amps, 'A', 2):>18}",
+            self._row("pack", v_bar, fmt(pack_v, "V", 2), gauge_w=GW, value_w=VW, value_style="bold"),
+            self._row("cell est", "", fmt(cell_v, "V", 2), gauge_w=GW, value_w=VW),
+            self._row("trend", v_spark, "", gauge_w=GW, value_w=VW, gauge_style="cyan"),
+            self._row("peak amps", "", fmt(self.max_current_amps, "A", 2), gauge_w=GW, value_w=VW),
         ]
         self.query_one("#power-panel", Static).update(Text.from_markup("\n".join(lines)))
 
@@ -512,40 +548,47 @@ class RobotDashboard(App):
         conn_color = "green" if connected else "red"
         conn_text = "LINKED" if connected else "OFFLINE"
 
-        # Sticks with bipolar bars
         lx = controller.get("left_stick_x")
         ly = controller.get("left_stick_y")
         rx = controller.get("right_stick_x")
         ry = controller.get("right_stick_y")
 
-        # Triggers with unipolar bars
         lt = controller.get("left_trigger")
         rt = controller.get("right_trigger")
 
-        # D-pad as direction indicator
         dx, dy = controller.get("dpad_x", 0), controller.get("dpad_y", 0)
         dpad_arrows = {
             (0, 1): "▲", (0, -1): "▼", (-1, 0): "◀", (1, 0): "▶",
-            (-1, 1): "◤", (1, 1): "◥", (-1, -1): "◣", (1, -1): "◢", (0, 0): "◇"
+            (-1, 1): "◤", (1, 1): "◥", (-1, -1): "◣", (1, -1): "◢", (0, 0): "◇",
         }
         dpad = dpad_arrows.get((dx, dy), "◇")
 
-        # Buttons
         pressed = [name.upper() for name, value in (controller.get("buttons") or {}).items() if value]
         buttons_str = " ".join(pressed) if pressed else "[dim]none[/]"
+
+        LW = 9
+        sticks = [
+            ("L stick", "X", lx),
+            ("",        "Y", ly),
+            ("R stick", "X", rx),
+            ("",        "Y", ry),
+        ]
 
         lines = [
             f"[bold magenta]{GLYPH_GAMEPAD} PILOT INPUTS[/]  [{conn_color}]{conn_glyph} {conn_text}[/]",
             "",
-            f"  [dim]L stick[/]  X {bipolar_bar(lx, width=6)} {fmt(lx, digits=2):>6}",
-            f"           Y {bipolar_bar(ly, width=6)} {fmt(ly, digits=2):>6}",
-            f"  [dim]R stick[/]  X {bipolar_bar(rx, width=6)} {fmt(rx, digits=2):>6}",
-            f"           Y {bipolar_bar(ry, width=6)} {fmt(ry, digits=2):>6}",
-            "",
-            f"  [dim]triggers[/] L {bar(lt, width=8)} {fmt(lt, digits=2):>5}   R {bar(rt, width=8)} {fmt(rt, digits=2):>5}",
-            f"  [dim]d-pad[/]    [bold]{dpad}[/]",
-            f"  [dim]buttons[/]  {buttons_str}",
         ]
+        for label, axis, value in sticks:
+            lines.append(
+                f"  [dim]{label:<{LW}}[/] {axis} {bipolar_bar(value, width=6)} {fmt(value, digits=2):>6}"
+            )
+        lines.extend([
+            "",
+            f"  [dim]{'triggers':<{LW}}[/] L {bar(lt, width=8)} {fmt(lt, digits=2):>5}    "
+            f"R {bar(rt, width=8)} {fmt(rt, digits=2):>5}",
+            f"  [dim]{'d-pad':<{LW}}[/] [bold]{dpad}[/]",
+            f"  [dim]{'buttons':<{LW}}[/] {buttons_str}",
+        ])
         self.query_one("#controller-panel", Static).update(Text.from_markup("\n".join(lines)))
 
     def _render_wheels(self, wheels: dict[str, Any]):
@@ -559,13 +602,20 @@ class RobotDashboard(App):
             "",
         ]
 
+        # Per-side block: cmd bar 13 chars, spd spark 13 chars, cur bar 6 chars.
+        # Using identical 13-char gauge widths makes cmd and spd line up vertically.
+        SUB = 4   # sub-label column ("cmd ", "tgt ", "spd ")
+        BAR_W = 6   # bipolar bar half-width (full = 2*BAR_W+1 = 13)
+        SPARK_W = 13
+        CUR_W = 6
+        VAL_W = 7
+
         for side in ("left", "right"):
             label = "L" if side == "left" else "R"
             cmd = wheels.get(f"{side}_command")
             target, actual, error = self._wheel_qpps(wheels, side)
             current = wheels.get(f"{side}_current_amps")
 
-            # Error color
             error_style = "green"
             if error is not None:
                 ratio = abs(error) / max(abs(target or 0), 1)
@@ -574,28 +624,30 @@ class RobotDashboard(App):
                 elif ratio > 0.10:
                     error_style = "yellow"
 
-            # Command bar
-            cmd_bar = bipolar_bar(cmd, width=5)
-
-            # Speed sparkline
-            speed_spark = sparkline(self.history[f"{side}_actual"], width=10, limit=self.max_abs_speed_qpps, absolute=True)
-
-            # Current bar
-            current_bar = bar(current, limit=5.0, width=6) if current is not None else "░" * 6
+            cmd_bar = bipolar_bar(cmd, width=BAR_W)
+            speed_spark = sparkline(
+                self.history[f"{side}_actual"],
+                width=SPARK_W,
+                limit=self.max_abs_speed_qpps,
+                absolute=True,
+            )
+            current_bar = bar(current, limit=5.0, width=CUR_W) if current is not None else " " * CUR_W
 
             lines.extend([
-                f"  [bold]{label}[/] cmd {cmd_bar} {fmt(cmd, digits=2):>6}",
-                f"    [dim]tgt[/] {fmt(target, digits=0):>7}  [dim]act[/] {fmt(actual, digits=0):>7}  "
-                f"[dim]err[/] [{error_style}]{fmt(error, digits=0):>7}[/]",
-                f"    [dim]spd[/] [cyan]{speed_spark}[/]  [dim]cur[/] {current_bar} {fmt(current, 'A', 2):>6}",
+                f"  [bold]{label}[/] [dim]{'cmd':<{SUB}}[/]{cmd_bar} {fmt(cmd, digits=2):>{VAL_W}}",
+                f"    [dim]{'tgt':<{SUB}}[/]{fmt(target, digits=0):>{VAL_W}}    "
+                f"[dim]{'act':<{SUB}}[/]{fmt(actual, digits=0):>{VAL_W}}    "
+                f"[dim]{'err':<{SUB}}[/][{error_style}]{fmt(error, digits=0):>{VAL_W}}[/]",
+                f"    [dim]{'spd':<{SUB}}[/][cyan]{speed_spark}[/] "
+                f"[dim]{'cur':<{SUB}}[/]{current_bar} {fmt(current, 'A', 2):>{VAL_W}}",
                 "",
             ])
 
-        # Current history
-        lines.extend([
-            f"  [dim]current trend[/]  L [cyan]{sparkline(self.history['left_current'], width=12)}[/]  "
-            f"R [cyan]{sparkline(self.history['right_current'], width=12)}[/]",
-        ])
+        lines.append(
+            f"  [dim]current trend[/]   "
+            f"L [cyan]{sparkline(self.history['left_current'], width=SPARK_W)}[/]  "
+            f"R [cyan]{sparkline(self.history['right_current'], width=SPARK_W)}[/]"
+        )
 
         self.query_one("#wheels-panel", Static).update(Text.from_markup("\n".join(lines)))
 

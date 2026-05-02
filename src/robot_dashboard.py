@@ -8,7 +8,6 @@ import subprocess
 import threading
 import time
 from collections import deque
-from collections.abc import Iterable
 from typing import Any
 
 from rich.table import Table
@@ -35,7 +34,6 @@ LOG_COMMAND = [
 ]
 
 HISTORY_LENGTH = 48
-SPARK_CHARS = " .:-=+*#%@"
 BAR_FULL = "#"
 BAR_EMPTY = "."
 
@@ -74,17 +72,16 @@ def fmt_age(last_seen: float | None, now: float) -> str:
     return f"{int(age)}s ago"
 
 
-def sparkline(values: Iterable[float | None], width: int = 24) -> str:
+def history_summary(values: deque[float | None], suffix: str = "", digits: int = 1) -> str:
     clean = [value for value in values if value is not None]
     if not clean:
-        return "-" * width
-    clean = clean[-width:]
+        return "--"
+    latest = clean[-1]
     low = min(clean)
     high = max(clean)
     if low == high:
-        return SPARK_CHARS[len(SPARK_CHARS) // 2] * len(clean)
-    scale = len(SPARK_CHARS) - 1
-    return "".join(SPARK_CHARS[int(((value - low) / (high - low)) * scale)] for value in clean)
+        return f"stable {fmt(latest, suffix, digits)}"
+    return f"now {fmt(latest, suffix, digits)} / range {fmt(low, suffix, digits)}-{fmt(high, suffix, digits)}"
 
 
 def bar(value: float | None, limit: float = 1.0, width: int = 14) -> str:
@@ -93,18 +90,6 @@ def bar(value: float | None, limit: float = 1.0, width: int = 14) -> str:
     ratio = min(1.0, abs(value) / limit)
     filled = int(round(ratio * width))
     return BAR_FULL * filled + BAR_EMPTY * (width - filled)
-
-
-def signed_bar(value: float | None, limit: float, width: int = 15) -> str:
-    if value is None:
-        return "-" * width
-    half = width // 2
-    magnitude = min(half, int(round((abs(value) / limit) * half))) if limit else 0
-    if value > 0:
-        return BAR_EMPTY * half + "|" + BAR_FULL * magnitude + BAR_EMPTY * (half - magnitude)
-    if value < 0:
-        return BAR_EMPTY * (half - magnitude) + BAR_FULL * magnitude + "|" + BAR_EMPTY * half
-    return BAR_EMPTY * half + "|" + BAR_EMPTY * half
 
 
 def rich(markup: str) -> Text:
@@ -328,7 +313,7 @@ class RobotDashboard(App):
         table.add_row("[cyan]POWER RAIL[/]", f"[{status_style(status)}]{status.upper()}[/]")
         table.add_row("Pack", fmt(battery.get("pack_voltage"), " V", 2))
         table.add_row("Cell est.", fmt(battery.get("cell_voltage"), " V", 2))
-        table.add_row("Trace", sparkline(self.history["pack_voltage"]))
+        table.add_row("Trend", history_summary(self.history["pack_voltage"], " V", 2))
         table.add_row("Max current", fmt(self.max_current_amps, " A", 2))
         self.query_one("#battery", Static).update(table)
 
@@ -362,12 +347,12 @@ class RobotDashboard(App):
                 read_status,
             )
             table.add_row(
-                f"{side} trace",
+                f"{side} history",
                 "",
-                sparkline(self.history[f"{side}_actual"]),
-                signed_bar(actual, max(abs(target or 0), 1)),
-                sparkline(self.history[f"{side}_error"]),
-                sparkline(self.history[f"{side}_current"]),
+                history_summary(self.history[f"{side}_actual"], digits=0),
+                "",
+                history_summary(self.history[f"{side}_error"], digits=0),
+                history_summary(self.history[f"{side}_current"], " A", 2),
                 "",
             )
 

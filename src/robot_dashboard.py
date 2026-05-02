@@ -125,6 +125,16 @@ def bar(value: float | None, limit: float = 1.0, width: int = 10, absolute: bool
     return result
 
 
+def cell_bar(value: float | None, limit: float = 1.0, width: int = 10, absolute: bool = True) -> str:
+    """Render a fixed-cell gauge with a stable visual right edge."""
+    if value is None:
+        return "░" * width
+    scaled = abs(value) if absolute else max(0.0, value)
+    ratio = min(1.0, scaled / limit)
+    filled = round(ratio * width)
+    return "█" * filled + "░" * (width - filled)
+
+
 def bipolar_bar(value: float | None, limit: float = 1.0, width: int = 10) -> str:
     """Render a center-zero gauge for bipolar values like joystick axes."""
     if value is None:
@@ -724,21 +734,21 @@ class RobotDashboard(App):
 
         success_rate = link_loop.get("read_success_rate")
         success_percent = f"{success_rate * 100:.0f}% ok" if success_rate is not None else "--"
-        success_bar = bar(success_rate, limit=1.0, width=10, absolute=False) if success_rate is not None else " " * 10
+        success_bar = cell_bar(success_rate, limit=1.0, width=10, absolute=False) if success_rate is not None else " " * 10
 
         failures = link_loop.get("consecutive_read_failures")
         failure_text = "none" if failures == 0 else (f"{failures} streak" if failures is not None else "--")
-        failure_bar = bar(failures, limit=10, width=10, absolute=False) if failures else " " * 10
+        failure_bar = cell_bar(failures, limit=10, width=10, absolute=False) if failures else " " * 10
 
         latency = link_loop.get("telemetry_latency_ms")
         latency_text = f"{latency:.0f}ms ok" if latency is not None and latency <= 100 else (
             f"{latency:.0f}ms" if latency is not None else "--"
         )
-        latency_bar = bar(100.0 - latency, limit=100.0, width=10, absolute=False) if latency is not None else " " * 10
+        latency_bar = cell_bar(100.0 - latency, limit=100.0, width=10, absolute=False) if latency is not None else " " * 10
 
         loop_hz = link_loop.get("command_loop_hz")
         loop_text = f"{loop_hz:.1f} Hz" if loop_hz is not None else "--"
-        loop_bar = bar(loop_hz, limit=20.0, width=10, absolute=False) if loop_hz is not None else " " * 10
+        loop_bar = cell_bar(loop_hz, limit=20.0, width=10, absolute=False) if loop_hz is not None else " " * 10
 
         GW, VW = 10, 11
         lines = [

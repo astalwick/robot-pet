@@ -487,7 +487,7 @@ class RobotDashboard(App):
         gauge: str = "",
         value: str = "",
         *,
-        label_w: int = 9,
+        label_w: int = 11,
         gauge_w: int = 12,
         value_w: int = 11,
         value_style: str = "",
@@ -741,7 +741,14 @@ class RobotDashboard(App):
         GW, VW = 10, 11
         lines = [
             f"[bold cyan]{GLYPH_LINK} LINK / LOOP HEALTH[/]  [{status_color}]{status_glyph} {status_text}[/]",
-            self._row("roboclaw", success_bar, success_percent, gauge_w=GW, value_w=VW, value_style=status_color),
+            self._row(
+                "roboclaw",
+                success_bar,
+                success_percent,
+                gauge_w=GW,
+                value_w=VW,
+                value_style=status_color,
+            ),
             self._row(
                 "last good",
                 "",
@@ -749,7 +756,14 @@ class RobotDashboard(App):
                 gauge_w=GW,
                 value_w=VW,
             ),
-            self._row("failures", failure_bar, failure_text, gauge_w=GW, value_w=VW, value_style=status_color),
+            self._row(
+                "failures",
+                failure_bar,
+                failure_text,
+                gauge_w=GW,
+                value_w=VW,
+                value_style=status_color,
+            ),
             self._row("telemetry", latency_bar, latency_text, gauge_w=GW, value_w=VW),
             self._row("drive loop", loop_bar, loop_text, gauge_w=GW, value_w=VW),
         ]

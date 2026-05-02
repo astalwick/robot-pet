@@ -57,6 +57,20 @@ def fmt(value: Any, suffix: str = "", digits: int = 1) -> str:
     return f"{value}{suffix}"
 
 
+def fix_wraparound(value: int | float | None, bits: int = 32) -> int | float | None:
+    """Fix unsigned int wraparound to signed representation."""
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return value
+    # Detect likely wraparound: values near max unsigned that should be negative
+    max_signed = (1 << (bits - 1)) - 1
+    max_unsigned = (1 << bits) - 1
+    if value > max_signed:
+        return value - max_unsigned - 1
+    return value
+
+
 def status_style(status: str) -> str:
     if status in {"ok", "live", "ready"}:
         return "bold green"
@@ -240,10 +254,7 @@ class RobotDashboard(App):
 
     def _hud_waiting(self) -> Text:
         return Text.from_markup(
-            "[bold cyan]╔══════════════════════════════════════════════════════════════════════════════╗[/]\n"
-            "[bold cyan]║[/]  [bold white]R O B O - P E T[/]   [dim]awaiting telemetry link...[/]                              [bold cyan]║[/]\n"
-            "[bold cyan]║[/]  [dim]───────────────────────────────────────────────────────────────────────[/]  [bold cyan]║[/]\n"
-            "[bold cyan]╚══════════════════════════════════════════════════════════════════════════════╝[/]"
+            "[bold white]R O B O - P E T[/]   [dim]awaiting telemetry link...[/]"
         )
 
     def on_mount(self):
@@ -317,10 +328,10 @@ class RobotDashboard(App):
         self.history["pack_voltage"].append(battery.get("pack_voltage"))
         self.history["left_current"].append(wheels.get("left_current_amps"))
         self.history["right_current"].append(wheels.get("right_current_amps"))
-        self.history["left_actual"].append(wheels.get("left_actual_qpps"))
-        self.history["right_actual"].append(wheels.get("right_actual_qpps"))
-        self.history["left_error"].append(wheels.get("left_error_qpps"))
-        self.history["right_error"].append(wheels.get("right_error_qpps"))
+        self.history["left_actual"].append(fix_wraparound(wheels.get("left_actual_qpps")))
+        self.history["right_actual"].append(fix_wraparound(wheels.get("right_actual_qpps")))
+        self.history["left_error"].append(fix_wraparound(wheels.get("left_error_qpps")))
+        self.history["right_error"].append(fix_wraparound(wheels.get("right_error_qpps")))
 
         for value in (wheels.get("left_current_amps"), wheels.get("right_current_amps")):
             if value is not None:
@@ -367,17 +378,10 @@ class RobotDashboard(App):
         notes_str = " │ ".join(drive_notes) if drive_notes else "all systems nominal"
 
         lines = [
-            "[bold cyan]╔══════════════════════════════════════════════════════════════════════════════╗[/]",
-            f"[bold cyan]║[/]  [bold white]R O B O - P E T[/]   "
-            f"[{status_color}]{status_glyph} {drive_status.upper()}[/]     "
-            f"[bold yellow]{GLYPH_POWER}[/] {voltage_str}     "
-            f"[magenta]⏱ {session}[/]"
-            + " " * 20 + "[bold cyan]║[/]",
-            f"[bold cyan]║[/]  [dim]{notes_str}[/]" + " " * max(0, 72 - len(notes_str)) + "[bold cyan]║[/]",
-            f"[bold cyan]║[/]  [{gp_color}]{GLYPH_GAMEPAD} gamepad {gp_age}[/]  │  "
-            f"[{sys_color}]{GLYPH_SIGNAL} system {sys_age}[/]"
-            + " " * 36 + "[bold cyan]║[/]",
-            "[bold cyan]╚══════════════════════════════════════════════════════════════════════════════╝[/]",
+            f"[bold white]R O B O - P E T[/]   [{status_color}]{status_glyph} {drive_status.upper()}[/]    "
+            f"[bold yellow]{GLYPH_POWER}[/] {voltage_str}    [magenta]⏱ {session}[/]",
+            f"[dim]{notes_str}[/]",
+            f"[{gp_color}]{GLYPH_GAMEPAD} gamepad {gp_age}[/]    [{sys_color}]{GLYPH_SIGNAL} system {sys_age}[/]",
         ]
         return Text.from_markup("\n".join(lines))
 
@@ -517,15 +521,14 @@ class RobotDashboard(App):
         lines = [
             f"[bold cyan]{GLYPH_WHEEL} DRIVETRAIN[/]  [{read_color}]{read_glyph} {read_text}[/]",
             "",
-            "  [dim]┌─────────────────────────────────────────────────────────────┐[/]",
         ]
 
         for side in ("left", "right"):
             label = "L" if side == "left" else "R"
             cmd = wheels.get(f"{side}_command")
-            target = wheels.get(f"{side}_target_qpps")
-            actual = wheels.get(f"{side}_actual_qpps")
-            error = wheels.get(f"{side}_error_qpps")
+            target = fix_wraparound(wheels.get(f"{side}_target_qpps"))
+            actual = fix_wraparound(wheels.get(f"{side}_actual_qpps"))
+            error = fix_wraparound(wheels.get(f"{side}_error_qpps"))
             current = wheels.get(f"{side}_current_amps")
 
             # Error color
@@ -547,19 +550,16 @@ class RobotDashboard(App):
             current_bar = bar(current, limit=5.0, width=6) if current else "░" * 6
 
             lines.extend([
-                f"  [dim]│[/] [bold]{label}[/] cmd {cmd_bar} {fmt(cmd, digits=2):>6}  "
-                f"[dim]target[/] {fmt(target, digits=0):>6}  [dim]actual[/] {fmt(actual, digits=0):>6}  "
-                f"[dim]err[/] [{error_style}]{fmt(error, digits=0):>5}[/] [dim]│[/]",
-                f"  [dim]│[/]   [dim]speed[/] [cyan]{speed_spark}[/]  "
-                f"[dim]current[/] {current_bar} {fmt(current, 'A', 2):>6}"
-                + " " * 13 + "[dim]│[/]",
+                f"  [bold]{label}[/] cmd {cmd_bar} {fmt(cmd, digits=2):>6}   "
+                f"[dim]tgt[/] {fmt(target, digits=0):>7}  [dim]act[/] {fmt(actual, digits=0):>7}  "
+                f"[dim]err[/] [{error_style}]{fmt(error, digits=0):>6}[/]",
+                f"    [dim]speed[/] [cyan]{speed_spark}[/]   "
+                f"[dim]current[/] {current_bar} {fmt(current, 'A', 2):>6}",
+                "",
             ])
-
-        lines.append("  [dim]└─────────────────────────────────────────────────────────────┘[/]")
 
         # Current history
         lines.extend([
-            "",
             f"  [dim]current trend[/]  L [cyan]{sparkline(self.history['left_current'], width=12)}[/]  "
             f"R [cyan]{sparkline(self.history['right_current'], width=12)}[/]",
         ])

@@ -14,18 +14,21 @@ The Python code that talks to hardware (motors, sensors) should be pure Python c
 
 ```
 src/
+├── control/              # Framework-agnostic teleop policy and drive mixing
+│   ├── commands.py       # MotionCommand, WheelCommand, WheelSpeedCommand
+│   ├── differential_drive.py
+│   └── teleop.py
 ├── drivers/              # Hardware drivers - PURE PYTHON, survives ROS2 migration
 │   ├── __init__.py
 │   ├── motor.py          # MotorDriver class
-│   └── sensor.py         # SensorDriver class
+│   └── controller.py     # ControllerDriver class
 ├── lib/                  # Shared utilities
 │   └── log.py            # Logging setup (journald-friendly)
 ├── robot-brain.py        # systemd service - orchestrator (temporary)
-├── robot-motion.py       # systemd service - wraps drivers.motor (temporary)
-└── robot-sensors.py      # systemd service - wraps drivers.sensor (temporary)
+└── gamepad_teleop.py     # systemd service - boot-ready gamepad teleop (temporary)
 
 systemd/
-└── robot-*.service       # Unit files for each service
+└── *.service             # Unit files for each service
 ```
 
 ## Driver Guidelines
@@ -96,7 +99,8 @@ src/
 | Service | Purpose | Status |
 |---------|---------|--------|
 | `robot-brain` | Orchestrator / behavior state machine | Stub |
-| `robot-motion` | Motor control | Not yet created |
+| `gamepad-teleop` | Xbox controller to RoboClaw closed-loop speed teleop | Active |
+| `robot-motion` | Autonomous motor control | Not yet created |
 | `robot-sensors` | Sensor reading | Not yet created |
 
 ## Logging
@@ -104,7 +108,8 @@ src/
 All services log to stdout/stderr. systemd captures output to journald.
 
 - View logs: `journalctl -u robot-brain -f`
-- View multiple: `journalctl -u robot-brain -u robot-motion -f`
+- View gamepad teleop logs: `journalctl -u gamepad-teleop -f`
+- View multiple: `journalctl -u robot-brain -u gamepad-teleop -f`
 - Format: `LEVEL service-name: message`
 
 Timestamps come from journald, not the application.

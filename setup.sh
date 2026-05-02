@@ -138,7 +138,9 @@ echo "[10/10] Installing systemd services..."
 sudo cp "$REPO_DIR/systemd/"*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service
+sudo systemctl enable gamepad-teleop.service
 sudo systemctl restart robot-brain.service
+sudo systemctl restart gamepad-teleop.service
 
 echo ""
 echo "=== Setup complete! ==="
@@ -151,3 +153,5 @@ echo ""
 echo "Service status:"
 echo "    sudo systemctl status robot-brain"
 echo "    journalctl -u robot-brain -f"
+echo "    sudo systemctl status gamepad-teleop"
+echo "    journalctl -u gamepad-teleop -f"

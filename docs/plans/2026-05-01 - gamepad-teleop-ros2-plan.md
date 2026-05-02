@@ -40,6 +40,24 @@ The service is long-running and hardware-tolerant:
 - If the controller reconnects later, teleop becomes available again without restarting the robot.
 - If the RoboClaw is absent or not responding, the service keeps motors stopped and retries until `ReadVersion` succeeds.
 
+## Sign Conventions
+
+Match the working behavior from `scripts/diagnostics/controller-roboclaw-speed-test.py`. That diagnostic is the hardware-proven source of truth:
+
+- Forward/back input comes from `ABS_Y` on the left stick.
+- Forward is `forward = -normalize_axis(ABS_Y)`.
+- Turn input comes from `ABS_RX` on the right stick.
+- Right turn is `turn = normalize_axis(ABS_RX)`.
+- Arcade drive mixing is:
+  - `left = clamp(forward + turn, -1.0, 1.0)`
+  - `right = clamp(forward - turn, -1.0, 1.0)`
+- `M1 = left`, `M2 = right`.
+- Positive left and right QPPS together mean robot-forward.
+- RB is the deadman switch.
+- LB is turbo mode, matching the speed diagnostic.
+
+Do not reinterpret these signs during the cleanup. If the robot drives correctly with the diagnostic, the boot-ready service should produce the same wheel targets for the same controller input.
+
 ## Implementation Plan
 
 1. Normalize the controller driver
@@ -103,15 +121,17 @@ The service is long-running and hardware-tolerant:
    - Ctrl+C sends stop and cleans up.
    - Controller disconnect sends stop, logs clearly, and returns to waiting for a controller.
 
-   This can live as `src/gamepad-teleop.py` or `scripts/teleop-gamepad.py`. If it is primarily run by systemd, prefer `src/gamepad-teleop.py` and keep `scripts/` for manual commands.
+   This should live as `src/gamepad_teleop.py`. The underscore keeps it importable for tests while still letting systemd run it directly. Keep `scripts/` for manual commands and diagnostics.
 
 5. Add `systemd/gamepad-teleop.service`
 
    Add a dedicated systemd service alongside `systemd/robot-brain.service`:
 
+   - `After=robot-brain.service`
+   - `Wants=robot-brain.service`
    - `WorkingDirectory=/home/pi/robot-pet/src`
    - `Environment=PYTHONPATH=/home/pi/robot-pet/src`
-   - `ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/gamepad-teleop.py`
+   - `ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/gamepad_teleop.py`
    - `Restart=always`
    - `RestartSec=2`
    - `WantedBy=multi-user.target`
@@ -134,7 +154,7 @@ The service is long-running and hardware-tolerant:
 
    `setup.sh` already installs `evdev` and adds the user to `input`; verify this is enough for the final teleop path.
 
-   Update `setup.sh` to install and enable `gamepad-teleop.service` from the existing `systemd/` directory.
+   `setup.sh` already copies all `systemd/*.service`; update it to enable and restart `gamepad-teleop.service` explicitly alongside `robot-brain.service`.
 
    Update docs with:
 
@@ -159,6 +179,43 @@ The service is long-running and hardware-tolerant:
 - Use closed-loop speed commands with conservative default QPPS caps for normal driving.
 - Keep low default speed for the first boot-ready service.
 
+## Failure Behavior
+
+The long-running service should treat controller and RoboClaw availability as runtime state, not as one-shot startup checks:
+
+- If no controller is present, log that teleop is waiting and retry until one appears.
+- If controller reads fail after connection, send stop, close the input device, clear controller state, and return to the controller wait loop.
+- If `ReadVersion` fails, keep motors stopped and retry RoboClaw readiness.
+- If the initial `SpeedM1M2(0, 0)` is not acknowledged, do not enable motion; log clearly and retry RoboClaw readiness.
+- If a later `SpeedM1M2(left_qpps, right_qpps)` command is not acknowledged, treat the RoboClaw as unavailable, attempt one zero-speed command if the serial connection still exists, close/recreate the driver, and return to the RoboClaw wait loop.
+- If shutdown or Ctrl+C happens while RoboClaw is ready, send zero QPPS before closing the driver.
+- Systemd restart is a backstop for unexpected crashes, not the normal recovery mechanism for unplugged hardware.
+
+## Test Plan
+
+Add focused stdlib `unittest` coverage for the framework-agnostic pieces and runner behavior that can be tested without real hardware:
+
+- `GamepadTeleopPolicy`
+  - RB released always returns zero motion.
+  - RB held converts left-stick Y and right-stick X into `MotionCommand`.
+  - Deadzone zeros small stick noise.
+  - LB turbo selects the turbo scale only while held.
+- `DifferentialDriveMixer`
+  - Uses the proven arcade mix: `left = forward + turn`, `right = forward - turn`.
+  - Clamps normalized wheel commands to `[-1.0, 1.0]`.
+  - Converts normalized wheels to capped QPPS without exceeding the configured cap.
+  - Preserves the diagnostic sign convention where positive left and right targets mean robot-forward.
+- `MotorDriver`
+  - `set_wheel_speeds(left_qpps, right_qpps)` calls RoboClaw `SpeedM1M2(address, left_qpps, right_qpps)`.
+  - `read_wheel_speeds()` reads `ReadSpeedM1` and `ReadSpeedM2`.
+  - `stop()` sends zero output; if the normal driving path uses speed mode, zero-speed behavior should be covered.
+- `gamepad_teleop` runner
+  - Starts with no motion until controller and RoboClaw readiness both succeed.
+  - Sends stop on deadman release.
+  - Sends stop and returns to waiting on controller disconnect.
+  - Treats failed speed-command acknowledgement as RoboClaw readiness loss.
+  - Sends stop on shutdown.
+
 ## ROS2 Migration Path
 
 When moving to ROS2:
@@ -166,7 +223,7 @@ When moving to ROS2:
 - Keep `src/drivers/motor.py` as the hardware backend.
 - Keep `src/drivers/controller.py` if the Pi still reads the gamepad directly.
 - Keep `src/control/teleop.py` and `src/control/differential_drive.py`.
-- Replace `src/gamepad-teleop.py` and `systemd/gamepad-teleop.service` with ROS2 nodes/launch files:
+- Replace `src/gamepad_teleop.py` and `systemd/gamepad-teleop.service` with ROS2 nodes/launch files:
   - A teleop node publishes `MotionCommand` as `geometry_msgs/Twist` on `/cmd_vel`.
   - A motion node subscribes to `/cmd_vel`, mixes to wheel speed commands, and calls `MotorDriver.set_wheel_speeds`.
 

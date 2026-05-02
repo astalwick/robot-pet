@@ -8,10 +8,37 @@ The controller shows up as /dev/input/eventX - this driver finds it automaticall
 """
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
-from evdev import InputDevice, categorize, ecodes, list_devices
+try:
+    from evdev import InputDevice, ecodes, list_devices
+except ModuleNotFoundError:
+    InputDevice = None
+    list_devices = None
+
+    class ecodes:
+        EV_KEY = 1
+        EV_ABS = 3
+        ABS_X = 0
+        ABS_Y = 1
+        ABS_Z = 2
+        ABS_RX = 3
+        ABS_RY = 4
+        ABS_RZ = 5
+        ABS_HAT0X = 16
+        ABS_HAT0Y = 17
+        BTN_SOUTH = 304
+        BTN_EAST = 305
+        BTN_WEST = 307
+        BTN_NORTH = 308
+        BTN_TL = 310
+        BTN_TR = 311
+        BTN_SELECT = 314
+        BTN_START = 315
+        BTN_MODE = 316
+        BTN_THUMBL = 317
+        BTN_THUMBR = 318
 
 
 @dataclass
@@ -86,7 +113,7 @@ class ControllerDriver:
     BTN_LEFT_STICK = ecodes.BTN_THUMBL
     BTN_RIGHT_STICK = ecodes.BTN_THUMBR
     
-    def __init__(self, deadzone: float = 0.1):
+    def __init__(self, deadzone: float = 0.1, device_path: str | None = None):
         """
         Initialize the controller driver.
         
@@ -94,6 +121,7 @@ class ControllerDriver:
             deadzone: Stick deadzone (values below this are treated as 0)
         """
         self.deadzone = deadzone
+        self.device_path = device_path
         self.state = ControllerState()
         self.device: InputDevice | None = None
         self._running = False
@@ -102,14 +130,26 @@ class ControllerDriver:
     
     def find_controller(self) -> str | None:
         """Find an Xbox 360 controller device path."""
+        if self.device_path:
+            return self.device_path
+
+        if list_devices is None:
+            raise RuntimeError("evdev is not installed; run setup.sh to install controller support.")
+
         for path in list_devices():
+            device = None
             try:
                 device = InputDevice(path)
                 name = device.name.lower()
                 if any(xbox in name for xbox in self.XBOX_NAMES):
                     return path
+            except PermissionError as exc:
+                raise RuntimeError(f"Permission denied reading {path}; run setup.sh and log back in.") from exc
             except Exception:
                 continue
+            finally:
+                if device is not None:
+                    device.close()
         return None
     
     def connect(self) -> bool:
@@ -123,7 +163,17 @@ class ControllerDriver:
         if path is None:
             return False
         
-        self.device = InputDevice(path)
+        if InputDevice is None:
+            raise RuntimeError("evdev is not installed; run setup.sh to install controller support.")
+
+        try:
+            self.device = InputDevice(path)
+        except PermissionError as exc:
+            raise RuntimeError(f"Permission denied reading {path}; run setup.sh and log back in.") from exc
+        except OSError:
+            return False
+
+        self.state = ControllerState()
         return True
     
     def start(self, on_disconnect: Callable[[], None] | None = None):
@@ -229,4 +279,6 @@ class ControllerDriver:
     def cleanup(self):
         """Stop reading and release resources."""
         self.stop()
+        if self.device is not None:
+            self.device.close()
         self.device = None

@@ -10,7 +10,8 @@ Hardware setup:
 - User must be in 'dialout' group: sudo usermod -a -G dialout $USER
 """
 
-from basicmicro import Basicmicro
+from collections.abc import Callable
+from typing import Any
 
 
 def format_version(version):
@@ -34,6 +35,7 @@ class MotorDriver:
         port: str = "/dev/serial0",
         address: int = 0x80,
         baud: int = 38400,
+        controller_factory: Callable[[str, int], Any] | None = None,
     ):
         """
         Initialize the motor driver.
@@ -44,7 +46,12 @@ class MotorDriver:
             baud: Baud rate (default 38400)
         """
         self.address = address
-        self.controller = Basicmicro(port, baud)
+        if controller_factory is None:
+            from basicmicro import Basicmicro
+
+            controller_factory = Basicmicro
+
+        self.controller = controller_factory(port, baud)
         self.controller.Open()
 
         result = self.controller.ReadVersion(self.address)
@@ -74,6 +81,24 @@ class MotorDriver:
         # M1 = left, M2 = right
         self.controller.DutyM1(self.address, left_duty)
         self.controller.DutyM2(self.address, right_duty)
+
+    def set_wheel_speeds(self, left_qpps: int, right_qpps: int) -> bool:
+        """
+        Set closed-loop wheel speed targets in encoder counts per second.
+
+        Args:
+            left_qpps: M1 target speed; positive means robot-forward
+            right_qpps: M2 target speed; positive means robot-forward
+        """
+        return bool(self.controller.SpeedM1M2(self.address, int(left_qpps), int(right_qpps)))
+
+    def read_wheel_speeds(self) -> tuple[int | None, int | None]:
+        """Read actual closed-loop wheel speeds from RoboClaw encoders."""
+        left = self.controller.ReadSpeedM1(self.address)
+        right = self.controller.ReadSpeedM2(self.address)
+        left_qpps = left[1] if left[0] else None
+        right_qpps = right[1] if right[0] else None
+        return left_qpps, right_qpps
     
     def stop(self):
         """Immediately stop both motors."""

@@ -58,16 +58,18 @@ def fmt(value: Any, suffix: str = "", digits: int = 1) -> str:
 
 
 def fix_wraparound(value: int | float | None, bits: int = 32) -> int | float | None:
-    """Fix unsigned int wraparound to signed representation."""
+    """Fix signed 32-bit values that arrived through unsigned math."""
     if value is None:
         return None
     if isinstance(value, float):
         return value
-    # Detect likely wraparound: values near max unsigned that should be negative
     max_signed = (1 << (bits - 1)) - 1
-    max_unsigned = (1 << bits) - 1
+    min_signed = -(1 << (bits - 1))
+    span = 1 << bits
     if value > max_signed:
-        return value - max_unsigned - 1
+        return value - span
+    if value < min_signed:
+        return value + span
     return value
 
 
@@ -97,11 +99,12 @@ def fmt_age(last_seen: float | None, now: float) -> str:
     return f"{int(age)}s ago"
 
 
-def bar(value: float | None, limit: float = 1.0, width: int = 10) -> str:
+def bar(value: float | None, limit: float = 1.0, width: int = 10, absolute: bool = True) -> str:
     """Render a block-style gauge bar."""
     if value is None:
         return "░" * width
-    ratio = min(1.0, abs(value) / limit)
+    scaled = abs(value) if absolute else max(0.0, value)
+    ratio = min(1.0, scaled / limit)
     full_blocks = int(ratio * width)
     remainder = (ratio * width) - full_blocks
     partial_idx = int(remainder * (len(BAR_BLOCKS) - 1))
@@ -135,9 +138,14 @@ def bipolar_bar(value: float | None, limit: float = 1.0, width: int = 10) -> str
     return left + center + right
 
 
-def sparkline(values: deque[float | None], width: int = 12) -> str:
+def sparkline(
+    values: deque[float | None],
+    width: int = 12,
+    limit: float | None = None,
+    absolute: bool = False,
+) -> str:
     """Render a sparkline from historical values."""
-    clean = [v for v in values if v is not None]
+    clean = [abs(v) if absolute else v for v in values if v is not None]
     if not clean:
         return "─" * width
     
@@ -146,13 +154,17 @@ def sparkline(values: deque[float | None], width: int = 12) -> str:
     if len(recent) < 2:
         return "─" * width
     
-    low, high = min(recent), max(recent)
+    if limit is None:
+        low, high = min(recent), max(recent)
+    else:
+        low, high = 0.0, limit
     if high == low:
         return SPARK_BLOCKS[4] * len(recent) + "─" * (width - len(recent))
     
     result = ""
     for v in recent:
-        idx = int((v - low) / (high - low) * (len(SPARK_BLOCKS) - 1))
+        ratio = max(0.0, min(1.0, (v - low) / (high - low)))
+        idx = int(ratio * (len(SPARK_BLOCKS) - 1))
         result += SPARK_BLOCKS[idx]
     
     return result + "─" * (width - len(recent))
@@ -239,6 +251,7 @@ class RobotDashboard(App):
             "right_error": deque(maxlen=HISTORY_LENGTH),
         }
         self.max_current_amps = 0.0
+        self.max_abs_speed_qpps = 1.0
 
     def compose(self) -> ComposeResult:
         yield Static(self._hud_waiting(), id="hud-header")
@@ -309,29 +322,43 @@ class RobotDashboard(App):
         sources = snapshot.get("sources", {})
         gamepad_status = self._source_label(sources.get("gamepad_teleop", {}))
         system_status = self._source_label(sources.get("system", {}))
-        self._record_history(snapshot)
+        gamepad_live = gamepad_status == "live"
+        self._record_history(snapshot, gamepad_live)
+
+        controller = snapshot.get("controller") or {}
+        wheels = snapshot.get("wheels") or {}
+        battery = snapshot.get("motor_battery") or {}
+        if not gamepad_live:
+            controller = {}
+            wheels = {}
+            battery = {"status": "stale"}
 
         hud = self.query_one("#hud-header", Static)
-        hud.update(self._hud_banner(snapshot, sources, gamepad_status, system_status))
+        hud.update(self._hud_banner(snapshot, sources, gamepad_status, system_status, controller, wheels, battery))
 
         self._render_pi(snapshot.get("pi") or {})
-        self._render_battery(snapshot.get("motor_battery") or {})
-        self._render_controller(snapshot.get("controller") or {})
-        self._render_wheels(snapshot.get("wheels") or {})
+        self._render_battery(battery)
+        self._render_controller(controller)
+        self._render_wheels(wheels)
 
     def _source_label(self, source: dict[str, Any]) -> str:
         return "stale" if source.get("stale", True) else "live"
 
-    def _record_history(self, snapshot: dict[str, Any]):
+    def _record_history(self, snapshot: dict[str, Any], gamepad_live: bool):
+        if not gamepad_live:
+            return
         wheels = snapshot.get("wheels") or {}
         battery = snapshot.get("motor_battery") or {}
         self.history["pack_voltage"].append(battery.get("pack_voltage"))
         self.history["left_current"].append(wheels.get("left_current_amps"))
         self.history["right_current"].append(wheels.get("right_current_amps"))
-        self.history["left_actual"].append(fix_wraparound(wheels.get("left_actual_qpps")))
-        self.history["right_actual"].append(fix_wraparound(wheels.get("right_actual_qpps")))
-        self.history["left_error"].append(fix_wraparound(wheels.get("left_error_qpps")))
-        self.history["right_error"].append(fix_wraparound(wheels.get("right_error_qpps")))
+        for side in ("left", "right"):
+            target, actual, error = self._wheel_qpps(wheels, side)
+            self.history[f"{side}_actual"].append(actual)
+            self.history[f"{side}_error"].append(error)
+            for value in (target, actual):
+                if value is not None:
+                    self.max_abs_speed_qpps = max(self.max_abs_speed_qpps, abs(value))
 
         for value in (wheels.get("left_current_amps"), wheels.get("right_current_amps")):
             if value is not None:
@@ -343,11 +370,11 @@ class RobotDashboard(App):
         sources: dict[str, Any],
         gamepad_status: str,
         system_status: str,
+        controller: dict[str, Any],
+        wheels: dict[str, Any],
+        battery: dict[str, Any],
     ) -> Text:
         now = time.time()
-        controller = snapshot.get("controller") or {}
-        wheels = snapshot.get("wheels") or {}
-        battery = snapshot.get("motor_battery") or {}
         pi = snapshot.get("pi") or {}
         drive_status, drive_notes = self._drive_status(gamepad_status, system_status, controller, wheels, battery, pi)
 
@@ -364,7 +391,7 @@ class RobotDashboard(App):
 
         # Voltage display
         voltage = battery.get("pack_voltage")
-        voltage_str = f"{voltage:.1f}V" if voltage else "--.-V"
+        voltage_str = f"{voltage:.1f}V" if voltage is not None else "--.-V"
 
         # Build session timer
         session = fmt_duration(time.monotonic() - self.session_started)
@@ -385,6 +412,13 @@ class RobotDashboard(App):
         ]
         return Text.from_markup("\n".join(lines))
 
+    def _wheel_qpps(self, wheels: dict[str, Any], side: str) -> tuple[int | float | None, int | float | None, int | float | None]:
+        target = fix_wraparound(wheels.get(f"{side}_target_qpps"))
+        actual = fix_wraparound(wheels.get(f"{side}_actual_qpps"))
+        raw_error = fix_wraparound(wheels.get(f"{side}_error_qpps"))
+        error = target - actual if target is not None and actual is not None else raw_error
+        return target, actual, error
+
     def _drive_status(
         self,
         gamepad_status: str,
@@ -400,9 +434,9 @@ class RobotDashboard(App):
         controller_connected = controller.get("connected", False)
         wheels_read_ok = wheels.get("read_ok", False)
 
-        if gamepad_status != "live" or system_status != "live":
-            notes.append("telemetry stale")
-            return "caution", notes
+        if gamepad_status != "live":
+            notes.append("drive telemetry stale")
+            return "hold", notes
         if battery_status in {"critical", "unknown"}:
             notes.append(f"battery {battery_status}")
             return "hold", notes
@@ -410,6 +444,8 @@ class RobotDashboard(App):
             notes.append("controller offline")
             return "hold", notes
 
+        if system_status != "live":
+            notes.append("system telemetry stale")
         if battery_status == "low":
             notes.append("battery low")
         if throttled not in {None, "0x0", "0"}:
@@ -428,10 +464,10 @@ class RobotDashboard(App):
         throttle_glyph = GLYPH_OK if throttle_ok else GLYPH_WARN
 
         temp = pi.get("soc_temp_c")
-        temp_color = "green" if temp and temp < 70 else ("yellow" if temp and temp < 80 else "red")
+        temp_color = "green" if temp is not None and temp < 70 else ("yellow" if temp is not None and temp < 80 else "red")
 
         load = pi.get("load_1m")
-        load_bar = bar(load, limit=4.0, width=8) if load else "░" * 8
+        load_bar = bar(load, limit=4.0, width=8) if load is not None else "░" * 8
 
         mem_used = pi.get("memory_used_mb") or 0
         mem_total = pi.get("memory_total_mb") or 1
@@ -450,13 +486,13 @@ class RobotDashboard(App):
 
     def _render_battery(self, battery: dict[str, Any]):
         status = battery.get("status", "unknown")
-        status_glyph = GLYPH_OK if status == "ok" else (GLYPH_WARN if status == "low" else GLYPH_ERR)
+        status_glyph = GLYPH_OK if status == "ok" else (GLYPH_WARN if status in {"low", "stale"} else GLYPH_ERR)
 
         pack_v = battery.get("pack_voltage")
         cell_v = battery.get("cell_voltage")
 
         # Voltage bar (assuming 3S LiPo: 9.0V empty, 12.6V full)
-        v_bar = bar(pack_v - 9.0, limit=3.6, width=12) if pack_v else "░" * 12
+        v_bar = bar(pack_v - 9.0, limit=3.6, width=12, absolute=False) if pack_v is not None else "░" * 12
 
         # Sparkline for voltage history
         v_spark = sparkline(self.history["pack_voltage"], width=16)
@@ -526,15 +562,13 @@ class RobotDashboard(App):
         for side in ("left", "right"):
             label = "L" if side == "left" else "R"
             cmd = wheels.get(f"{side}_command")
-            target = fix_wraparound(wheels.get(f"{side}_target_qpps"))
-            actual = fix_wraparound(wheels.get(f"{side}_actual_qpps"))
-            error = fix_wraparound(wheels.get(f"{side}_error_qpps"))
+            target, actual, error = self._wheel_qpps(wheels, side)
             current = wheels.get(f"{side}_current_amps")
 
             # Error color
             error_style = "green"
-            if error and target:
-                ratio = abs(error) / max(abs(target), 1)
+            if error is not None:
+                ratio = abs(error) / max(abs(target or 0), 1)
                 if ratio > 0.25:
                     error_style = "red"
                 elif ratio > 0.10:
@@ -544,17 +578,16 @@ class RobotDashboard(App):
             cmd_bar = bipolar_bar(cmd, width=5)
 
             # Speed sparkline
-            speed_spark = sparkline(self.history[f"{side}_actual"], width=10)
+            speed_spark = sparkline(self.history[f"{side}_actual"], width=10, limit=self.max_abs_speed_qpps, absolute=True)
 
             # Current bar
-            current_bar = bar(current, limit=5.0, width=6) if current else "░" * 6
+            current_bar = bar(current, limit=5.0, width=6) if current is not None else "░" * 6
 
             lines.extend([
-                f"  [bold]{label}[/] cmd {cmd_bar} {fmt(cmd, digits=2):>6}   "
-                f"[dim]tgt[/] {fmt(target, digits=0):>7}  [dim]act[/] {fmt(actual, digits=0):>7}  "
-                f"[dim]err[/] [{error_style}]{fmt(error, digits=0):>6}[/]",
-                f"    [dim]speed[/] [cyan]{speed_spark}[/]   "
-                f"[dim]current[/] {current_bar} {fmt(current, 'A', 2):>6}",
+                f"  [bold]{label}[/] cmd {cmd_bar} {fmt(cmd, digits=2):>6}",
+                f"    [dim]tgt[/] {fmt(target, digits=0):>7}  [dim]act[/] {fmt(actual, digits=0):>7}  "
+                f"[dim]err[/] [{error_style}]{fmt(error, digits=0):>7}[/]",
+                f"    [dim]spd[/] [cyan]{speed_spark}[/]  [dim]cur[/] {current_bar} {fmt(current, 'A', 2):>6}",
                 "",
             ])
 

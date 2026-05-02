@@ -598,6 +598,7 @@ class RobotDashboard(App):
         read_text = "ENCODER OK" if read_ok else "READ FAIL"
 
         LABEL_W, COL_W, GW = 13, 13, 13
+        STACK_OFFSET = "  "
 
         def styled(value: str, style: str = "") -> str:
             return f"[{style}]{value}[/]" if style else value
@@ -622,13 +623,14 @@ class RobotDashboard(App):
                 right_cell = right_value.rjust(COL_W)
             return (
                 f"  [dim]{label:<{LABEL_W}}[/] "
-                f"{styled(left_cell, left_style)}   {styled(right_cell, right_style)}"
+                f"{STACK_OFFSET}{styled(left_cell, left_style)}   {styled(right_cell, right_style)}"
             )
 
         lines = [
             f"[bold cyan]{GLYPH_WHEEL} DRIVETRAIN[/]  [{read_color}]{read_glyph} {read_text}[/]",
             "",
             f"  {'':<{LABEL_W}} "
+            f"{STACK_OFFSET}"
             f"[bold cyan]{'L WHEEL':^{COL_W}}[/]   "
             f"[bold cyan]{'R WHEEL':^{COL_W}}[/]",
         ]

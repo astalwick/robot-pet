@@ -19,7 +19,6 @@ def main():
     log.info("starting")
     
     while True:
-        log.info("alive")
         time.sleep(5)
 
 

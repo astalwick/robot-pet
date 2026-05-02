@@ -13,22 +13,32 @@ from control.teleop import GamepadTeleopPolicy
 
 class GamepadTeleopPolicyTest(unittest.TestCase):
     def test_deadman_released_returns_zero_motion(self):
-        policy = GamepadTeleopPolicy(deadzone=0.15)
+        policy = GamepadTeleopPolicy(left_stick_deadzone=0.15, right_stick_deadzone=0.15)
         state = SimpleNamespace(left_stick_y=-1.0, right_stick_x=0.5, rb=False)
 
         self.assertEqual(policy.motion_from_state(state), MotionCommand(0.0, 0.0))
 
     def test_deadman_held_uses_speed_test_sign_conventions(self):
-        policy = GamepadTeleopPolicy(deadzone=0.15)
+        policy = GamepadTeleopPolicy(left_stick_deadzone=0.15, right_stick_deadzone=0.15)
         state = SimpleNamespace(left_stick_y=-0.75, right_stick_x=0.25, rb=True)
 
         self.assertEqual(policy.motion_from_state(state), MotionCommand(0.75, 0.25))
 
-    def test_deadzone_zeros_small_stick_noise(self):
-        policy = GamepadTeleopPolicy(deadzone=0.15)
-        state = SimpleNamespace(left_stick_y=-0.10, right_stick_x=0.14, rb=True)
+    def test_per_stick_deadzones_zero_small_stick_noise(self):
+        policy = GamepadTeleopPolicy(left_stick_deadzone=0.20, right_stick_deadzone=0.10)
+        state = SimpleNamespace(left_stick_y=-0.15, right_stick_x=0.09, rb=True)
 
         self.assertEqual(policy.motion_from_state(state), MotionCommand(0.0, 0.0))
+
+    def test_turn_scale_reduces_turn_command(self):
+        policy = GamepadTeleopPolicy(
+            left_stick_deadzone=0.15,
+            right_stick_deadzone=0.15,
+            turn_scale=0.5,
+        )
+        state = SimpleNamespace(left_stick_y=0.0, right_stick_x=0.8, rb=True)
+
+        self.assertEqual(policy.motion_from_state(state), MotionCommand(0.0, 0.4))
 
 
 class DifferentialDriveMixerTest(unittest.TestCase):

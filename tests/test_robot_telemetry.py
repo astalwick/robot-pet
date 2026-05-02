@@ -74,6 +74,7 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
             controller={"connected": True},
             wheels={"left_target_qpps": 100},
             motor_battery={"pack_voltage": 11.7, "cell_voltage": 3.9, "status": "ok"},
+            drive_tuning={"speed_scale": 0.25},
         )
 
         self.assertTrue(publish_message(self.publish_socket, message))
@@ -82,6 +83,7 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         writer.close()
         await writer.wait_closed()
         self.assertEqual(snapshot["wheels"]["left_target_qpps"], 100)
+        self.assertEqual(snapshot["drive_tuning"]["speed_scale"], 0.25)
         self.assertFalse(snapshot["sources"]["gamepad_teleop"]["stale"])
 
     async def test_source_is_marked_stale_after_timeout(self):

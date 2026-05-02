@@ -16,17 +16,19 @@ class ControllerStateLike(Protocol):
 class GamepadTeleopPolicy:
     """Convert normalized controller state into a Twist-like motion command."""
 
-    deadzone: float = 0.15
+    left_stick_deadzone: float = 0.15
+    right_stick_deadzone: float = 0.15
+    turn_scale: float = 1.0
 
     def motion_from_state(self, state: ControllerStateLike) -> MotionCommand:
         if not state.rb:
             return MotionCommand(0.0, 0.0)
 
-        forward = -self._apply_deadzone(state.left_stick_y)
-        turn = self._apply_deadzone(state.right_stick_x)
+        forward = -self._apply_deadzone(state.left_stick_y, self.left_stick_deadzone)
+        turn = self._apply_deadzone(state.right_stick_x, self.right_stick_deadzone) * self.turn_scale
         return MotionCommand(linear_x=forward, angular_z=turn)
 
-    def _apply_deadzone(self, value: float) -> float:
-        if abs(value) < self.deadzone:
+    def _apply_deadzone(self, value: float, deadzone: float) -> float:
+        if abs(value) < deadzone:
             return 0.0
         return value

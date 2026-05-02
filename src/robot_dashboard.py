@@ -12,6 +12,7 @@ import time
 from collections import deque
 from typing import Any
 
+from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, load_drive_tuning, save_drive_tuning
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -35,6 +36,14 @@ LOG_COMMAND = [
 ]
 
 HISTORY_LENGTH = 48
+TUNING_FIELDS = (
+    ("speed_scale", "normal speed", 0.05, "%"),
+    ("turbo_scale", "turbo speed", 0.05, "%"),
+    ("turn_scale", "turn scale", 0.05, "%"),
+    ("left_stick_deadzone", "left deadzone", 0.01, ""),
+    ("right_stick_deadzone", "right deadzone", 0.01, ""),
+    ("accel_limit", "accel slew", 0.25, "/s"),
+)
 
 # Block characters for gauges
 BAR_BLOCKS = " ▏▎▍▌▋▊▉█"
@@ -251,6 +260,11 @@ class RobotDashboard(App):
         border: heavy #0a5f5a;
     }
 
+    #tuning-panel {
+        height: auto;
+        border: heavy #5f4a0a;
+    }
+
     #logs {
         height: 1fr;
         border: heavy #1a2a3a;
@@ -260,11 +274,20 @@ class RobotDashboard(App):
 
     """
 
-    BINDINGS = [("q", "quit", "Quit"), ("r", "redeploy", "Redeploy")]
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("r", "redeploy", "Redeploy"),
+        ("up", "tuning_previous", "Tune up"),
+        ("down", "tuning_next", "Tune down"),
+        ("-", "tuning_decrease", "Tune -"),
+        ("=", "tuning_increase", "Tune +"),
+        ("a", "apply_tuning", "Apply tuning"),
+    ]
 
-    def __init__(self, socket_path: str):
+    def __init__(self, socket_path: str, teleop_config_path: str = DEFAULT_CONFIG_PATH):
         super().__init__()
         self.socket_path = socket_path
+        self.teleop_config_path = teleop_config_path
         self.last_snapshot: dict[str, Any] | None = None
         self.session_started = time.monotonic()
         self.history: dict[str, deque[float | None]] = {
@@ -280,6 +303,11 @@ class RobotDashboard(App):
         self.max_abs_speed_qpps = 1.0
         self.redeploy_armed_until = 0.0
         self.redeploy_running = False
+        self.drive_tuning = load_drive_tuning(teleop_config_path)
+        self.active_drive_tuning: DriveTuning | None = None
+        self.drive_tuning_dirty = False
+        self.tuning_index = 0
+        self.tuning_apply_running = False
 
     def compose(self) -> ComposeResult:
         yield Static(self._hud_waiting(), id="hud-header")
@@ -287,6 +315,7 @@ class RobotDashboard(App):
             with Vertical(id="left"):
                 yield Static("", id="pi-panel", classes="panel")
                 yield Static("", id="power-panel", classes="panel")
+                yield Static("", id="tuning-panel", classes="panel")
                 yield Static("", id="controller-panel", classes="panel")
             with Vertical(id="right"):
                 yield Static("", id="wheels-panel", classes="panel")
@@ -303,6 +332,7 @@ class RobotDashboard(App):
         self.title = "Robo-Pet Dashboard"
         self._render_pi_waiting()
         self._render_power_waiting()
+        self._render_tuning()
         self._render_controller_waiting()
         self._render_wheels_waiting()
         self._render_link_waiting()
@@ -319,6 +349,31 @@ class RobotDashboard(App):
         self.query_one("#power-panel", Static).update(
             Text.from_markup(f"[bold yellow]{GLYPH_POWER} POWER RAIL[/]  [dim]awaiting link[/]")
         )
+
+    def _render_tuning(self):
+        active_note = ""
+        if self.drive_tuning_dirty:
+            active_note = " [yellow]unsaved[/]"
+        elif self.tuning_apply_running:
+            active_note = " [yellow]applying[/]"
+        elif self.active_drive_tuning is not None and self.active_drive_tuning != self.drive_tuning:
+            active_note = " [yellow]pending restart[/]"
+
+        lines = [
+            f"[bold yellow]DRIVE TUNING[/]{active_note}",
+            "[dim]↑/↓ select  -/= adjust  a apply[/]",
+        ]
+        for index, (key, label, _step, suffix) in enumerate(TUNING_FIELDS):
+            value = getattr(self.drive_tuning, key)
+            active_value = getattr(self.active_drive_tuning, key) if self.active_drive_tuning is not None else value
+            cursor = ">" if index == self.tuning_index else " "
+            style = "bold white" if index == self.tuning_index else "cyan"
+            value_text = self._format_tuning_value(value, suffix)
+            if active_value != value:
+                value_text += f" [dim](active {self._format_tuning_value(active_value, suffix)})[/]"
+            lines.append(f"  [{style}]{cursor} {label:<15} {value_text:>6}[/]")
+
+        self.query_one("#tuning-panel", Static).update(Text.from_markup("\n".join(lines)))
 
     def _render_controller_waiting(self):
         self.query_one("#controller-panel", Static).update(
@@ -368,6 +423,65 @@ class RobotDashboard(App):
         logs.write("Starting redeploy...")
         threading.Thread(target=self._redeploy_thread, daemon=True).start()
 
+    def action_tuning_previous(self):
+        self.tuning_index = (self.tuning_index - 1) % len(TUNING_FIELDS)
+        self._render_tuning()
+
+    def action_tuning_next(self):
+        self.tuning_index = (self.tuning_index + 1) % len(TUNING_FIELDS)
+        self._render_tuning()
+
+    def action_tuning_decrease(self):
+        self._adjust_tuning(-1)
+
+    def action_tuning_increase(self):
+        self._adjust_tuning(1)
+
+    def action_apply_tuning(self):
+        logs = self.query_one("#logs", RichLog)
+        if self.tuning_apply_running:
+            logs.write("Drive tuning apply already running.")
+            return
+
+        self.tuning_apply_running = True
+        logs.write("Saving drive tuning and restarting gamepad-teleop...")
+        threading.Thread(target=self._apply_tuning_thread, daemon=True).start()
+
+    def _adjust_tuning(self, direction: int):
+        key, _label, step, _suffix = TUNING_FIELDS[self.tuning_index]
+        value = getattr(self.drive_tuning, key) + (direction * step)
+        values = self.drive_tuning.to_dict()
+        values[key] = value
+        self.drive_tuning = DriveTuning.from_dict(values)
+        self.drive_tuning_dirty = True
+        self._render_tuning()
+
+    def _apply_tuning_thread(self):
+        logs = self.query_one("#logs", RichLog)
+        try:
+            save_drive_tuning(self.drive_tuning, self.teleop_config_path)
+            self.drive_tuning_dirty = False
+            result = subprocess.run(
+                ["sudo", "systemctl", "restart", "gamepad-teleop.service"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            self.tuning_apply_running = False
+            self.call_from_thread(logs.write, f"Drive tuning apply failed: {exc}")
+            self.call_from_thread(self._render_tuning)
+            return
+
+        self.tuning_apply_running = False
+        if result.returncode == 0:
+            self.call_from_thread(logs.write, "Drive tuning saved. gamepad-teleop restarted.")
+        else:
+            output = (result.stderr or result.stdout).strip()
+            self.call_from_thread(logs.write, f"Drive tuning saved, but restart failed: {output}")
+        self.call_from_thread(self._render_tuning)
+
     def _redeploy_thread(self):
         logs = self.query_one("#logs", RichLog)
         script = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "redeploy-robot.sh"))
@@ -413,6 +527,11 @@ class RobotDashboard(App):
         wheels = snapshot.get("wheels") or {}
         battery = snapshot.get("motor_battery") or {}
         link_loop = snapshot.get("link_loop") or {}
+        drive_tuning = snapshot.get("drive_tuning")
+        if drive_tuning is not None:
+            self.active_drive_tuning = DriveTuning.from_dict(drive_tuning)
+            if not self.drive_tuning_dirty:
+                self.drive_tuning = self.active_drive_tuning
         if not gamepad_live:
             controller = {}
             wheels = {}
@@ -424,9 +543,17 @@ class RobotDashboard(App):
 
         self._render_pi(snapshot.get("pi") or {})
         self._render_battery(battery)
+        self._render_tuning()
         self._render_controller(controller)
         self._render_wheels(wheels)
         self._render_link_loop(link_loop)
+
+    def _format_tuning_value(self, value: float, suffix: str) -> str:
+        if suffix == "%":
+            return f"{value * 100:.0f}%"
+        if suffix == "/s":
+            return f"{value:.2f}/s"
+        return f"{value:.2f}"
 
     def _source_label(self, source: dict[str, Any]) -> str:
         return "stale" if source.get("stale", True) else "live"
@@ -860,12 +987,13 @@ class RobotDashboard(App):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot telemetry dashboard.")
     parser.add_argument("--socket", default=DEFAULT_SUBSCRIBE_SOCKET, help="Telemetry hub subscriber socket")
+    parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH, help="Gamepad teleop drive tuning config path")
     return parser
 
 
 def main():
     args = build_parser().parse_args()
-    RobotDashboard(args.socket).run()
+    RobotDashboard(args.socket, args.teleop_config).run()
 
 
 if __name__ == "__main__":

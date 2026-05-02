@@ -137,6 +137,7 @@ def gamepad_teleop_update(
     motor_battery: dict[str, Any],
     now: float | None = None,
     link_loop: dict[str, Any] | None = None,
+    drive_tuning: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "source_update",
@@ -146,4 +147,5 @@ def gamepad_teleop_update(
         "wheels": wheels,
         "motor_battery": motor_battery,
         "link_loop": link_loop,
+        "drive_tuning": drive_tuning,
     }

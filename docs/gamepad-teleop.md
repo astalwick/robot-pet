@@ -39,7 +39,7 @@ sudo systemctl status gamepad-teleop
 journalctl -u gamepad-teleop -f
 ```
 
-The service publishes read-only dashboard telemetry to `robot-telemetry.service` at 5 Hz. Telemetry is best-effort; if the hub is stopped or restarting, driving continues.
+The service publishes dashboard telemetry to `robot-telemetry.service` at 5 Hz, including the active drive tuning. Telemetry is best-effort; if the hub is stopped or restarting, driving continues.
 
 Restart it after changing code:
 
@@ -60,6 +60,7 @@ PYTHONPATH=src python src/gamepad_teleop.py --speed-scale 0.15
 
 Useful flags:
 
+- `--config /home/pi/.config/robot-pet/teleop.json`
 - `--device /dev/input/eventX`
 - `--port /dev/serial0`
 - `--address 0x80`
@@ -67,7 +68,12 @@ Useful flags:
 - `--qpps 2425`
 - `--speed-scale 0.25`
 - `--turbo-scale 0.75`
-- `--deadzone 0.15`
+- `--turn-scale 1.0`
+- `--left-stick-deadzone 0.15`
+- `--right-stick-deadzone 0.15`
+- `--accel-limit 2.0`
+
+Drive tuning defaults are loaded from `/home/pi/.config/robot-pet/teleop.json` when present. The dashboard writes this file and restarts `gamepad-teleop.service` to apply changes.
 
 ## Controls
 

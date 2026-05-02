@@ -7,6 +7,7 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from config.teleop import DriveTuning
 from gamepad_teleop import GamepadTeleopRunner, TeleopConfig
 
 logging.getLogger("gamepad-teleop").disabled = True
@@ -56,6 +57,10 @@ def controller_state(**overrides):
     return state
 
 
+def fast_config(**overrides):
+    return TeleopConfig(qpps=1000, drive_tuning=DriveTuning(accel_limit=1000.0), **overrides)
+
+
 class FakeMotor:
     def __init__(self, fail_nonzero=False, results=None, read_fails=False):
         self.fail_nonzero = fail_nonzero
@@ -95,6 +100,15 @@ class FakeMotor:
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
+    def test_slew_limits_motion_command_changes(self):
+        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000, loop_interval=0.05), sleep=lambda _seconds: None)
+
+        first = runner._slew_command(SimpleNamespace(linear_x=1.0, angular_z=0.0), now=1.0)
+        second = runner._slew_command(SimpleNamespace(linear_x=1.0, angular_z=0.0), now=1.05)
+
+        self.assertAlmostEqual(first.linear_x, 0.1)
+        self.assertAlmostEqual(second.linear_x, 0.2)
+
     def test_deadman_release_sends_zero_speed(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
         controller = FakeController(state)
@@ -109,7 +123,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             else:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
 
         runner._run_connected(controller, motor)
 
@@ -124,7 +138,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         def sleep(_seconds):
             controller.on_disconnect()
 
-        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
 
         runner._run_connected(controller, motor)
 
@@ -134,7 +148,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
         controller = FakeController(state)
         motor = FakeMotor(fail_nonzero=True)
-        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000), sleep=lambda _seconds: None)
+        runner = GamepadTeleopRunner(fast_config(), sleep=lambda _seconds: None)
 
         runner._run_connected(controller, motor)
 
@@ -152,7 +166,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             if sleeps == 2:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
 
         runner._run_connected(controller, motor)
 
@@ -179,7 +193,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000, idle_release_delay=0.2),
+            fast_config(idle_release_delay=0.2),
             sleep=sleep,
             clock=clock,
         )
@@ -202,7 +216,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000),
+            fast_config(),
             controller_factory=lambda: controller,
             motor_factory=lambda: next(motors),
             sleep=sleep,
@@ -226,7 +240,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000),
+            fast_config(),
             controller_factory=lambda: next(controllers),
             motor_factory=lambda: motor,
             sleep=sleep,
@@ -254,7 +268,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000, telemetry_socket="/tmp/test.sock"),
+            fast_config(telemetry_socket="/tmp/test.sock"),
             sleep=sleep,
             clock=clock,
             telemetry_publisher=lambda socket_path, message: published.append((socket_path, message)) or True,
@@ -273,6 +287,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertEqual(message["link_loop"]["consecutive_read_failures"], 0)
         self.assertIsNotNone(message["link_loop"]["telemetry_latency_ms"])
         self.assertIsNotNone(message["link_loop"]["command_loop_hz"])
+        self.assertEqual(message["drive_tuning"]["speed_scale"], 0.25)
 
     def test_optional_telemetry_read_failure_does_not_stop_driving(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
@@ -291,7 +306,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000),
+            fast_config(),
             sleep=sleep,
             clock=clock,
             telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
@@ -327,7 +342,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             raise RuntimeError("hub unavailable")
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000),
+            fast_config(),
             sleep=sleep,
             clock=clock,
             telemetry_publisher=publish,

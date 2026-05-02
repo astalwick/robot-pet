@@ -1,6 +1,6 @@
 # TUI Dashboard
 
-The robot dashboard is a read-only SSH tool. It connects to `robot-telemetry.service`, shows current robot state, and tails service logs. It does not send commands or manage services.
+The robot dashboard is an SSH tool for robot status, service logs, redeploys, and drive tuning. It connects to `robot-telemetry.service`, shows current robot state, tails service logs, and can restart `gamepad-teleop.service` after saving tuning changes.
 
 ## Start The Dashboard
 
@@ -18,9 +18,22 @@ The dashboard expects `robot-telemetry.service` to be running and listening on `
 
 - Pi health: uptime, 1-minute load, memory, disk, SoC temperature, throttling flags, and Pi power-bank charge status.
 - Motor battery: RoboClaw main battery voltage, estimated 3S per-cell voltage, and status.
+- Drive tuning: normal speed, turbo speed, turn scale, per-stick deadzones, and acceleration slew.
 - Controller: Xbox 360 connectivity, sticks, triggers, D-pad, and pressed buttons.
 - Wheels: normalized left/right command, target QPPS, actual encoder QPPS, error, current, and read status.
 - Logs: `journalctl -u robot-telemetry -u gamepad-teleop -u robot-brain -f -n 100`.
+
+## Drive Tuning
+
+Drive tuning is stored at `/home/pi/.config/robot-pet/teleop.json`. The dashboard edits the desired values locally, then writes the file and restarts `gamepad-teleop.service` when you press `a`.
+
+Keys:
+
+- `↑` / `↓`: select a tuning row.
+- `-` / `=`: decrease or increase the selected value.
+- `a`: save tuning and restart `gamepad-teleop.service`.
+
+The active values are also published by `gamepad-teleop.service` in telemetry, so the dashboard can show when displayed values differ from the running service.
 
 ## Battery Status
 

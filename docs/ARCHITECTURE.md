@@ -22,6 +22,7 @@ src/
 │   ├── __init__.py
 │   ├── motor.py          # MotorDriver class
 │   └── controller.py     # ControllerDriver class
+├── config/               # Small persistent runtime config helpers
 ├── lib/                  # Shared utilities
 │   └── log.py            # Logging setup (journald-friendly)
 ├── telemetry/            # Local JSON/socket telemetry helpers
@@ -108,7 +109,7 @@ src/
 | `robot-motion` | Autonomous motor control | Not yet created |
 | `robot-sensors` | Sensor reading | Not yet created |
 
-`robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility, and the dashboard is an observe-only client. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
+`robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/teleop.json` and restart `gamepad-teleop.service`; it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 
 ## Logging
 

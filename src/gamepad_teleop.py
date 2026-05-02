@@ -7,9 +7,11 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, load_drive_tuning
+from control.commands import MotionCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
@@ -35,9 +37,7 @@ class TeleopConfig:
     address: int = 0x80
     baud: int = 38400
     qpps: int = 2425
-    speed_scale: float = 0.25
-    turbo_scale: float = 0.75
-    deadzone: float = 0.15
+    drive_tuning: DriveTuning = field(default_factory=DriveTuning)
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     telemetry_interval: float = 0.2
@@ -62,12 +62,19 @@ class GamepadTeleopRunner:
         self.clock = clock
         self.telemetry_publisher = telemetry_publisher
         self.stop_requested = False
-        self.policy = GamepadTeleopPolicy(deadzone=config.deadzone)
+        self.policy = GamepadTeleopPolicy(
+            left_stick_deadzone=config.drive_tuning.left_stick_deadzone,
+            right_stick_deadzone=config.drive_tuning.right_stick_deadzone,
+            turn_scale=config.drive_tuning.turn_scale,
+        )
         self.mixer = DifferentialDriveMixer(
             qpps=config.qpps,
-            speed_scale=config.speed_scale,
-            turbo_scale=config.turbo_scale,
+            speed_scale=config.drive_tuning.speed_scale,
+            turbo_scale=config.drive_tuning.turbo_scale,
         )
+        self.last_command = MotionCommand(0.0, 0.0)
+        self.last_command_at: float | None = None
+        self.command_active = False
         self.read_results: deque[bool] = deque(maxlen=50)
         self.consecutive_read_failures = 0
         self.last_good_read_at: float | None = None
@@ -134,6 +141,12 @@ class GamepadTeleopRunner:
             now = self.clock()
             self.loop_samples.append(now)
             command = self.policy.motion_from_state(controller.state)
+            if controller.state.rb:
+                command = self._slew_command(command, now)
+            else:
+                self.last_command = MotionCommand(0.0, 0.0)
+                self.last_command_at = now
+                self.command_active = False
             wheels = self.mixer.mix(command)
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
@@ -171,6 +184,29 @@ class GamepadTeleopRunner:
         self._safe_zero_speed(motor)
         if disconnected.is_set():
             log.warning("controller disconnected; waiting for reconnect")
+
+    def _slew_command(self, command: MotionCommand, now: float) -> MotionCommand:
+        if not self.command_active:
+            self.command_active = True
+            self.last_command = MotionCommand(0.0, 0.0)
+            self.last_command_at = now - self.config.loop_interval
+
+        elapsed = max(0.0, now - self.last_command_at)
+        max_delta = self.config.drive_tuning.accel_limit * elapsed
+        command = MotionCommand(
+            linear_x=self._move_toward(self.last_command.linear_x, command.linear_x, max_delta),
+            angular_z=self._move_toward(self.last_command.angular_z, command.angular_z, max_delta),
+        )
+        self.last_command = command
+        self.last_command_at = now
+        return command
+
+    def _move_toward(self, current: float, target: float, max_delta: float) -> float:
+        if abs(target - current) <= max_delta:
+            return target
+        if target > current:
+            return current + max_delta
+        return current - max_delta
 
     def _safe_zero_speed(self, motor):
         motor.set_wheel_speeds(0, 0)
@@ -224,6 +260,7 @@ class GamepadTeleopRunner:
                 telemetry_latency_ms=telemetry_latency_ms,
                 command_loop_hz=self._command_loop_hz(),
             ),
+            drive_tuning=self.config.drive_tuning.to_dict(),
         )
         try:
             self.telemetry_publisher(self.config.telemetry_socket, message)
@@ -264,14 +301,18 @@ class GamepadTeleopRunner:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Boot-ready gamepad teleop service.")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Drive tuning JSON config path")
     parser.add_argument("--device", help="Read a specific /dev/input/event* controller device")
     parser.add_argument("--port", default="/dev/serial0", help="RoboClaw serial port")
     parser.add_argument("--address", type=parse_address, default=0x80, help="RoboClaw packet serial address")
     parser.add_argument("--baud", type=int, default=38400, help="RoboClaw serial baud rate")
     parser.add_argument("--qpps", type=int, default=2425, help="Configured RoboClaw max speed in encoder counts/sec")
-    parser.add_argument("--speed-scale", type=float, default=0.25, help="Normal-mode fraction of --qpps")
-    parser.add_argument("--turbo-scale", type=float, default=0.75, help="Turbo-mode fraction of --qpps while LB is held")
-    parser.add_argument("--deadzone", type=float, default=0.15, help="Stick deadzone from 0.0 to 1.0")
+    parser.add_argument("--speed-scale", type=float, help="Normal-mode fraction of --qpps")
+    parser.add_argument("--turbo-scale", type=float, help="Turbo-mode fraction of --qpps while LB is held")
+    parser.add_argument("--turn-scale", type=float, help="Turn command multiplier")
+    parser.add_argument("--left-stick-deadzone", type=float, help="Left stick deadzone from 0.0 to 1.0")
+    parser.add_argument("--right-stick-deadzone", type=float, help="Right stick deadzone from 0.0 to 1.0")
+    parser.add_argument("--accel-limit", type=float, help="Motion command slew limit in normalized units/sec")
     parser.add_argument("--loop-interval", type=float, default=0.05, help="Main control loop interval in seconds")
     parser.add_argument("--retry-interval", type=float, default=1.0, help="Hardware reconnect retry interval in seconds")
     parser.add_argument("--telemetry-interval", type=float, default=0.2, help="Telemetry publish interval in seconds")
@@ -282,15 +323,27 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_parser().parse_args()
+    tuning_values = load_drive_tuning(args.config).to_dict()
+    for key in (
+        "speed_scale",
+        "turbo_scale",
+        "turn_scale",
+        "left_stick_deadzone",
+        "right_stick_deadzone",
+        "accel_limit",
+    ):
+        value = getattr(args, key)
+        if value is not None:
+            tuning_values[key] = value
+    drive_tuning = DriveTuning.from_dict(tuning_values)
+
     config = TeleopConfig(
         device=args.device,
         port=args.port,
         address=args.address,
         baud=args.baud,
         qpps=args.qpps,
-        speed_scale=args.speed_scale,
-        turbo_scale=args.turbo_scale,
-        deadzone=args.deadzone,
+        drive_tuning=drive_tuning,
         loop_interval=args.loop_interval,
         retry_interval=args.retry_interval,
         telemetry_interval=args.telemetry_interval,

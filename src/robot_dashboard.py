@@ -727,12 +727,14 @@ class RobotDashboard(App):
         success_bar = bar(success_rate, limit=1.0, width=10, absolute=False) if success_rate is not None else " " * 10
 
         failures = link_loop.get("consecutive_read_failures")
-        failure_text = f"{failures} streak" if failures is not None else "--"
-        failure_bar = bar(failures, limit=10, width=10, absolute=False) if failures is not None else " " * 10
+        failure_text = "none" if failures == 0 else (f"{failures} streak" if failures is not None else "--")
+        failure_bar = bar(failures, limit=10, width=10, absolute=False) if failures else " " * 10
 
         latency = link_loop.get("telemetry_latency_ms")
-        latency_text = f"{latency:.0f}ms" if latency is not None else "--"
-        latency_bar = bar(latency, limit=100.0, width=10, absolute=False) if latency is not None else " " * 10
+        latency_text = f"{latency:.0f}ms ok" if latency is not None and latency <= 100 else (
+            f"{latency:.0f}ms" if latency is not None else "--"
+        )
+        latency_bar = bar(100.0 - latency, limit=100.0, width=10, absolute=False) if latency is not None else " " * 10
 
         loop_hz = link_loop.get("command_loop_hz")
         loop_text = f"{loop_hz:.1f} Hz" if loop_hz is not None else "--"
@@ -764,7 +766,7 @@ class RobotDashboard(App):
                 value_w=VW,
                 value_style=status_color,
             ),
-            self._row("telemetry", latency_bar, latency_text, gauge_w=GW, value_w=VW),
+            self._row("latency", latency_bar, latency_text, gauge_w=GW, value_w=VW),
             self._row("drive loop", loop_bar, loop_text, gauge_w=GW, value_w=VW),
         ]
         self.query_one("#link-panel", Static).update(Text.from_markup("\n".join(lines)))

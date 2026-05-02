@@ -43,7 +43,7 @@ TUNING_FIELDS = (
     ("turn_scale", "Turn scale", "1.0 = full turn"),
     ("left_stick_deadzone", "Left stick deadzone", "0.15"),
     ("right_stick_deadzone", "Right stick deadzone", "0.15"),
-    ("accel_limit", "Accel slew", "normalized units/sec"),
+    ("qpps_slew_limit", "QPPS slew", "encoder counts/sec/sec"),
 )
 
 # Block characters for gauges
@@ -862,6 +862,7 @@ class RobotDashboard(App):
             cmd = wheels.get(f"{side}_command")
             target, actual, error = self._wheel_qpps(wheels, side)
             current = wheels.get(f"{side}_current_amps")
+            max_qpps = fix_wraparound(wheels.get(f"{side}_max_qpps"))
 
             track_style = "green"
             if error is not None:
@@ -875,6 +876,7 @@ class RobotDashboard(App):
                 "cmd": bipolar_bar(cmd, width=6),
                 "target": fmt(target, digits=0),
                 "actual": fmt(actual, digits=0),
+                "max": fmt(max_qpps, digits=0),
                 "error": fmt(error, digits=0),
                 "current": fmt(current, "A", 2),
                 "load": bar(current, limit=5.0, width=GW) if current is not None else " " * GW,
@@ -885,6 +887,7 @@ class RobotDashboard(App):
             wheel_row("cmd", wheel_data["left"]["cmd"], wheel_data["right"]["cmd"], align="^"),
             wheel_row("target", wheel_data["left"]["target"], wheel_data["right"]["target"]),
             wheel_row("actual", wheel_data["left"]["actual"], wheel_data["right"]["actual"]),
+            wheel_row("max qpps", wheel_data["left"]["max"], wheel_data["right"]["max"]),
             wheel_row(
                 "error",
                 wheel_data["left"]["error"],

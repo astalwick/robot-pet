@@ -58,7 +58,7 @@ def controller_state(**overrides):
 
 
 def fast_config(**overrides):
-    return TeleopConfig(qpps=1000, drive_tuning=DriveTuning(accel_limit=1000.0), **overrides)
+    return TeleopConfig(qpps=1000, drive_tuning=DriveTuning(qpps_slew_limit=1000000.0), **overrides)
 
 
 class FakeMotor:
@@ -92,6 +92,11 @@ class FakeMotor:
             raise RuntimeError("current failed")
         return 1.2, 1.1
 
+    def read_max_qpps(self):
+        if self.read_fails:
+            raise RuntimeError("max qpps failed")
+        return 11180, 11190
+
     def stop(self):
         self.commands.append(("duty", 0, 0))
 
@@ -100,14 +105,43 @@ class FakeMotor:
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
-    def test_slew_limits_motion_command_changes(self):
+    def test_slew_limits_wheel_target_changes(self):
         runner = GamepadTeleopRunner(TeleopConfig(qpps=1000, loop_interval=0.05), sleep=lambda _seconds: None)
 
-        first = runner._slew_command(SimpleNamespace(linear_x=1.0, angular_z=0.0), now=1.0)
-        second = runner._slew_command(SimpleNamespace(linear_x=1.0, angular_z=0.0), now=1.05)
+        first = runner._slew_target(SimpleNamespace(left_qpps=1000, right_qpps=1000), now=1.0)
+        second = runner._slew_target(SimpleNamespace(left_qpps=1000, right_qpps=1000), now=1.05)
 
-        self.assertAlmostEqual(first.linear_x, 0.1)
-        self.assertAlmostEqual(second.linear_x, 0.2)
+        self.assertEqual(first.left_qpps, 250)
+        self.assertEqual(second.left_qpps, 500)
+
+    def test_slew_smooths_normal_to_turbo_transition(self):
+        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
+        controller = FakeController(state)
+        motor = FakeMotor()
+        current_time = 0.0
+        sleeps = 0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time, sleeps
+            sleeps += 1
+            current_time += 0.05
+            if sleeps == 1:
+                state.lb = True
+            elif sleeps == 3:
+                runner.request_stop()
+
+        runner = GamepadTeleopRunner(
+            TeleopConfig(qpps=1000, drive_tuning=DriveTuning(qpps_slew_limit=5000.0)),
+            sleep=sleep,
+            clock=clock,
+        )
+
+        runner._run_connected(controller, motor)
+
+        self.assertEqual(motor.commands[:3], [(250, 250), (500, 500), (750, 750)])
 
     def test_deadman_release_sends_zero_speed(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
@@ -281,6 +315,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertTrue(message["controller"]["buttons"]["a"])
         self.assertEqual(message["wheels"]["left_target_qpps"], 250)
         self.assertEqual(message["wheels"]["left_actual_qpps"], 230)
+        self.assertEqual(message["wheels"]["left_max_qpps"], 11180)
         self.assertEqual(message["wheels"]["left_current_amps"], 1.2)
         self.assertEqual(message["motor_battery"]["pack_voltage"], 11.7)
         self.assertEqual(message["link_loop"]["read_success_rate"], 1.0)

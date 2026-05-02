@@ -24,7 +24,7 @@ class DriveTuning:
     turn_scale: float = 1.0
     left_stick_deadzone: float = 0.15
     right_stick_deadzone: float = 0.15
-    accel_limit: float = 2.0
+    qpps_slew_limit: float = 5000.0
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "DriveTuning":
@@ -43,7 +43,7 @@ class DriveTuning:
                 0.0,
                 1.0,
             ),
-            accel_limit=clamp(float(values.get("accel_limit", defaults.accel_limit)), 0.1, 10.0),
+            qpps_slew_limit=clamp(float(values.get("qpps_slew_limit", defaults.qpps_slew_limit)), 100.0, 50000.0),
         )
 
     def to_dict(self) -> dict[str, float]:

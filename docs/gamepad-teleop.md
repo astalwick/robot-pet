@@ -71,7 +71,7 @@ Useful flags:
 - `--turn-scale 1.0`
 - `--left-stick-deadzone 0.15`
 - `--right-stick-deadzone 0.15`
-- `--accel-limit 2.0`
+- `--qpps-slew-limit 5000`
 
 Drive tuning defaults are loaded from `/home/pi/.config/robot-pet/teleop.json` when present. The dashboard writes this file and restarts `gamepad-teleop.service` to apply changes.
 

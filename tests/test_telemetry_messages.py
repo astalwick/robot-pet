@@ -74,10 +74,11 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["right_trigger"], 0.6)
 
     def test_wheel_message_calculates_errors(self):
-        message = wheel_message(0.4, 0.2, 100, 50, 90, 55, 1.2, 1.1)
+        message = wheel_message(0.4, 0.2, 100, 50, 90, 55, 1000, 1000, 1.2, 1.1)
 
         self.assertEqual(message["left_error_qpps"], 10)
         self.assertEqual(message["right_error_qpps"], -5)
+        self.assertEqual(message["left_max_qpps"], 1000)
 
     def test_link_loop_message_includes_health_metrics(self):
         message = link_loop_message(0.8, 2, 0.4, 8.5, 20.0)

@@ -113,6 +113,14 @@ class MotorDriver:
         left_qpps = left[1] if left[0] else None
         right_qpps = right[1] if right[0] else None
         return left_qpps, right_qpps
+
+    def read_max_qpps(self) -> tuple[int | None, int | None]:
+        """Read configured velocity PID max speeds in encoder counts per second."""
+        left = self.controller.ReadM1VelocityPID(self.address)
+        right = self.controller.ReadM2VelocityPID(self.address)
+        left_qpps = left[4] if left[0] else None
+        right_qpps = right[4] if right[0] else None
+        return left_qpps, right_qpps
     
     def stop(self):
         """Immediately stop both motors."""

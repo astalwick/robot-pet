@@ -19,12 +19,12 @@ The dashboard expects `robot-telemetry.service` to be running and listening on `
 - Pi health: uptime, 1-minute load, memory, disk, SoC temperature, throttling flags, and Pi power-bank charge status.
 - Motor battery: RoboClaw main battery voltage, estimated 3S per-cell voltage, and status.
 - Controller: Xbox 360 connectivity, sticks, triggers, D-pad, and pressed buttons.
-- Wheels: normalized left/right command, target QPPS, actual encoder QPPS, error, current, and read status.
+- Wheels: normalized left/right command, target QPPS, actual encoder QPPS, configured max QPPS, error, current, and read status.
 - Logs: `journalctl -u robot-telemetry -u gamepad-teleop -u robot-brain -f -n 100`.
 
 ## Drive Tuning
 
-Drive tuning is stored at `/home/pi/.config/robot-pet/teleop.json`. Press `c` to open the config dialog for normal speed, turbo speed, turn scale, per-stick deadzones, and acceleration slew.
+Drive tuning is stored at `/home/pi/.config/robot-pet/teleop.json`. Press `c` to open the config dialog for normal speed, turbo speed, turn scale, per-stick deadzones, and QPPS slew.
 
 Keys:
 

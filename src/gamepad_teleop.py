@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, load_drive_tuning
-from control.commands import MotionCommand
+from control.commands import WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
@@ -72,9 +72,9 @@ class GamepadTeleopRunner:
             speed_scale=config.drive_tuning.speed_scale,
             turbo_scale=config.drive_tuning.turbo_scale,
         )
-        self.last_command = MotionCommand(0.0, 0.0)
-        self.last_command_at: float | None = None
-        self.command_active = False
+        self.last_target = WheelSpeedCommand(0, 0)
+        self.last_target_at: float | None = None
+        self.target_active = False
         self.read_results: deque[bool] = deque(maxlen=50)
         self.consecutive_read_failures = 0
         self.last_good_read_at: float | None = None
@@ -136,19 +136,19 @@ class GamepadTeleopRunner:
         closed_loop_active = False
         idle_started_at = self.clock()
         idle_released = False
+        motor_max_qpps = self._read_motor_max_qpps(motor)
+        self._reset_slew()
 
         while not self.stop_requested and not disconnected.is_set():
             now = self.clock()
             self.loop_samples.append(now)
             command = self.policy.motion_from_state(controller.state)
-            if controller.state.rb:
-                command = self._slew_command(command, now)
-            else:
-                self.last_command = MotionCommand(0.0, 0.0)
-                self.last_command_at = now
-                self.command_active = False
             wheels = self.mixer.mix(command)
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
+            if controller.state.rb:
+                target = self._slew_target(target, now)
+            else:
+                self._reset_slew()
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
 
             if target_is_zero:
@@ -173,7 +173,7 @@ class GamepadTeleopRunner:
 
             if now >= next_telemetry:
                 telemetry_started = self.clock()
-                self._publish_telemetry(controller.state, wheels, target, motor)
+                self._publish_telemetry(controller.state, wheels, target, motor, motor_max_qpps)
                 telemetry_elapsed = self.clock() - telemetry_started
                 if telemetry_elapsed > SLOW_TELEMETRY_WARNING_SECONDS:
                     log.warning("telemetry update took %.3fs", telemetry_elapsed)
@@ -182,24 +182,37 @@ class GamepadTeleopRunner:
             self.sleep(self.config.loop_interval)
 
         self._safe_zero_speed(motor)
+        self._reset_slew()
         if disconnected.is_set():
             log.warning("controller disconnected; waiting for reconnect")
 
-    def _slew_command(self, command: MotionCommand, now: float) -> MotionCommand:
-        if not self.command_active:
-            self.command_active = True
-            self.last_command = MotionCommand(0.0, 0.0)
-            self.last_command_at = now - self.config.loop_interval
+    def _reset_slew(self):
+        self.last_target = WheelSpeedCommand(0, 0)
+        self.last_target_at = None
+        self.target_active = False
 
-        elapsed = max(0.0, now - self.last_command_at)
-        max_delta = self.config.drive_tuning.accel_limit * elapsed
-        command = MotionCommand(
-            linear_x=self._move_toward(self.last_command.linear_x, command.linear_x, max_delta),
-            angular_z=self._move_toward(self.last_command.angular_z, command.angular_z, max_delta),
+    def _read_motor_max_qpps(self, motor) -> tuple[int | None, int | None]:
+        try:
+            return motor.read_max_qpps()
+        except Exception as exc:
+            log.warning("RoboClaw max QPPS read failed: %s", exc)
+            return None, None
+
+    def _slew_target(self, target: WheelSpeedCommand, now: float) -> WheelSpeedCommand:
+        if not self.target_active:
+            self.target_active = True
+            self.last_target = WheelSpeedCommand(0, 0)
+            self.last_target_at = now - self.config.loop_interval
+
+        elapsed = max(0.0, now - self.last_target_at)
+        max_delta = self.config.drive_tuning.qpps_slew_limit * elapsed
+        target = WheelSpeedCommand(
+            left_qpps=int(self._move_toward(self.last_target.left_qpps, target.left_qpps, max_delta)),
+            right_qpps=int(self._move_toward(self.last_target.right_qpps, target.right_qpps, max_delta)),
         )
-        self.last_command = command
-        self.last_command_at = now
-        return command
+        self.last_target = target
+        self.last_target_at = now
+        return target
 
     def _move_toward(self, current: float, target: float, max_delta: float) -> float:
         if abs(target - current) <= max_delta:
@@ -214,7 +227,7 @@ class GamepadTeleopRunner:
     def _release_idle(self, motor):
         motor.stop()
 
-    def _publish_telemetry(self, state, wheels, target, motor):
+    def _publish_telemetry(self, state, wheels, target, motor, motor_max_qpps):
         now = self.clock()
         left_actual = None
         right_actual = None
@@ -246,6 +259,8 @@ class GamepadTeleopRunner:
                 right_target_qpps=target.right_qpps,
                 left_actual_qpps=left_actual,
                 right_actual_qpps=right_actual,
+                left_max_qpps=motor_max_qpps[0],
+                right_max_qpps=motor_max_qpps[1],
                 left_current_amps=left_current,
                 right_current_amps=right_current,
                 read_ok=read_ok,
@@ -312,7 +327,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turn-scale", type=float, help="Turn command multiplier")
     parser.add_argument("--left-stick-deadzone", type=float, help="Left stick deadzone from 0.0 to 1.0")
     parser.add_argument("--right-stick-deadzone", type=float, help="Right stick deadzone from 0.0 to 1.0")
-    parser.add_argument("--accel-limit", type=float, help="Motion command slew limit in normalized units/sec")
+    parser.add_argument("--qpps-slew-limit", type=float, help="Wheel target slew limit in QPPS/sec")
     parser.add_argument("--loop-interval", type=float, default=0.05, help="Main control loop interval in seconds")
     parser.add_argument("--retry-interval", type=float, default=1.0, help="Hardware reconnect retry interval in seconds")
     parser.add_argument("--telemetry-interval", type=float, default=0.2, help="Telemetry publish interval in seconds")
@@ -330,7 +345,7 @@ def main():
         "turn_scale",
         "left_stick_deadzone",
         "right_stick_deadzone",
-        "accel_limit",
+        "qpps_slew_limit",
     ):
         value = getattr(args, key)
         if value is not None:

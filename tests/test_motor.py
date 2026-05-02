@@ -42,6 +42,14 @@ class FakeRoboClaw:
         self.calls.append(("ReadSpeedM2", address))
         return True, -456
 
+    def ReadM1VelocityPID(self, address):
+        self.calls.append(("ReadM1VelocityPID", address))
+        return True, 1.0, 0.5, 0.25, 11180
+
+    def ReadM2VelocityPID(self, address):
+        self.calls.append(("ReadM2VelocityPID", address))
+        return True, 1.0, 0.5, 0.25, 11190
+
 
 class PacketTimeoutError(Exception):
     pass
@@ -72,6 +80,12 @@ class MotorDriverTest(unittest.TestCase):
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertEqual(driver.read_wheel_speeds(), (123, -456))
+
+    def test_read_max_qpps_reads_velocity_pid_caps(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.read_max_qpps(), (11180, 11190))
 
     def test_stop_preserves_existing_zero_duty_behavior(self):
         fake = FakeRoboClaw("/dev/fake", 38400)

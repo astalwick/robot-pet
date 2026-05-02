@@ -35,7 +35,7 @@ class DriveTuningConfigTest(unittest.TestCase):
                 "turn_scale": 1.5,
                 "left_stick_deadzone": -0.2,
                 "right_stick_deadzone": 2.0,
-                "accel_limit": 0.0,
+                "qpps_slew_limit": 0.0,
             }
         )
 
@@ -44,7 +44,7 @@ class DriveTuningConfigTest(unittest.TestCase):
         self.assertEqual(tuning.turn_scale, 1.0)
         self.assertEqual(tuning.left_stick_deadzone, 0.0)
         self.assertEqual(tuning.right_stick_deadzone, 1.0)
-        self.assertEqual(tuning.accel_limit, 0.1)
+        self.assertEqual(tuning.qpps_slew_limit, 100.0)
 
 
 if __name__ == "__main__":

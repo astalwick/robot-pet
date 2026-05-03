@@ -130,12 +130,14 @@ BASH_LOGIN
 echo "[8/11] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
+INSTALL_PATH="$(command -v install)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
+$USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
 SUDOERS
 sudo visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy
@@ -151,11 +153,13 @@ fi
 echo "[10/11] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
-pip install numpy pyserial gpiozero evdev basicmicro textual rich
+python -m pip install -e "$REPO_DIR"
 
 # Install and enable systemd services
 echo "[11/11] Installing systemd services..."
-sudo cp "$REPO_DIR/systemd/"*.service /etc/systemd/system/
+for service_file in "$REPO_DIR/systemd/"*.service; do
+  sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
+done
 sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service
 sudo systemctl enable robot-telemetry.service

@@ -426,17 +426,19 @@ class RobotDashboard(App):
             self.call_from_thread(self.apply_snapshot, message)
 
     def _logs_thread(self):
-        logs = self.query_one("#logs", RichLog)
         try:
             process = subprocess.Popen(LOG_COMMAND, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         except OSError as exc:
-            self.call_from_thread(logs.write, f"journalctl unavailable: {exc}")
+            self.call_from_thread(self._write_log, f"journalctl unavailable: {exc}")
             return
 
         if process.stdout is None:
             return
         for line in process.stdout:
-            self.call_from_thread(logs.write, line.rstrip())
+            self.call_from_thread(self._write_log, line.rstrip())
+
+    def _write_log(self, message: str):
+        self.query_one("#logs", RichLog).write(message)
 
     def action_redeploy(self):
         logs = self.query_one("#logs", RichLog)
@@ -475,7 +477,6 @@ class RobotDashboard(App):
         threading.Thread(target=self._apply_tuning_thread, daemon=True).start()
 
     def _apply_tuning_thread(self):
-        logs = self.query_one("#logs", RichLog)
         try:
             save_drive_tuning(self.drive_tuning, self.teleop_config_path)
             self.drive_tuning_dirty = False
@@ -488,18 +489,17 @@ class RobotDashboard(App):
             )
         except Exception as exc:
             self.tuning_apply_running = False
-            self.call_from_thread(logs.write, f"Drive tuning apply failed: {exc}")
+            self.call_from_thread(self._write_log, f"Drive tuning apply failed: {exc}")
             return
 
         self.tuning_apply_running = False
         if result.returncode == 0:
-            self.call_from_thread(logs.write, "Drive tuning saved. gamepad-teleop restarted.")
+            self.call_from_thread(self._write_log, "Drive tuning saved. gamepad-teleop restarted.")
         else:
             output = (result.stderr or result.stdout).strip()
-            self.call_from_thread(logs.write, f"Drive tuning saved, but restart failed: {output}")
+            self.call_from_thread(self._write_log, f"Drive tuning saved, but restart failed: {output}")
 
     def _redeploy_thread(self):
-        logs = self.query_one("#logs", RichLog)
         script = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "redeploy-robot.sh"))
         env = {**os.environ, "ROBOT_PET_REPO_DIR": os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))}
 
@@ -513,20 +513,20 @@ class RobotDashboard(App):
             )
         except OSError as exc:
             self.redeploy_running = False
-            self.call_from_thread(logs.write, f"Redeploy failed to start: {exc}")
+            self.call_from_thread(self._write_log, f"Redeploy failed to start: {exc}")
             return
 
         if process.stdout is not None:
             for line in process.stdout:
-                self.call_from_thread(logs.write, line.rstrip())
+                self.call_from_thread(self._write_log, line.rstrip())
 
         exit_code = process.wait()
         self.redeploy_running = False
         if exit_code == 0:
-            self.call_from_thread(logs.write, "Redeploy succeeded. Restarting dashboard...")
+            self.call_from_thread(self._write_log, "Redeploy succeeded. Restarting dashboard...")
             self.call_from_thread(self._restart_dashboard)
         else:
-            self.call_from_thread(logs.write, f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
+            self.call_from_thread(self._write_log, f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
 
     def _restart_dashboard(self):
         os.execv(sys.executable, [sys.executable, *sys.argv])

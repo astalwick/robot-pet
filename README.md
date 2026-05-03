@@ -15,10 +15,9 @@ This sets up SSH keys, installs dependencies, configures UART, and starts the ro
 **On the Pi**, once hardware is connected:
 
 ```bash
-source ~/.robot-pet/.venv/bin/activate
-python scripts/configure-roboclaw.py  # First time: set up motor controller
-python scripts/test-motor.py          # Verify motors work
-python scripts/teleop.py              # Drive with WASD keys
+source ~/robot-pet/.venv/bin/activate
+python scripts/test-motor.py  # Verify motors work
+python scripts/teleop.py      # Drive with WASD keys
 ```
 
 ## Project Structure
@@ -27,18 +26,27 @@ python scripts/teleop.py              # Drive with WASD keys
 ├── initialize-pi.sh       # Run from Mac to set up a fresh Pi
 ├── setup.sh               # Run on Pi (called by initialize-pi.sh)
 ├── systemd/               # Service unit files
-│   └── robot-brain.service
+│   ├── robot-brain.service
+│   ├── robot-telemetry.service
+│   └── gamepad-teleop.service
 ├── src/
+│   ├── config/            # Persistent runtime config helpers
+│   ├── control/           # Teleop policy and differential drive mixing
 │   ├── drivers/           # Hardware drivers (pure Python, ROS2-ready)
 │   │   ├── motor.py       # RoboClaw motor controller
 │   │   └── controller.py  # Xbox 360 gamepad
+│   ├── telemetry/         # Local JSON/socket telemetry helpers
 │   ├── lib/               # Shared utilities
 │   │   └── log.py         # Logging setup
-│   └── robot-brain.py     # Main orchestrator service
-├── scripts/               # Manual test/config scripts
-│   ├── configure-roboclaw.py
+│   ├── robot-brain.py     # Main orchestrator service
+│   ├── robot_telemetry.py # Local telemetry hub
+│   ├── robot_dashboard.py # SSH Textual dashboard
+│   └── gamepad_teleop.py  # Boot-ready gamepad teleop service
+├── scripts/               # Manual tools and hardware diagnostics
+│   ├── diagnostics/
 │   ├── test-motor.py
-│   └── teleop.py
+│   ├── teleop.py
+│   └── redeploy-robot.sh
 └── docs/
     ├── ARCHITECTURE.md    # System design, ROS2 migration path
     ├── phase-0-assembly-guide.md

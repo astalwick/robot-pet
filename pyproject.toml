@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robo-pet"
+version = "0.1.0"
+description = "Raspberry Pi robot controller services and tools"
+requires-python = ">=3.11"
+dependencies = [
+    "basicmicro",
+    "evdev",
+    "gpiozero",
+    "numpy",
+    "pyserial",
+    "rich",
+    "textual",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["config", "control", "drivers", "lib", "telemetry"]
+py-modules = ["gamepad_teleop", "robot_dashboard", "robot_telemetry"]

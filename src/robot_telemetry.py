@@ -194,7 +194,7 @@ class TelemetryHub:
     async def broadcast(self, snapshot: dict[str, Any]):
         dead: list[asyncio.StreamWriter] = []
         encoded = encode_json_line(snapshot)
-        for writer in self.subscribers:
+        for writer in list(self.subscribers):
             try:
                 writer.write(encoded)
                 await writer.drain()

@@ -108,6 +108,16 @@ Default I2C on the Pi is 100kHz. With 7 devices (6 ToF + IMU), you may need to i
 
 ---
 
+### Motor battery sleep cutoff
+
+The RoboClaw draws logic current even when the motors are stopped. If the manual motor switch is accidentally left on for days, the 3S LiPo can continue discharging even though the robot is not moving.
+
+**Fix:** Add a Pi-controlled high-side MOSFET switch in the motor battery positive rail, after the existing fuse and manual switch and before the RoboClaw. Use RoboClaw main-battery voltage telemetry while the motor rail is awake. If voltage is low, stop motion first, wait briefly, then cut the motor rail.
+
+Do not use a low-side switch here. Keep the RoboClaw/Pi ground reference continuous, and keep the manual switch as the trusted hard cutoff.
+
+---
+
 ## Phase 3 — "Sees things"
 
 ### WiFi dropout between Pi and M3 needs graceful degradation

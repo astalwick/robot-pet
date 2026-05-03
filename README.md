@@ -47,9 +47,12 @@ python scripts/test-motor.py  # Verify motors work
 │   └── redeploy-robot.sh
 └── docs/
     ├── ARCHITECTURE.md    # System design, ROS2 migration path
-    ├── phase-0-assembly-guide.md
-    ├── robot-build-gotchas.md
-    └── robot-shopping-list.md
+    └── phases/            # Long-term roadmap, phase docs, and build planning
+        ├── bom-by-phase.md
+        ├── index.md
+        ├── phase-0-assembly-guide.md
+        ├── robot-build-gotchas.md
+        └── legacy/
 ```
 
 ## Hardware
@@ -58,7 +61,7 @@ python scripts/test-motor.py  # Verify motors work
 - **Motion:** RoboClaw 2x7A + goBILDA 5203 motors + 96mm wheels
 - **Power:** 3S LiPo (motors) + USB-C power bank (Pi)
 
-See `docs/robot-shopping-list.md` for full BOM.
+See `docs/phases/index.md` for the roadmap and `docs/phases/bom-by-phase.md` for the full BOM.
 
 ## Architecture
 

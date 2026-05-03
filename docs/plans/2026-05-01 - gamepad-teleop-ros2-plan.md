@@ -14,7 +14,7 @@ The reusable logic should stay framework-agnostic for a future ROS2 migration, b
 - `scripts/diagnostics/controller-roboclaw-speed-test.py` proves controller input can drive RoboClaw using closed-loop `SpeedM1M2` velocity commands with encoder feedback.
 - `src/drivers/motor.py` owns direct RoboClaw access and now validates `ReadVersion`.
 - `src/drivers/controller.py` already exists, but it should be reconciled with the mappings and behavior proven by the diagnostics.
-- `scripts/teleop.py` is keyboard teleop and currently mixes input handling, teleop policy, UI, and motor output in one script.
+- Keyboard teleop has been removed; gamepad teleop is the supported manual drive path.
 - `systemd/robot-brain.service` already exists; the gamepad teleop path should integrate with the existing `systemd/` pattern rather than inventing a separate boot mechanism.
 
 ## Target Shape
@@ -136,7 +136,7 @@ Do not reinterpret these signs during the cleanup. If the robot drives correctly
    - `RestartSec=2`
    - `WantedBy=multi-user.target`
 
-   Keep this separate from `robot-brain.py`. A teleop crash should restart independently, logs should be easy to inspect with `journalctl -u gamepad-teleop -f`, and the service can be deleted cleanly when ROS2 launch files replace systemd wrappers later.
+   Keep this separate from the robot-brain entrypoint. A teleop crash should restart independently, logs should be easy to inspect with `journalctl -u gamepad-teleop -f`, and the service can be deleted cleanly when ROS2 launch files replace systemd wrappers later.
 
 6. Keep diagnostics separate
 

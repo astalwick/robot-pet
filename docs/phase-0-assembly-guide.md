@@ -14,7 +14,7 @@ You're building from the ground up, literally. The order matters because some th
 2. **UART fix** — free the serial port from Bluetooth so the Pi can talk to the RoboClaw
 3. **Wiring** — RoboClaw to motors, encoders to RoboClaw, Pi UART to RoboClaw, power rails
 4. **RoboClaw configuration** — low-voltage cutoff, encoder CPR, PID tuning, motor direction, current limits
-5. **Software** — serial comms, motor commands, keyboard teleoperation
+5. **Software** — serial comms, motor commands, gamepad teleoperation
 6. **Integration test** — wheels on the ground, driving around under control
 
 ---

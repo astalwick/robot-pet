@@ -6,7 +6,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from config.teleop import DriveTuning, load_drive_tuning, save_drive_tuning
+from config.teleop import DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
 
 
 class DriveTuningConfigTest(unittest.TestCase):
@@ -26,6 +26,24 @@ class DriveTuningConfigTest(unittest.TestCase):
 
         self.assertEqual(tuning.speed_scale, 0.3)
         self.assertEqual(tuning.left_stick_deadzone, 0.2)
+
+    def test_malformed_file_raises_clear_config_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "teleop.json")
+            with open(path, "w") as file_obj:
+                file_obj.write("{not json")
+
+            with self.assertRaisesRegex(DriveTuningConfigError, "Invalid drive tuning config"):
+                load_drive_tuning(path)
+
+    def test_non_object_file_raises_clear_config_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "teleop.json")
+            with open(path, "w") as file_obj:
+                file_obj.write("[]")
+
+            with self.assertRaisesRegex(DriveTuningConfigError, "expected a JSON object"):
+                load_drive_tuning(path)
 
     def test_values_are_clamped_to_safe_ranges(self):
         tuning = DriveTuning.from_dict(

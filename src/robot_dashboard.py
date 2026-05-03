@@ -10,9 +10,10 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
-from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, load_drive_tuning, save_drive_tuning
+from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -35,6 +36,35 @@ LOG_COMMAND = [
     "-n",
     "100",
 ]
+
+
+def stream_command_output(
+    command: list[str],
+    on_line: Callable[[str], None],
+    *,
+    env: dict[str, str] | None = None,
+) -> int:
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    if process.stdout is not None:
+        for line in process.stdout:
+            on_line(line.rstrip())
+    return process.wait()
+
+
+def restart_gamepad_teleop() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "gamepad-teleop.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def redeploy_command() -> tuple[list[str], dict[str, str]]:
+    repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    script = os.path.join(repo_dir, "scripts", "redeploy-robot.sh")
+    return [script], {**os.environ, "ROBOT_PET_REPO_DIR": repo_dir}
 
 HISTORY_LENGTH = 48
 TUNING_FIELDS = (
@@ -362,7 +392,12 @@ class RobotDashboard(App):
         self.max_abs_speed_qpps = 1.0
         self.redeploy_armed_until = 0.0
         self.redeploy_running = False
-        self.drive_tuning = load_drive_tuning(teleop_config_path)
+        self.drive_tuning_error: str | None = None
+        try:
+            self.drive_tuning = load_drive_tuning(teleop_config_path)
+        except DriveTuningConfigError as exc:
+            self.drive_tuning = DriveTuning()
+            self.drive_tuning_error = str(exc)
         self.active_drive_tuning: DriveTuning | None = None
         self.drive_tuning_dirty = False
         self.tuning_apply_running = False
@@ -392,6 +427,8 @@ class RobotDashboard(App):
         self._render_controller_waiting()
         self._render_wheels_waiting()
         self._render_link_waiting()
+        if self.drive_tuning_error is not None:
+            self._write_log(f"Drive tuning config is invalid; showing defaults until saved: {self.drive_tuning_error}")
 
         threading.Thread(target=self._telemetry_thread, daemon=True).start()
         threading.Thread(target=self._logs_thread, daemon=True).start()
@@ -427,15 +464,9 @@ class RobotDashboard(App):
 
     def _logs_thread(self):
         try:
-            process = subprocess.Popen(LOG_COMMAND, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            stream_command_output(LOG_COMMAND, lambda line: self.call_from_thread(self._write_log, line))
         except OSError as exc:
             self.call_from_thread(self._write_log, f"journalctl unavailable: {exc}")
-            return
-
-        if process.stdout is None:
-            return
-        for line in process.stdout:
-            self.call_from_thread(self._write_log, line.rstrip())
 
     def _write_log(self, message: str):
         self.query_one("#logs", RichLog).write(message)
@@ -463,6 +494,7 @@ class RobotDashboard(App):
         if tuning is None:
             return
         self.drive_tuning = tuning
+        self.drive_tuning_error = None
         self.drive_tuning_dirty = True
         self._apply_tuning()
 
@@ -480,13 +512,7 @@ class RobotDashboard(App):
         try:
             save_drive_tuning(self.drive_tuning, self.teleop_config_path)
             self.drive_tuning_dirty = False
-            result = subprocess.run(
-                ["sudo", "systemctl", "restart", "gamepad-teleop.service"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
+            result = restart_gamepad_teleop()
         except Exception as exc:
             self.tuning_apply_running = False
             self.call_from_thread(self._write_log, f"Drive tuning apply failed: {exc}")
@@ -500,27 +526,15 @@ class RobotDashboard(App):
             self.call_from_thread(self._write_log, f"Drive tuning saved, but restart failed: {output}")
 
     def _redeploy_thread(self):
-        script = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "scripts", "redeploy-robot.sh"))
-        env = {**os.environ, "ROBOT_PET_REPO_DIR": os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))}
+        command, env = redeploy_command()
 
         try:
-            process = subprocess.Popen(
-                [script],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-            )
+            exit_code = stream_command_output(command, lambda line: self.call_from_thread(self._write_log, line), env=env)
         except OSError as exc:
             self.redeploy_running = False
             self.call_from_thread(self._write_log, f"Redeploy failed to start: {exc}")
             return
 
-        if process.stdout is not None:
-            for line in process.stdout:
-                self.call_from_thread(self._write_log, line.rstrip())
-
-        exit_code = process.wait()
         self.redeploy_running = False
         if exit_code == 0:
             self.call_from_thread(self._write_log, "Redeploy succeeded. Restarting dashboard...")

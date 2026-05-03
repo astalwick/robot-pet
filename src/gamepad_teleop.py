@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, load_drive_tuning
+from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning
 from control.commands import WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.teleop import GamepadTeleopPolicy
@@ -338,7 +338,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main():
     args = build_parser().parse_args()
-    tuning_values = load_drive_tuning(args.config).to_dict()
+    try:
+        tuning_values = load_drive_tuning(args.config).to_dict()
+    except DriveTuningConfigError as exc:
+        log.error("%s", exc)
+        raise SystemExit(1) from exc
+
     for key in (
         "speed_scale",
         "turbo_scale",

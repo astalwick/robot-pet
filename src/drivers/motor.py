@@ -71,7 +71,7 @@ class MotorDriver:
         # Stop motors on init
         self.stop()
     
-    def set_speed(self, left: float, right: float):
+    def set_speed(self, left: float, right: float) -> bool:
         """
         Set wheel speeds for differential drive.
         
@@ -87,8 +87,15 @@ class MotorDriver:
         right_duty = int(right * self.MAX_DUTY)
         
         # M1 = left, M2 = right
-        self.controller.DutyM1(self.address, left_duty)
-        self.controller.DutyM2(self.address, right_duty)
+        try:
+            self.controller.DutyM1(self.address, left_duty)
+            self.controller.DutyM2(self.address, right_duty)
+            return True
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw duty command timed out: %s", exc)
+                return False
+            raise
 
     def set_wheel_speeds(self, left_qpps: int, right_qpps: int) -> bool:
         """

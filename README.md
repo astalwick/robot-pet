@@ -17,7 +17,6 @@ This sets up SSH keys, installs dependencies, configures UART, and starts the ro
 ```bash
 source ~/robot-pet/.venv/bin/activate
 python scripts/test-motor.py  # Verify motors work
-python scripts/teleop.py      # Drive with WASD keys
 ```
 
 ## Project Structure
@@ -38,14 +37,13 @@ python scripts/teleop.py      # Drive with WASD keys
 │   ├── telemetry/         # Local JSON/socket telemetry helpers
 │   ├── lib/               # Shared utilities
 │   │   └── log.py         # Logging setup
-│   ├── robot-brain.py     # Main orchestrator service
+│   ├── robot_brain.py     # Main orchestrator service
 │   ├── robot_telemetry.py # Local telemetry hub
 │   ├── robot_dashboard.py # SSH Textual dashboard
 │   └── gamepad_teleop.py  # Boot-ready gamepad teleop service
 ├── scripts/               # Manual tools and hardware diagnostics
 │   ├── diagnostics/
 │   ├── test-motor.py
-│   ├── teleop.py
 │   └── redeploy-robot.sh
 └── docs/
     ├── ARCHITECTURE.md    # System design, ROS2 migration path

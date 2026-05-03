@@ -26,7 +26,7 @@ src/
 ├── lib/                  # Shared utilities
 │   └── log.py            # Logging setup (journald-friendly)
 ├── telemetry/            # Local JSON/socket telemetry helpers
-├── robot-brain.py        # systemd service - orchestrator (temporary)
+├── robot_brain.py        # systemd service - orchestrator (temporary)
 ├── robot_telemetry.py    # systemd service - local telemetry hub (temporary)
 ├── robot_dashboard.py    # foreground SSH Textual dashboard
 └── gamepad_teleop.py     # systemd service - boot-ready gamepad teleop (temporary)
@@ -67,7 +67,7 @@ class MotorDriver:
 
 ## Service Guidelines
 
-Systemd services in `src/robot-*.py` are thin wrappers:
+Systemd service entrypoints in `src/` are thin wrappers:
 
 1. **Import and instantiate drivers**
 2. **Handle service lifecycle** (startup, shutdown, crash logging)
@@ -80,7 +80,7 @@ Keep services minimal. Business logic belongs in drivers or separate modules, no
 When migrating to ROS2:
 
 1. `src/drivers/` → unchanged, just import into ROS2 nodes
-2. `src/robot-*.py` → deleted, replaced by ROS2 nodes
+2. `src/robot_*.py` and temporary service entrypoints → deleted, replaced by ROS2 nodes
 3. `systemd/` → deleted, replaced by ROS2 launch files
 4. `src/lib/log.py` → deleted, use ROS2 logging
 

@@ -13,6 +13,10 @@ from typing import Any
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/teleop.json"
 
 
+class DriveTuningConfigError(ValueError):
+    """Raised when a drive tuning config file exists but cannot be used."""
+
+
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
@@ -56,7 +60,16 @@ def load_drive_tuning(path: str = DEFAULT_CONFIG_PATH) -> DriveTuning:
         values = json.loads(config_path.read_text())
     except FileNotFoundError:
         return DriveTuning()
-    return DriveTuning.from_dict(values)
+    except json.JSONDecodeError as exc:
+        raise DriveTuningConfigError(f"Invalid drive tuning config at {config_path}: {exc}") from exc
+
+    if not isinstance(values, dict):
+        raise DriveTuningConfigError(f"Invalid drive tuning config at {config_path}: expected a JSON object")
+
+    try:
+        return DriveTuning.from_dict(values)
+    except (TypeError, ValueError) as exc:
+        raise DriveTuningConfigError(f"Invalid drive tuning config at {config_path}: {exc}") from exc
 
 
 def save_drive_tuning(tuning: DriveTuning, path: str = DEFAULT_CONFIG_PATH):

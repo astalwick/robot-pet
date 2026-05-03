@@ -75,6 +75,16 @@ class MotorDriverTest(unittest.TestCase):
         self.assertTrue(acknowledged)
         self.assertIn(("SpeedM1M2", 0x80, 100, -50), fake.calls)
 
+    def test_set_speed_returns_true_after_duty_commands(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        acknowledged = driver.set_speed(0.5, -0.5)
+
+        self.assertTrue(acknowledged)
+        self.assertIn(("DutyM1", 0x80, 16383), fake.calls)
+        self.assertIn(("DutyM2", 0x80, -16383), fake.calls)
+
     def test_read_wheel_speeds_reads_both_encoders(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
@@ -101,6 +111,12 @@ class MotorDriverTest(unittest.TestCase):
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertFalse(driver.set_wheel_speeds(100, 100))
+
+    def test_set_speed_returns_false_on_roboclaw_timeout(self):
+        fake = TimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertFalse(driver.set_speed(0.5, 0.5))
 
     def test_cleanup_ignores_roboclaw_timeout_while_closing(self):
         fake = TimeoutRoboClaw("/dev/fake", 38400)

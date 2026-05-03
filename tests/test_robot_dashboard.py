@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from collections import deque
 
@@ -56,6 +57,18 @@ class RobotDashboardTest(unittest.TestCase):
 
         self.assertEqual(len(dashboard.history["left_actual"]), 0)
         self.assertEqual(dashboard.max_abs_speed_qpps, 1.0)
+
+    def test_invalid_drive_tuning_config_uses_defaults_with_error(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "teleop.json")
+            with open(path, "w") as file_obj:
+                file_obj.write("{not json")
+
+            dashboard = RobotDashboard("/tmp/missing.sock", path)
+
+        self.assertEqual(dashboard.drive_tuning.speed_scale, 0.25)
+        self.assertIsNotNone(dashboard.drive_tuning_error)
+        self.assertIn("Invalid drive tuning config", dashboard.drive_tuning_error)
 
     def test_live_history_tracks_session_speed_max(self):
         dashboard = RobotDashboard("/tmp/missing.sock")

@@ -17,7 +17,7 @@ log = setup_logging("robot-brain")
 
 def main():
     log.info("starting")
-    
+
     while True:
         time.sleep(5)
 

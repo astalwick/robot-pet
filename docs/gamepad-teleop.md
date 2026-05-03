@@ -12,7 +12,7 @@ Boot-ready gamepad teleop runs as `gamepad-teleop.service`. It waits for the Xbo
 
 ## Diagnostics
 
-Run diagnostics from the repo root with the venv active:
+Diagnostics are hardware bring-up scripts, not the normal driving path. Run them from the repo root with the venv active:
 
 ```bash
 source .venv/bin/activate

@@ -13,7 +13,10 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
+
 from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
+from drivers.camera import CameraDriver, CameraUnavailable
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -22,6 +25,9 @@ from textual.widgets import Button, Footer, Input, Label, RichLog, Static
 
 from telemetry.paths import DEFAULT_SUBSCRIBE_SOCKET
 from telemetry.socket_client import subscribe
+
+
+VIEW_MODES = ("split", "logs", "camera")
 
 
 LOG_COMMAND = [
@@ -231,6 +237,89 @@ def sparkline(
     return result + "─" * (width - len(recent))
 
 
+def _downsample(frame: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    """Nearest-neighbor resample of an (H, W, 3) array to (target_h, target_w, 3)."""
+    src_h, src_w = frame.shape[:2]
+    if target_w <= 0 or target_h <= 0 or src_h == 0 or src_w == 0:
+        return frame
+    xs = np.linspace(0, src_w - 1, target_w).astype(np.int32)
+    ys = np.linspace(0, src_h - 1, target_h).astype(np.int32)
+    return frame[np.ix_(ys, xs)]
+
+
+def _render_halfblocks(frame: np.ndarray) -> str:
+    """Render an (H, W, 3) RGB frame as an ANSI string of half-block characters."""
+    h, w = frame.shape[:2]
+    if h % 2:
+        frame = frame[: h - 1]
+        h -= 1
+    top = frame[0::2]
+    bot = frame[1::2]
+    rows = []
+    for r in range(top.shape[0]):
+        t = top[r]
+        b = bot[r]
+        cells = []
+        for c in range(w):
+            tr, tg, tb = int(t[c, 0]), int(t[c, 1]), int(t[c, 2])
+            br, bg, bb = int(b[c, 0]), int(b[c, 1]), int(b[c, 2])
+            cells.append(f"\x1b[38;2;{tr};{tg};{tb};48;2;{br};{bg};{bb}m▀")
+        cells.append("\x1b[0m")
+        rows.append("".join(cells))
+    return "\n".join(rows)
+
+
+class CameraPanel(Static):
+    """Live half-block video panel from the Pi camera."""
+
+    DEFAULT_CSS = """
+    CameraPanel {
+        background: #000000;
+        padding: 0;
+    }
+    """
+
+    def __init__(self, source_size: tuple[int, int] = (320, 240), fps: float = 10.0, **kwargs):
+        super().__init__("", **kwargs)
+        self.source_size = source_size
+        self.fps = fps
+        self.driver: CameraDriver | None = None
+        self._driver_error: str | None = None
+        self._timer = None
+
+    def on_mount(self):
+        try:
+            self.driver = CameraDriver(size=self.source_size)
+            self.driver.start()
+        except CameraUnavailable as exc:
+            self._driver_error = str(exc)
+            self.update(Text.from_markup(f"[dim]camera unavailable[/]\n[red]{self._driver_error}[/]"))
+            return
+        self._timer = self.set_interval(1.0 / self.fps, self._tick)
+
+    def on_unmount(self):
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+        if self.driver is not None:
+            self.driver.stop()
+            self.driver = None
+
+    def _tick(self):
+        if self.driver is None or not self.display:
+            return
+        size = self.content_size
+        if size.width <= 0 or size.height <= 0:
+            return
+        try:
+            frame = self.driver.capture_array()
+        except Exception as exc:  # noqa: BLE001
+            self.update(Text.from_markup(f"[red]capture failed: {exc}[/]"))
+            return
+        downsampled = _downsample(frame, size.width, size.height * 2)
+        self.update(Text.from_ansi(_render_halfblocks(downsampled)))
+
+
 class DriveTuningModal(ModalScreen[DriveTuning | None]):
     CSS = """
     DriveTuningModal {
@@ -358,12 +447,28 @@ class RobotDashboard(App):
         border: heavy #0a5f5a;
     }
 
+    #bottom {
+        layout: horizontal;
+        height: 1fr;
+    }
+
     #logs {
         height: 1fr;
+        width: 1fr;
         border: heavy #1a2a3a;
         margin: 0 1 1 1;
         background: #020a10;
     }
+
+    #camera {
+        height: 1fr;
+        width: 1fr;
+        border: heavy #0a4f6a;
+        margin: 0 1 1 1;
+    }
+
+    #bottom.mode-logs #camera { display: none; }
+    #bottom.mode-camera #logs { display: none; }
 
     """
 
@@ -371,6 +476,7 @@ class RobotDashboard(App):
         ("q", "quit", "Quit"),
         ("r", "redeploy", "Redeploy"),
         ("c", "config", "Config"),
+        ("v", "toggle_view", "View"),
     ]
 
     def __init__(self, socket_path: str, teleop_config_path: str = DEFAULT_CONFIG_PATH):
@@ -401,6 +507,7 @@ class RobotDashboard(App):
         self.active_drive_tuning: DriveTuning | None = None
         self.drive_tuning_dirty = False
         self.tuning_apply_running = False
+        self.view_mode = "split"
 
     def compose(self) -> ComposeResult:
         yield Static(self._hud_waiting(), id="hud-header")
@@ -412,7 +519,9 @@ class RobotDashboard(App):
             with Vertical(id="right"):
                 yield Static("", id="wheels-panel", classes="panel")
                 yield Static("", id="link-panel", classes="panel")
-        yield RichLog(id="logs", wrap=True, highlight=True)
+        with Horizontal(id="bottom", classes=f"mode-{self.view_mode}"):
+            yield RichLog(id="logs", wrap=True, highlight=True)
+            yield CameraPanel(id="camera")
         yield Footer()
 
     def _hud_waiting(self) -> Text:
@@ -489,6 +598,16 @@ class RobotDashboard(App):
 
     def action_config(self):
         self.push_screen(DriveTuningModal(self.drive_tuning), self._config_closed)
+
+    def action_toggle_view(self):
+        idx = VIEW_MODES.index(self.view_mode)
+        next_mode = VIEW_MODES[(idx + 1) % len(VIEW_MODES)]
+        self.view_mode = next_mode
+        bottom = self.query_one("#bottom")
+        for mode in VIEW_MODES:
+            bottom.remove_class(f"mode-{mode}")
+        bottom.add_class(f"mode-{next_mode}")
+        self._write_log(f"View mode: {next_mode}")
 
     def _config_closed(self, tuning: DriveTuning | None):
         if tuning is None:

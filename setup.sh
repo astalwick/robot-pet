@@ -11,7 +11,7 @@ echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
 echo "[1/11] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[2/11] Adding $USER to dialout group..."
@@ -143,10 +143,22 @@ sudo visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy
 rm "$SUDOERS_TMP"
 
-# Set up Python venv (idempotent - only creates if missing)
+# Set up Python venv (idempotent - only creates if missing or misconfigured).
+# --system-site-packages lets the venv import apt-installed Pi libraries
+# (picamera2, libcamera) that aren't reliably pip-installable.
 echo "[9/11] Setting up Python venv at $VENV_PATH..."
-if [[ ! -d "$VENV_PATH" ]]; then
-  python3 -m venv "$VENV_PATH"
+NEEDS_VENV_RECREATE=0
+if [[ -d "$VENV_PATH" ]]; then
+  if ! grep -q "^include-system-site-packages = true" "$VENV_PATH/pyvenv.cfg" 2>/dev/null; then
+    echo "    Existing venv missing --system-site-packages; recreating"
+    NEEDS_VENV_RECREATE=1
+  fi
+else
+  NEEDS_VENV_RECREATE=1
+fi
+if [[ "$NEEDS_VENV_RECREATE" == "1" ]]; then
+  rm -rf "$VENV_PATH"
+  python3 -m venv --system-site-packages "$VENV_PATH"
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)

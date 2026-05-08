@@ -31,9 +31,15 @@ class CameraUnavailable(RuntimeError):
 class CameraDriver:
     """RGB frame capture from a Pi camera via picamera2."""
 
-    def __init__(self, size: tuple[int, int] = (320, 240), jpeg_quality: int = 75):
+    def __init__(
+        self,
+        size: tuple[int, int] = (1280, 720),
+        jpeg_quality: int = 75,
+        sensor_size: tuple[int, int] | None = (2304, 1296),
+    ):
         self.size = size
         self.jpeg_quality = jpeg_quality
+        self.sensor_size = sensor_size
         self._picam: Any | None = None
 
     def start(self) -> None:
@@ -48,11 +54,13 @@ class CameraDriver:
         picam: Any | None = None
         try:
             picam = Picamera2()
-            config = picam.create_video_configuration(
-                main={"size": self.size, "format": "RGB888"}
-            )
+            kwargs: dict[str, Any] = {"main": {"size": self.size, "format": "RGB888"}}
+            if self.sensor_size is not None:
+                kwargs["raw"] = {"size": self.sensor_size}
+            config = picam.create_video_configuration(**kwargs)
             picam.configure(config)
             picam.options["quality"] = self.jpeg_quality
+            log.info("camera configured: %s", picam.camera_configuration())
             picam.start()
         except Exception as exc:  # noqa: BLE001 -- libcamera throws varied types
             if picam is not None:

@@ -19,8 +19,10 @@ from lib.log import setup_logging
 from telemetry.paths import DEFAULT_CAMERA_BIND_HOST, DEFAULT_CAMERA_PORT
 
 
-DEFAULT_CAMERA_WIDTH = 320
-DEFAULT_CAMERA_HEIGHT = 240
+DEFAULT_CAMERA_WIDTH = 1280
+DEFAULT_CAMERA_HEIGHT = 720
+DEFAULT_SENSOR_WIDTH = 2304
+DEFAULT_SENSOR_HEIGHT = 1296
 DEFAULT_CAPTURE_FPS = 10.0
 DEFAULT_JPEG_QUALITY = 75
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
@@ -323,6 +325,7 @@ async def run_service(args: argparse.Namespace) -> None:
         driver_factory=lambda: CameraDriver(
             size=(args.width, args.height),
             jpeg_quality=args.quality,
+            sensor_size=(args.sensor_width, args.sensor_height),
         ),
         fps=args.fps,
         idle_timeout=args.idle_timeout,
@@ -336,9 +339,11 @@ async def run_service(args: argparse.Namespace) -> None:
     await site.start()
     log.info("camera service listening on %s:%d", args.host, args.port)
     log.info(
-        "camera idle start enabled size=%dx%d fps=%.1f quality=%d idle_timeout=%.1fs",
+        "camera idle start enabled size=%dx%d sensor=%dx%d fps=%.1f quality=%d idle_timeout=%.1fs",
         args.width,
         args.height,
+        args.sensor_width,
+        args.sensor_height,
         args.fps,
         args.quality,
         args.idle_timeout,
@@ -357,6 +362,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_CAMERA_PORT)
     parser.add_argument("--width", type=int, default=DEFAULT_CAMERA_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_CAMERA_HEIGHT)
+    parser.add_argument("--sensor-width", type=int, default=DEFAULT_SENSOR_WIDTH)
+    parser.add_argument("--sensor-height", type=int, default=DEFAULT_SENSOR_HEIGHT)
     parser.add_argument("--fps", type=float, default=DEFAULT_CAPTURE_FPS)
     parser.add_argument("--quality", type=int, default=DEFAULT_JPEG_QUALITY)
     parser.add_argument("--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT_SECONDS)

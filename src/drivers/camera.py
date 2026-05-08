@@ -16,6 +16,7 @@ pip install picamera2 directly into the venv.
 
 from __future__ import annotations
 
+import io
 import logging
 from typing import Any
 
@@ -30,8 +31,9 @@ class CameraUnavailable(RuntimeError):
 class CameraDriver:
     """RGB frame capture from a Pi camera via picamera2."""
 
-    def __init__(self, size: tuple[int, int] = (320, 240)):
+    def __init__(self, size: tuple[int, int] = (320, 240), jpeg_quality: int = 75):
         self.size = size
+        self.jpeg_quality = jpeg_quality
         self._picam: Any | None = None
 
     def start(self) -> None:
@@ -43,14 +45,21 @@ class CameraDriver:
                 "picamera2 not installed (sudo apt install python3-picamera2)"
             ) from exc
 
+        picam: Any | None = None
         try:
             picam = Picamera2()
             config = picam.create_video_configuration(
                 main={"size": self.size, "format": "RGB888"}
             )
             picam.configure(config)
+            picam.options["quality"] = self.jpeg_quality
             picam.start()
         except Exception as exc:  # noqa: BLE001 -- libcamera throws varied types
+            if picam is not None:
+                try:
+                    picam.close()
+                except Exception:  # noqa: BLE001
+                    log.exception("camera cleanup after failed start failed")
             raise CameraUnavailable(f"failed to open camera: {exc}") from exc
 
         self._picam = picam
@@ -61,6 +70,14 @@ class CameraDriver:
             raise RuntimeError("CameraDriver.start() must be called before capture_array()")
         # picamera2 quirk: format="RGB888" returns arrays in BGR memory order.
         return self._picam.capture_array()[..., ::-1]
+
+    def capture_jpeg(self) -> bytes:
+        """Capture a single frame encoded as JPEG bytes."""
+        if self._picam is None:
+            raise RuntimeError("CameraDriver.start() must be called before capture_jpeg()")
+        buffer = io.BytesIO()
+        self._picam.capture_file(buffer, format="jpeg")
+        return buffer.getvalue()
 
     def stop(self) -> None:
         """Release the camera."""

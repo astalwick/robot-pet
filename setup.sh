@@ -137,6 +137,8 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
 SUDOERS
 sudo visudo -cf "$SUDOERS_TMP"
@@ -176,9 +178,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable robot-brain.service
 sudo systemctl enable robot-telemetry.service
 sudo systemctl enable gamepad-teleop.service
+sudo systemctl enable robot-camera.service
+sudo systemctl enable robot-web-dashboard.service
 sudo systemctl restart robot-brain.service
 sudo systemctl restart robot-telemetry.service
 sudo systemctl restart gamepad-teleop.service
+sudo systemctl restart robot-camera.service
+sudo systemctl restart robot-web-dashboard.service
 
 echo ""
 echo "=== Setup complete! ==="
@@ -195,3 +201,9 @@ echo "    sudo systemctl status robot-telemetry"
 echo "    journalctl -u robot-telemetry -f"
 echo "    sudo systemctl status gamepad-teleop"
 echo "    journalctl -u gamepad-teleop -f"
+echo "    sudo systemctl status robot-camera"
+echo "    journalctl -u robot-camera -f"
+echo "    sudo systemctl status robot-web-dashboard"
+echo "    journalctl -u robot-web-dashboard -f"
+echo ""
+echo "Open the web dashboard at http://<this-pi>:8080/"

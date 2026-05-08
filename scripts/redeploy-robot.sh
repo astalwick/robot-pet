@@ -6,6 +6,8 @@ SERVICES=(
   robot-brain.service
   robot-telemetry.service
   gamepad-teleop.service
+  robot-camera.service
+  robot-web-dashboard.service
 )
 
 echo "== Robo-Pet redeploy =="

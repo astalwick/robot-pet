@@ -27,6 +27,7 @@ from telemetry.socket_client import subscribe
 VIEW_MODES = ("split", "logs", "camera")
 
 
+# Keep aligned with `systemctl enable` in setup.sh (all shipped robot *.service units).
 LOG_COMMAND = [
     "journalctl",
     "-u",
@@ -35,6 +36,10 @@ LOG_COMMAND = [
     "gamepad-teleop",
     "-u",
     "robot-brain",
+    "-u",
+    "robot-camera",
+    "-u",
+    "robot-web-dashboard",
     "-f",
     "-n",
     "100",

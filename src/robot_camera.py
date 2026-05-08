@@ -180,7 +180,7 @@ class CameraServiceState:
                 self._capture = capture
                 self.camera_ok = True
                 self.error = None
-            log.info("camera started")
+            log.info("camera became active")
             return True
 
     def acquire_stream(self) -> None:
@@ -221,7 +221,7 @@ class CameraServiceState:
             driver.stop()
         self.store.clear()
         if capture is not None or driver is not None:
-            log.info("camera stopped after idle timeout")
+            log.info("camera became idle")
 
     def _cancel_idle_stop(self) -> None:
         handle = self._idle_handle

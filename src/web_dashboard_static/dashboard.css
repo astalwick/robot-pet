@@ -35,7 +35,7 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 0.75rem 1rem;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 1.5rem;
 }
@@ -74,6 +74,7 @@ body {
 main {
   display: grid;
   grid-template-columns: 3fr 2fr;
+  grid-template-rows: minmax(0, 2fr) minmax(12rem, 1fr);
   gap: 1rem;
   padding: 1rem;
   min-height: 0;
@@ -102,6 +103,13 @@ main {
   gap: 1rem;
   overflow-y: auto;
   padding-right: 0.25rem;
+}
+
+#logs-section {
+  grid-column: 1 / -1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .panel {
@@ -172,6 +180,160 @@ main {
 .bar.warn > .fill { background: var(--warn); }
 .bar.err > .fill { background: var(--err); }
 
+.bipolar {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  align-items: center;
+  height: 0.5rem;
+  background: var(--bg-elevated);
+}
+
+.bipolar .mid {
+  height: 0.75rem;
+  background: var(--text-dim);
+}
+
+.bipolar .left,
+.bipolar .right {
+  height: 100%;
+  display: flex;
+}
+
+.bipolar .left {
+  justify-content: flex-end;
+}
+
+.bipolar .right {
+  justify-content: flex-start;
+}
+
+.bipolar .fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.sparkline {
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+#actions,
+#logs-toolbar,
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+button:hover,
+button.armed {
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+button.armed {
+  background: rgba(250, 204, 21, 0.14);
+  border-color: var(--warn);
+}
+
+button:disabled {
+  cursor: wait;
+  color: var(--text-dim);
+  border-color: #163040;
+}
+
+#logs-toolbar {
+  margin-bottom: 0.5rem;
+}
+
+#logs-output {
+  margin: 0;
+  padding: 0.75rem;
+  overflow: auto;
+  background: #020a10;
+  border: 1px solid #1a2a3a;
+  color: var(--text);
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 1rem;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(36rem, 100%);
+  background: var(--bg-panel);
+  border: 1px solid #6a4f0a;
+  padding: 1rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.modal-card h2 {
+  margin: 0;
+  color: var(--accent);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  font-size: 0.875rem;
+}
+
+.modal-help {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+}
+
+#config-fields {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.field label {
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+}
+
+.field input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.5rem;
+}
+
+.field .help {
+  grid-column: 2;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
@@ -212,12 +374,21 @@ main {
 @media (max-width: 1000px) {
   main {
     grid-template-columns: 1fr;
-    grid-template-rows: 50vh 1fr;
+    grid-template-rows: 50vh auto 18rem;
     overflow: visible;
   }
   #panels {
     grid-template-columns: 1fr;
     overflow-y: visible;
+  }
+  #logs-section {
+    grid-column: auto;
+  }
+  #hud {
+    grid-template-columns: 1fr;
+  }
+  #actions {
+    justify-content: flex-start;
   }
   body {
     height: auto;

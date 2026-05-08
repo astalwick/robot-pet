@@ -110,7 +110,7 @@ src/
 | `robot-telemetry` | In-memory local telemetry hub for dashboard clients | Active |
 | `gamepad-teleop` | Xbox controller to RoboClaw closed-loop speed teleop | Active |
 | `robot-camera` | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP | Active |
-| `robot-web-dashboard` | Read-only browser dashboard with live camera and telemetry | Active |
+| `robot-web-dashboard` | Browser dashboard with live camera, telemetry, logs, redeploy, and drive tuning | Active |
 | `robot-dashboard` | Foreground SSH TUI for telemetry, logs, and drive tuning | Manual tool |
 | `robot-motion` | Autonomous motor control | Not yet created |
 | `robot-sensors` | Sensor reading | Not yet created |
@@ -119,7 +119,7 @@ src/
 
 `robot-camera` is the only normal owner of the Pi camera. It instantiates one `CameraDriver`, captures JPEG frames continuously, and fans them out as HTTP responses (`GET /snapshot.jpg`, `GET /stream.mjpg`). Other consumers — the browser dashboard today, perception services later — subscribe over HTTP rather than opening the camera themselves. Telemetry stays separate: `robot-telemetry` carries low-rate JSON state, never video.
 
-`robot-web-dashboard` serves the operator UI and a Server-Sent Events telemetry stream on port 8080. The browser HTML embeds the camera service URL using `location.hostname`, so a remote MacBook loads MJPEG from the Pi rather than its own loopback. The first cut is read-only; drive tuning, redeploy, and other write actions stay in the SSH TUI.
+`robot-web-dashboard` serves the operator UI, service logs, operator action endpoints, and a Server-Sent Events telemetry stream on port 8080. The browser HTML embeds the camera service URL using `location.hostname`, so a remote MacBook loads MJPEG from the Pi rather than its own loopback. Redeploy uses the same arm-then-run flow as the SSH TUI, and drive tuning uses the same OK/Cancel apply semantics.
 
 These services are pre-ROS2 scaffolding and map naturally onto future ROS2 topics: `robot-camera` becomes a camera node publishing image topics, the telemetry hub becomes per-domain ROS2 publishers, and the web dashboard either remains as a small bridge node or is replaced by ROS2-native tooling.
 

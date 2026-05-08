@@ -15,6 +15,10 @@
         <span class="metric"><span class="label">session</span><span id="session-uptime" class="value muted">--:--</span></span>
         <span class="metric"><span class="label">telemetry</span><span id="telemetry-freshness" class="value muted">disconnected</span></span>
       </div>
+      <div id="actions">
+        <button id="redeploy-button" type="button">Redeploy</button>
+        <button id="config-button" type="button">Config</button>
+      </div>
     </header>
 
     <main>
@@ -44,7 +48,29 @@
           <div class="rows" id="link-rows"></div>
         </article>
       </section>
+
+      <section id="logs-section" class="panel">
+        <h2>Logs</h2>
+        <div id="logs-toolbar">
+          <button id="logs-clear" type="button">Clear</button>
+          <button id="logs-pause" type="button">Pause</button>
+        </div>
+        <pre id="logs-output" aria-live="polite"></pre>
+      </section>
     </main>
+
+    <div id="config-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="config-title">
+      <form id="config-form" class="modal-card">
+        <h2 id="config-title">Drive Config</h2>
+        <p class="modal-help">OK saves and restarts gamepad-teleop.</p>
+        <div id="config-fields"></div>
+        <div id="config-error" class="value err"></div>
+        <div class="modal-actions">
+          <button id="config-cancel" type="button">Cancel</button>
+          <button type="submit">OK</button>
+        </div>
+      </form>
+    </div>
 
     <script src="/static/dashboard.js"></script>
   </body>

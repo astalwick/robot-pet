@@ -4,8 +4,8 @@ The robot dashboard is an SSH tool for robot status, service logs, redeploys, an
 
 ## When To Use This vs. The Web Dashboard
 
-- Use the **web dashboard** at `http://<pi-host>:8080/` for live camera video and at-a-glance telemetry from a laptop. It is read-only.
-- Use the **TUI** over SSH for service logs, drive tuning, redeploys, and as an emergency operator surface when the network or browser is unavailable.
+- Use the **web dashboard** at `http://<pi-host>:8080/` for live camera video, telemetry, service logs, redeploys, and drive tuning from a laptop.
+- Use the **TUI** over SSH as an emergency operator surface when the network or browser is unavailable.
 
 The TUI no longer renders camera video. `robot-camera.service` is the only normal owner of the Pi camera; the TUI's camera tile shows a pointer to the web dashboard.
 

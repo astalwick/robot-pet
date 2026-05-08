@@ -21,4 +21,4 @@ dependencies = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = ["config", "control", "drivers", "lib", "telemetry"]
-py-modules = ["gamepad_teleop", "robot_brain", "robot_camera", "robot_dashboard", "robot_telemetry"]
+py-modules = ["gamepad_teleop", "robot_brain", "robot_camera", "robot_dashboard", "robot_telemetry", "robot_web_dashboard"]

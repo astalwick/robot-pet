@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Robo-Pet Dashboard</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+  </head>
+  <body>
+    <header id="hud">
+      <h1>R O B O &middot; P E T</h1>
+      <div id="status-summary">
+        <span class="metric"><span class="label">drive</span><span id="drive-status" class="value muted">awaiting telemetry</span></span>
+        <span class="metric"><span class="label">battery</span><span id="battery-voltage" class="value muted">--V</span></span>
+        <span class="metric"><span class="label">session</span><span id="session-uptime" class="value muted">--:--</span></span>
+        <span class="metric"><span class="label">telemetry</span><span id="telemetry-freshness" class="value muted">disconnected</span></span>
+      </div>
+    </header>
+
+    <main>
+      <section id="camera-section">
+        <img id="camera-stream" alt="Robot camera feed">
+      </section>
+
+      <section id="panels">
+        <article class="panel">
+          <h2>Core Systems</h2>
+          <div class="rows" id="pi-rows"></div>
+        </article>
+        <article class="panel">
+          <h2>Power Rail</h2>
+          <div class="rows" id="power-rows"></div>
+        </article>
+        <article class="panel">
+          <h2>Pilot Inputs</h2>
+          <div class="rows" id="controller-rows"></div>
+        </article>
+        <article class="panel">
+          <h2>Drivetrain</h2>
+          <div class="rows" id="wheels-rows"></div>
+        </article>
+        <article class="panel">
+          <h2>Link / Loop Health</h2>
+          <div class="rows" id="link-rows"></div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>

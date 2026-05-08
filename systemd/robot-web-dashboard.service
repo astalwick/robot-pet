@@ -1,0 +1,18 @@
+[Unit]
+Description=Robot Web Dashboard
+After=robot-telemetry.service robot-camera.service
+Wants=robot-telemetry.service robot-camera.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_web_dashboard.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

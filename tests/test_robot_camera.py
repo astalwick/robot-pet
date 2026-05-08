@@ -17,6 +17,7 @@ try:
         MJPEG_BOUNDARY,
         build_app,
         mjpeg_part,
+        wait_for_frame,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "aiohttp":
@@ -82,7 +83,7 @@ class MjpegPartTest(unittest.TestCase):
 class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = FrameStore(asyncio.get_running_loop())
-        self.state = CameraServiceState(self.store)
+        self.state = CameraServiceState(self.store, first_frame_timeout=0.01)
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
 
@@ -109,7 +110,7 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp.status, 200)
             payload = await resp.json()
 
-        self.assertEqual(payload, {"status": "ok", "has_frame": True})
+        self.assertEqual(payload, {"status": "ok", "has_frame": True, "active_streams": 0})
 
     async def test_snapshot_returns_503_before_first_frame(self):
         self.state.camera_ok = True
@@ -178,6 +179,89 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
                 )
             buffer += chunk
         return buffer
+
+
+@unittest.skipIf(ROBOT_CAMERA_IMPORT_ERROR is not None, "aiohttp is not installed")
+class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_camera_starts_on_demand_and_stops_after_idle_timeout(self):
+        store = FrameStore(asyncio.get_running_loop())
+        driver = FakeCameraDriver()
+        state = CameraServiceState(
+            store,
+            driver_factory=lambda: driver,
+            fps=100.0,
+            idle_timeout=0.01,
+            first_frame_timeout=0.5,
+            loop=asyncio.get_running_loop(),
+        )
+
+        self.assertFalse(state.camera_ok)
+
+        self.assertTrue(await state.ensure_started())
+        self.assertIsNotNone(await wait_for_frame(state))
+        state.schedule_idle_stop()
+        await asyncio.sleep(0.05)
+
+        self.assertFalse(driver.started)
+        self.assertFalse(state.camera_ok)
+        self.assertIsNone(store.latest())
+
+    async def test_active_stream_keeps_camera_running_until_release(self):
+        store = FrameStore(asyncio.get_running_loop())
+        driver = FakeCameraDriver()
+        state = CameraServiceState(
+            store,
+            driver_factory=lambda: driver,
+            fps=100.0,
+            idle_timeout=0.01,
+            first_frame_timeout=0.5,
+            loop=asyncio.get_running_loop(),
+        )
+
+        state.acquire_stream()
+        self.assertTrue(await state.ensure_started())
+        state.schedule_idle_stop()
+        await asyncio.sleep(0.05)
+        self.assertTrue(driver.started)
+
+        state.release_stream()
+        await asyncio.sleep(0.05)
+        self.assertFalse(driver.started)
+
+    async def test_concurrent_first_clients_start_camera_once(self):
+        store = FrameStore(asyncio.get_running_loop())
+        driver = FakeCameraDriver()
+        state = CameraServiceState(
+            store,
+            driver_factory=lambda: driver,
+            fps=100.0,
+            idle_timeout=0.01,
+            first_frame_timeout=0.5,
+            loop=asyncio.get_running_loop(),
+        )
+
+        await asyncio.gather(state.ensure_started(), state.ensure_started())
+
+        self.assertEqual(driver.starts, 1)
+        state.stop_camera(force=True)
+
+
+class FakeCameraDriver:
+    def __init__(self):
+        self.started = False
+        self.starts = 0
+        self.captures = 0
+
+    def start(self):
+        self.starts += 1
+        self.started = True
+
+    def capture_jpeg(self):
+        self.captures += 1
+        return f"frame-{self.captures}".encode("ascii")
+
+    def stop(self):
+        self.started = False
 
 
 if __name__ == "__main__":

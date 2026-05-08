@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import threading
+from collections.abc import Callable
 
 from aiohttp import web
 
@@ -22,6 +23,8 @@ DEFAULT_CAMERA_WIDTH = 320
 DEFAULT_CAMERA_HEIGHT = 240
 DEFAULT_CAPTURE_FPS = 10.0
 DEFAULT_JPEG_QUALITY = 75
+DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
+FIRST_FRAME_TIMEOUT_SECONDS = 3.0
 MJPEG_BOUNDARY = "robotpet-frame"
 
 
@@ -54,6 +57,10 @@ class FrameStore:
     def latest(self) -> bytes | None:
         with self._lock:
             return self._latest
+
+    def clear(self) -> None:
+        with self._lock:
+            self._latest = None
 
     async def wait_for_next(self) -> bytes:
         """Block until the next publish, then return the latest frame."""
@@ -117,29 +124,147 @@ class CameraCaptureThread:
 
 
 class CameraServiceState:
-    """Shared state passed to aiohttp handlers via app['state']."""
+    """Owns on-demand camera runtime state for aiohttp handlers."""
 
-    def __init__(self, store: FrameStore):
+    def __init__(
+        self,
+        store: FrameStore,
+        *,
+        driver_factory: Callable[[], CameraDriver] | None = None,
+        fps: float = DEFAULT_CAPTURE_FPS,
+        idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
+        first_frame_timeout: float = FIRST_FRAME_TIMEOUT_SECONDS,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ):
         self.store = store
         self.camera_ok: bool = False
         self.error: str | None = None
+        self.active_streams = 0
+
+        self._driver_factory = driver_factory
+        self._fps = fps
+        self._idle_timeout = idle_timeout
+        self.first_frame_timeout = first_frame_timeout
+        self._loop = loop
+        self._driver: CameraDriver | None = None
+        self._capture: CameraCaptureThread | None = None
+        self._idle_handle: asyncio.TimerHandle | None = None
+        self._lock = threading.Lock()
+        self._start_lock = asyncio.Lock()
+
+    async def ensure_started(self) -> bool:
+        """Start the camera if this service owns a driver and it is idle."""
+        async with self._start_lock:
+            self._cancel_idle_stop()
+            with self._lock:
+                if self._capture is not None:
+                    return True
+                if self._driver_factory is None:
+                    return self.camera_ok or self.store.latest() is not None
+
+            driver = self._driver_factory()
+            try:
+                driver.start()
+            except CameraUnavailable as exc:
+                log.error("camera unavailable: %s", exc)
+                with self._lock:
+                    self.camera_ok = False
+                    self.error = str(exc)
+                return False
+
+            capture = CameraCaptureThread(driver, self.store, self._fps)
+            self.store.clear()
+            capture.start()
+            with self._lock:
+                self._driver = driver
+                self._capture = capture
+                self.camera_ok = True
+                self.error = None
+            log.info("camera started")
+            return True
+
+    def acquire_stream(self) -> None:
+        self._cancel_idle_stop()
+        with self._lock:
+            self.active_streams += 1
+
+    def release_stream(self) -> None:
+        with self._lock:
+            self.active_streams -= 1
+            active_streams = self.active_streams
+        if active_streams == 0:
+            self.schedule_idle_stop()
+
+    def schedule_idle_stop(self) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+        self._cancel_idle_stop()
+        if self._idle_timeout <= 0:
+            self.stop_camera()
+            return
+        self._idle_handle = loop.call_later(self._idle_timeout, self.stop_camera)
+
+    def stop_camera(self, *, force: bool = False) -> None:
+        with self._lock:
+            if self.active_streams > 0 and not force:
+                return
+            capture = self._capture
+            driver = self._driver
+            self._capture = None
+            self._driver = None
+            self.camera_ok = False
+            self._idle_handle = None
+        if capture is not None:
+            capture.stop()
+        if driver is not None:
+            driver.stop()
+        self.store.clear()
+        if capture is not None or driver is not None:
+            log.info("camera stopped after idle timeout")
+
+    def _cancel_idle_stop(self) -> None:
+        handle = self._idle_handle
+        if handle is not None:
+            handle.cancel()
+            self._idle_handle = None
 
 
 async def health_handler(request: web.Request) -> web.Response:
     state: CameraServiceState = request.app["state"]
-    if not state.camera_ok:
+    if state.error is not None:
         return web.json_response(
             {"status": "unavailable", "error": state.error},
             status=503,
         )
     return web.json_response(
-        {"status": "ok", "has_frame": state.store.latest() is not None}
+        {
+            "status": "ok" if state.camera_ok else "idle",
+            "has_frame": state.store.latest() is not None,
+            "active_streams": state.active_streams,
+        }
     )
+
+
+async def wait_for_frame(state: CameraServiceState) -> bytes | None:
+    latest = state.store.latest()
+    if latest is not None:
+        return latest
+    try:
+        return await asyncio.wait_for(
+            state.store.wait_for_next(),
+            timeout=state.first_frame_timeout,
+        )
+    except TimeoutError:
+        return None
 
 
 async def snapshot_handler(request: web.Request) -> web.Response:
     state: CameraServiceState = request.app["state"]
-    jpeg = state.store.latest()
+    if not await state.ensure_started():
+        return web.Response(status=503, text=f"camera unavailable: {state.error}\n")
+    jpeg = await wait_for_frame(state)
+    state.schedule_idle_stop()
     if jpeg is None:
         return web.Response(status=503, text="no frame yet\n")
     return web.Response(
@@ -151,26 +276,34 @@ async def snapshot_handler(request: web.Request) -> web.Response:
 
 async def stream_handler(request: web.Request) -> web.StreamResponse:
     state: CameraServiceState = request.app["state"]
-    if state.store.latest() is None:
-        return web.Response(status=503, text="no frame yet\n")
+    state.acquire_stream()
+    try:
+        if not await state.ensure_started():
+            return web.Response(status=503, text=f"camera unavailable: {state.error}\n")
+        first_frame = await wait_for_frame(state)
+        if first_frame is None:
+            return web.Response(status=503, text="no frame yet\n")
 
-    response = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
-            "Cache-Control": "no-store, private",
-            "Pragma": "no-cache",
-        },
-    )
-    await response.prepare(request)
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": f"multipart/x-mixed-replace; boundary={MJPEG_BOUNDARY}",
+                "Cache-Control": "no-store, private",
+                "Pragma": "no-cache",
+            },
+        )
+        await response.prepare(request)
 
-    while True:
-        jpeg = await state.store.wait_for_next()
         try:
-            await response.write(mjpeg_part(jpeg))
+            await response.write(mjpeg_part(first_frame))
+            while True:
+                jpeg = await state.store.wait_for_next()
+                await response.write(mjpeg_part(jpeg))
         except (ConnectionResetError, ConnectionError):
-            break
-    return response
+            pass
+        return response
+    finally:
+        state.release_stream()
 
 
 def build_app(state: CameraServiceState) -> web.Application:
@@ -185,29 +318,16 @@ def build_app(state: CameraServiceState) -> web.Application:
 async def run_service(args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     store = FrameStore(loop)
-    state = CameraServiceState(store)
-
-    driver = CameraDriver(
-        size=(args.width, args.height),
-        jpeg_quality=args.quality,
+    state = CameraServiceState(
+        store,
+        driver_factory=lambda: CameraDriver(
+            size=(args.width, args.height),
+            jpeg_quality=args.quality,
+        ),
+        fps=args.fps,
+        idle_timeout=args.idle_timeout,
+        loop=loop,
     )
-    capture: CameraCaptureThread | None = None
-    try:
-        driver.start()
-    except CameraUnavailable as exc:
-        log.error("camera unavailable: %s", exc)
-        state.error = str(exc)
-    else:
-        state.camera_ok = True
-        capture = CameraCaptureThread(driver, store, args.fps)
-        capture.start()
-        log.info(
-            "camera started size=%dx%d fps=%.1f quality=%d",
-            args.width,
-            args.height,
-            args.fps,
-            args.quality,
-        )
 
     app = build_app(state)
     runner = web.AppRunner(app)
@@ -215,15 +335,20 @@ async def run_service(args: argparse.Namespace) -> None:
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()
     log.info("camera service listening on %s:%d", args.host, args.port)
+    log.info(
+        "camera idle start enabled size=%dx%d fps=%.1f quality=%d idle_timeout=%.1fs",
+        args.width,
+        args.height,
+        args.fps,
+        args.quality,
+        args.idle_timeout,
+    )
 
     try:
         await asyncio.Future()
     finally:
         await runner.cleanup()
-        if capture is not None:
-            capture.stop()
-        if state.camera_ok:
-            driver.stop()
+        state.stop_camera(force=True)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -234,6 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=DEFAULT_CAMERA_HEIGHT)
     parser.add_argument("--fps", type=float, default=DEFAULT_CAPTURE_FPS)
     parser.add_argument("--quality", type=int, default=DEFAULT_JPEG_QUALITY)
+    parser.add_argument("--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT_SECONDS)
     return parser
 
 

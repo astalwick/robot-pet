@@ -84,7 +84,12 @@ class FormatSseEventTest(unittest.TestCase):
 class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = SnapshotStore(asyncio.get_running_loop())
-        self.state = WebDashboardState(self.store, STATIC_DIR)
+        self.state = WebDashboardState(
+            asyncio.get_running_loop(),
+            self.store,
+            STATIC_DIR,
+            "/tmp/test-robot-pet-teleop.json",
+        )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
 

@@ -22,7 +22,7 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-echo "[1/5] Fetching latest changes..."
+echo "[1/6] Fetching latest changes..."
 git fetch --prune
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -34,7 +34,7 @@ base_rev="$(git merge-base "$branch" "$upstream")"
 if [[ "$local_rev" == "$upstream_rev" ]]; then
   echo "Already up to date on $branch."
 elif [[ "$local_rev" == "$base_rev" ]]; then
-  echo "[2/5] Fast-forwarding $branch from $upstream..."
+  echo "[2/6] Fast-forwarding $branch from $upstream..."
   git merge --ff-only "$upstream"
 else
   echo "Refusing to redeploy: $branch has diverged from $upstream."
@@ -42,16 +42,19 @@ else
   exit 1
 fi
 
-echo "[3/5] Installing Python package metadata and dependencies..."
+echo "[3/6] Installing Python package metadata and dependencies..."
 "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
 
-echo "[4/5] Installing and reloading systemd units..."
+echo "[4/6] Running tests..."
+"$REPO_DIR/.venv/bin/python" -m unittest discover tests
+
+echo "[5/6] Installing and reloading systemd units..."
 for service in "${SERVICES[@]}"; do
   sudo install -m 0644 "$REPO_DIR/systemd/$service" "/etc/systemd/system/$service"
 done
 sudo systemctl daemon-reload
 
-echo "[5/5] Restarting robot services..."
+echo "[6/6] Restarting robot services..."
 for service in "${SERVICES[@]}"; do
   echo "restarting $service"
   sudo systemctl restart "$service"

@@ -42,6 +42,8 @@ class TeleopConfig:
     retry_interval: float = 1.0
     telemetry_interval: float = 0.2
     idle_release_delay: float = 0.25
+    controller_timeout: float = 0.5
+    roboclaw_timeout: float = 0.5
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
 
 
@@ -150,6 +152,12 @@ class GamepadTeleopRunner:
             else:
                 self._reset_slew()
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
+            input_age = controller.input_age(now)
+            input_stale = input_age is not None and input_age >= self.config.controller_timeout
+            if input_stale and (closed_loop_active or not target_is_zero):
+                log.error("controller input stale for %.3fs; stopping motors", input_age)
+                self._safe_zero_speed(motor)
+                break
 
             if target_is_zero:
                 if closed_loop_active:
@@ -311,6 +319,7 @@ class GamepadTeleopRunner:
             port=self.config.port,
             address=self.config.address,
             baud=self.config.baud,
+            serial_timeout=self.config.roboclaw_timeout,
         )
 
 
@@ -332,6 +341,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-interval", type=float, default=1.0, help="Hardware reconnect retry interval in seconds")
     parser.add_argument("--telemetry-interval", type=float, default=0.2, help="Telemetry publish interval in seconds")
     parser.add_argument("--idle-release-delay", type=float, default=0.25, help="Seconds after stopping before releasing to zero duty")
+    parser.add_argument("--controller-timeout", type=float, default=0.5, help="Seconds of stale active controller input before stopping")
+    parser.add_argument("--roboclaw-timeout", type=float, default=0.5, help="RoboClaw serial watchdog timeout in seconds")
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET, help="Telemetry hub publisher socket")
     return parser
 
@@ -368,6 +379,8 @@ def main():
         retry_interval=args.retry_interval,
         telemetry_interval=args.telemetry_interval,
         idle_release_delay=args.idle_release_delay,
+        controller_timeout=args.controller_timeout,
+        roboclaw_timeout=args.roboclaw_timeout,
         telemetry_socket=args.telemetry_socket,
     )
     runner = GamepadTeleopRunner(config)

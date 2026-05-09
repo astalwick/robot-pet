@@ -19,12 +19,16 @@ class FakeController:
         self.connects = connects
         self.on_disconnect = None
         self.cleaned_up = False
+        self.input_age_seconds = 0.0
 
     def connect(self):
         return self.connects
 
     def start(self, on_disconnect=None):
         self.on_disconnect = on_disconnect
+
+    def input_age(self, now=None):
+        return self.input_age_seconds
 
     def cleanup(self):
         self.cleaned_up = True
@@ -176,6 +180,26 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         runner._run_connected(controller, motor)
 
+        self.assertEqual(motor.commands[-1], (0, 0))
+
+    def test_stale_active_controller_input_sends_zero_speed(self):
+        state = controller_state(left_stick_y=0.0, right_stick_x=1.0, rb=True, lb=False)
+        controller = FakeController(state)
+        motor = FakeMotor()
+        sleeps = 0
+
+        def sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            controller.input_age_seconds = 0.6
+            if sleeps > 2:
+                runner.request_stop()
+
+        runner = GamepadTeleopRunner(fast_config(controller_timeout=0.5), sleep=sleep)
+
+        runner._run_connected(controller, motor)
+
+        self.assertIn((250, -250), motor.commands)
         self.assertEqual(motor.commands[-1], (0, 0))
 
     def test_failed_speed_command_sends_zero_speed(self):

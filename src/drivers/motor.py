@@ -43,6 +43,7 @@ class MotorDriver:
         port: str = "/dev/serial0",
         address: int = 0x80,
         baud: int = 38400,
+        serial_timeout: float = 0.5,
         controller_factory: Callable[[str, int], Any] | None = None,
     ):
         """
@@ -54,6 +55,7 @@ class MotorDriver:
             baud: Baud rate (default 38400)
         """
         self.address = address
+        self.serial_timeout = serial_timeout
         if controller_factory is None:
             from basicmicro import Basicmicro
 
@@ -67,6 +69,9 @@ class MotorDriver:
             self.controller.close()
             raise RuntimeError("RoboClaw did not respond to ReadVersion.")
         self.version = format_version(result[1])
+        if not self.controller.SetTimeout(self.address, self.serial_timeout):
+            self.controller.close()
+            raise RuntimeError("RoboClaw serial timeout was not acknowledged.")
         
         # Stop motors on init
         self.stop()

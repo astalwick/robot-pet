@@ -24,6 +24,10 @@ class FakeRoboClaw:
         self.calls.append(("ReadVersion", address))
         return True, b"fake"
 
+    def SetTimeout(self, address, timeout):
+        self.calls.append(("SetTimeout", address, timeout))
+        return True
+
     def DutyM1(self, address, duty):
         self.calls.append(("DutyM1", address, duty))
 
@@ -63,6 +67,12 @@ class TimeoutRoboClaw(FakeRoboClaw):
     def DutyM1(self, address, duty):
         self.calls.append(("DutyM1", address, duty))
         raise PacketTimeoutError("timed out")
+
+
+class TimeoutConfigRoboClaw(FakeRoboClaw):
+    def SetTimeout(self, address, timeout):
+        self.calls.append(("SetTimeout", address, timeout))
+        return False
 
 
 class MotorDriverTest(unittest.TestCase):
@@ -105,6 +115,21 @@ class MotorDriverTest(unittest.TestCase):
 
         self.assertIn(("DutyM1", 0x80, 0), fake.calls)
         self.assertIn(("DutyM2", 0x80, 0), fake.calls)
+
+    def test_configures_roboclaw_serial_timeout_on_init(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+
+        MotorDriver(serial_timeout=0.7, controller_factory=lambda port, baud: fake)
+
+        self.assertIn(("SetTimeout", 0x80, 0.7), fake.calls)
+
+    def test_init_fails_when_serial_timeout_is_not_acknowledged(self):
+        fake = TimeoutConfigRoboClaw("/dev/fake", 38400)
+
+        with self.assertRaises(RuntimeError):
+            MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertIn(("close",), fake.calls)
 
     def test_set_wheel_speeds_returns_false_on_roboclaw_timeout(self):
         fake = TimeoutRoboClaw("/dev/fake", 38400)

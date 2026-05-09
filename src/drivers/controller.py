@@ -8,6 +8,7 @@ The controller shows up as /dev/input/eventX - this driver finds it automaticall
 """
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -113,7 +114,12 @@ class ControllerDriver:
     BTN_LEFT_STICK = ecodes.BTN_THUMBL
     BTN_RIGHT_STICK = ecodes.BTN_THUMBR
     
-    def __init__(self, deadzone: float = 0.1, device_path: str | None = None):
+    def __init__(
+        self,
+        deadzone: float = 0.1,
+        device_path: str | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         """
         Initialize the controller driver.
         
@@ -122,8 +128,10 @@ class ControllerDriver:
         """
         self.deadzone = deadzone
         self.device_path = device_path
+        self.clock = clock
         self.state = ControllerState()
         self.device: InputDevice | None = None
+        self.last_event_at: float | None = None
         self._running = False
         self._thread: threading.Thread | None = None
         self._on_disconnect: Callable[[], None] | None = None
@@ -174,7 +182,13 @@ class ControllerDriver:
             return False
 
         self.state = ControllerState()
+        self.last_event_at = self.clock()
         return True
+
+    def input_age(self, now: float | None = None) -> float | None:
+        if self.last_event_at is None:
+            return None
+        return (now if now is not None else self.clock()) - self.last_event_at
     
     def start(self, on_disconnect: Callable[[], None] | None = None):
         """
@@ -220,6 +234,8 @@ class ControllerDriver:
             for event in self.device.read_loop():
                 if not self._running:
                     break
+
+                self.last_event_at = self.clock()
                 
                 if event.type == ecodes.EV_ABS:
                     self._handle_axis(event.code, event.value)

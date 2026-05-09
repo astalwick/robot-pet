@@ -8,7 +8,6 @@ The controller shows up as /dev/input/eventX - this driver finds it automaticall
 """
 
 import threading
-import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -114,12 +113,7 @@ class ControllerDriver:
     BTN_LEFT_STICK = ecodes.BTN_THUMBL
     BTN_RIGHT_STICK = ecodes.BTN_THUMBR
     
-    def __init__(
-        self,
-        deadzone: float = 0.1,
-        device_path: str | None = None,
-        clock: Callable[[], float] = time.monotonic,
-    ):
+    def __init__(self, deadzone: float = 0.1, device_path: str | None = None):
         """
         Initialize the controller driver.
         
@@ -128,13 +122,12 @@ class ControllerDriver:
         """
         self.deadzone = deadzone
         self.device_path = device_path
-        self.clock = clock
         self.state = ControllerState()
         self.device: InputDevice | None = None
-        self.last_event_at: float | None = None
         self._running = False
         self._thread: threading.Thread | None = None
         self._on_disconnect: Callable[[], None] | None = None
+        self.disconnect_reason: str | None = None
     
     def find_controller(self) -> str | None:
         """Find an Xbox 360 controller device path."""
@@ -182,13 +175,7 @@ class ControllerDriver:
             return False
 
         self.state = ControllerState()
-        self.last_event_at = self.clock()
         return True
-
-    def input_age(self, now: float | None = None) -> float | None:
-        if self.last_event_at is None:
-            return None
-        return (now if now is not None else self.clock()) - self.last_event_at
     
     def start(self, on_disconnect: Callable[[], None] | None = None):
         """
@@ -202,8 +189,12 @@ class ControllerDriver:
         
         self._on_disconnect = on_disconnect
         self._running = True
+        self.disconnect_reason = None
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
+
+    def reader_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
     
     def stop(self):
         """Stop reading controller input."""
@@ -234,17 +225,25 @@ class ControllerDriver:
             for event in self.device.read_loop():
                 if not self._running:
                     break
-
-                self.last_event_at = self.clock()
                 
                 if event.type == ecodes.EV_ABS:
                     self._handle_axis(event.code, event.value)
                 elif event.type == ecodes.EV_KEY:
                     self._handle_button(event.code, event.value)
-        except OSError:
-            # Controller disconnected
-            if self._on_disconnect:
-                self._on_disconnect()
+        except OSError as exc:
+            if self._running:
+                self._notify_disconnect(f"controller input read failed: {exc}")
+        except Exception as exc:
+            if self._running:
+                self._notify_disconnect(f"controller input reader crashed: {exc}")
+        else:
+            if self._running:
+                self._notify_disconnect("controller input reader exited")
+
+    def _notify_disconnect(self, reason: str):
+        self.disconnect_reason = reason
+        if self._on_disconnect:
+            self._on_disconnect()
     
     def _handle_axis(self, code: int, value: int):
         """Handle axis (stick/trigger/dpad) event."""

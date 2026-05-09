@@ -19,7 +19,8 @@ class FakeController:
         self.connects = connects
         self.on_disconnect = None
         self.cleaned_up = False
-        self.input_age_seconds = 0.0
+        self.reader_is_alive = True
+        self.disconnect_reason = None
 
     def connect(self):
         return self.connects
@@ -27,8 +28,8 @@ class FakeController:
     def start(self, on_disconnect=None):
         self.on_disconnect = on_disconnect
 
-    def input_age(self, now=None):
-        return self.input_age_seconds
+    def reader_alive(self):
+        return self.reader_is_alive
 
     def cleanup(self):
         self.cleaned_up = True
@@ -182,7 +183,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         self.assertEqual(motor.commands[-1], (0, 0))
 
-    def test_stale_active_controller_input_sends_zero_speed(self):
+    def test_dead_controller_reader_sends_zero_speed(self):
         state = controller_state(left_stick_y=0.0, right_stick_x=1.0, rb=True, lb=False)
         controller = FakeController(state)
         motor = FakeMotor()
@@ -191,11 +192,12 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         def sleep(_seconds):
             nonlocal sleeps
             sleeps += 1
-            controller.input_age_seconds = 0.6
+            controller.reader_is_alive = False
+            controller.disconnect_reason = "controller input reader crashed: fake"
             if sleeps > 2:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(fast_config(controller_timeout=0.5), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
 
         runner._run_connected(controller, motor)
 

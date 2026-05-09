@@ -99,6 +99,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_index_serves_dashboard_html(self):
         async with self.client.get("/") as resp:
             self.assertEqual(resp.status, 200)
+            self.assertIn("no-store", resp.headers["Cache-Control"])
             body = await resp.text()
 
         self.assertIn("Robo-Pet Dashboard", body)
@@ -108,6 +109,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_static_dashboard_js_is_served(self):
         async with self.client.get("/static/dashboard.js") as resp:
             self.assertEqual(resp.status, 200)
+            self.assertIn("no-store", resp.headers["Cache-Control"])
             body = await resp.text()
 
         self.assertIn("EventSource", body)

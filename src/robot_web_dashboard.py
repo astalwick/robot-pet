@@ -68,6 +68,12 @@ TUNING_FIELDS = (
     ("qpps_slew_limit", "QPPS slew", "encoder counts/sec/sec"),
 )
 
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 
 log = setup_logging("robot-web-dashboard")
 
@@ -177,6 +183,13 @@ def format_sse_event(snapshot: dict[str, Any]) -> bytes:
 def format_sse_json_event(payload: dict[str, Any]) -> bytes:
     data = json.dumps(payload, separators=(",", ":"))
     return f"data: {data}\n\n".encode("utf-8")
+
+
+@web.middleware
+async def no_cache_middleware(request: web.Request, handler: Callable[[web.Request], Any]) -> web.StreamResponse:
+    response = await handler(request)
+    response.headers.update(NO_CACHE_HEADERS)
+    return response
 
 
 def stream_command_output(
@@ -483,7 +496,7 @@ async def drive_config_apply_handler(request: web.Request) -> web.Response:
 
 
 def build_app(state: WebDashboardState) -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[no_cache_middleware])
     app["state"] = state
     app.router.add_get("/", index_handler)
     app.router.add_get("/events", events_handler)

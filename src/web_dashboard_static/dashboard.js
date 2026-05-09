@@ -18,18 +18,39 @@
   let redeployArmedUntil = 0;
   let redeployRunning = false;
   let logsPaused = false;
+  let cameraRetry = null;
 
   // Build the camera URL from the page hostname so a remote browser
   // (e.g. MacBook) loads MJPEG from the Pi, not from its own loopback.
-  document.getElementById('camera-stream').src = `http://${window.location.hostname}:8081/stream.mjpg`;
+  setupCameraStream();
 
   const sessionStart = Date.now();
   setInterval(updateSession, 1000);
   setInterval(updateRedeployButton, 250);
+  setInterval(refreshRedeployStatus, 1000);
   updateSession();
   bindActions();
   connectTelemetry();
   connectLogs();
+
+  function setupCameraStream() {
+    const camera = document.getElementById('camera-stream');
+    camera.addEventListener('error', scheduleCameraReconnect);
+    refreshCameraStream();
+  }
+
+  function refreshCameraStream() {
+    const camera = document.getElementById('camera-stream');
+    camera.src = `http://${window.location.hostname}:8081/stream.mjpg?t=${Date.now()}`;
+  }
+
+  function scheduleCameraReconnect() {
+    if (cameraRetry != null) return;
+    cameraRetry = setTimeout(() => {
+      cameraRetry = null;
+      refreshCameraStream();
+    }, 2000);
+  }
 
   function bindActions() {
     document.getElementById('redeploy-button').addEventListener('click', onRedeploy);
@@ -297,9 +318,22 @@
     applyRedeployStatus(status);
   }
 
+  async function refreshRedeployStatus() {
+    if (!redeployRunning && Date.now() > redeployArmedUntil) return;
+    try {
+      const response = await fetch('/redeploy/status');
+      if (!response.ok) return;
+      applyRedeployStatus(await response.json());
+    } catch (err) {
+      // The web dashboard restarts during redeploy; the next poll will reconnect.
+    }
+  }
+
   function applyRedeployStatus(status) {
+    const wasRunning = redeployRunning;
     redeployRunning = status.running === true;
     redeployArmedUntil = status.armed ? Date.now() + (status.armed_seconds_remaining * 1000) : 0;
+    if (wasRunning && !redeployRunning) refreshCameraStream();
     updateRedeployButton();
   }
 

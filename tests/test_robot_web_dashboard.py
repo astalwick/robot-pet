@@ -183,6 +183,14 @@ class DashboardJsTest(unittest.TestCase):
     def test_camera_url_targets_default_camera_port(self):
         self.assertIn(":8081/stream.mjpg", self.dashboard_js)
 
+    def test_camera_stream_reconnects_after_error(self):
+        self.assertIn("camera.addEventListener('error', scheduleCameraReconnect)", self.dashboard_js)
+        self.assertIn("refreshCameraStream()", self.dashboard_js)
+
+    def test_redeploy_status_is_polled_until_cleared(self):
+        self.assertIn("setInterval(refreshRedeployStatus, 1000)", self.dashboard_js)
+        self.assertIn("fetch('/redeploy/status')", self.dashboard_js)
+
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
         self.assertIn("const min = -(2 ** 31);", self.dashboard_js)

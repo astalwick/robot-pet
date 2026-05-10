@@ -3,12 +3,12 @@ set -euo pipefail
 
 REPO_DIR="${ROBOT_PET_REPO_DIR:-$HOME/robot-pet}"
 SERVICES=(
-  robot-brain.service
-  robot-telemetry.service
-  gamepad-teleop.service
-  robot-camera.service
   robot-vision.service
+  robot-camera.service
+  robot-telemetry.service
   robot-web-dashboard.service
+  gamepad-teleop.service
+  robot-brain.service
 )
 
 echo "== Robo-Pet redeploy =="

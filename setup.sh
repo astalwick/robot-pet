@@ -194,12 +194,12 @@ do
   timeout 45 sudo systemctl enable "$service"
 done
 for service in \
-  robot-brain.service \
-  robot-telemetry.service \
-  gamepad-teleop.service \
-  robot-camera.service \
   robot-vision.service \
-  robot-web-dashboard.service
+  robot-camera.service \
+  robot-telemetry.service \
+  robot-web-dashboard.service \
+  gamepad-teleop.service \
+  robot-brain.service
 do
   echo "    restarting $service"
   timeout 45 sudo systemctl restart "$service"

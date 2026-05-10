@@ -17,7 +17,14 @@ from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
 from drivers.motor import MotorDriver
 from lib.log import setup_logging
-from telemetry.messages import controller_message, gamepad_teleop_update, link_loop_message, motor_battery_message, wheel_message
+from telemetry.messages import (
+    controller_message,
+    drive_status_message,
+    gamepad_teleop_update,
+    link_loop_message,
+    motor_battery_message,
+    wheel_message,
+)
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
@@ -82,6 +89,13 @@ class GamepadTeleopRunner:
         self.consecutive_read_failures = 0
         self.last_good_read_at: float | None = None
         self.loop_samples: deque[float] = deque(maxlen=25)
+        self.drive_state = "stopped"
+        self.stop_reason: str | None = None
+        self.consecutive_motor_command_failures = 0
+        self.last_motor_command_ack_at: float | None = None
+        self.last_motor_command_ok: bool | None = None
+        self.telemetry_publish_failures = 0
+        self.last_telemetry_publish_ok: bool | None = None
 
     def request_stop(self, *_args):
         self.stop_requested = True
@@ -102,7 +116,9 @@ class GamepadTeleopRunner:
             motor.cleanup()
 
     def _wait_for_controller(self):
+        self._set_drive_state("waiting_for_controller")
         while not self.stop_requested:
+            self._publish_status_update()
             controller = self.controller_factory()
             if controller.connect():
                 log.info("controller connected")
@@ -114,7 +130,9 @@ class GamepadTeleopRunner:
         return None
 
     def _wait_for_roboclaw(self):
+        self._set_drive_state("waiting_for_roboclaw")
         while not self.stop_requested:
+            self._publish_status_update()
             try:
                 motor = self.motor_factory()
             except Exception as exc:
@@ -122,7 +140,7 @@ class GamepadTeleopRunner:
                 self.sleep(self.config.retry_interval)
                 continue
 
-            if motor.set_wheel_speeds(0, 0):
+            if self._set_wheel_speeds(motor, 0, 0):
                 log.info("RoboClaw ready")
                 return motor
 
@@ -143,6 +161,7 @@ class GamepadTeleopRunner:
         last_stall_log_at = 0.0
         stop_reason = None
         self._reset_slew()
+        self._set_drive_state("driving")
 
         while not self.stop_requested and not disconnected.is_set():
             cycle_started = self.clock()
@@ -167,7 +186,7 @@ class GamepadTeleopRunner:
             if target_is_zero:
                 if closed_loop_active:
                     command_started = self.clock()
-                    if not motor.set_wheel_speeds(0, 0):
+                    if not self._set_wheel_speeds(motor, 0, 0, now=command_started):
                         stop_reason = "RoboClaw zero-speed command was not acknowledged"
                         log.error("%s", stop_reason)
                         break
@@ -182,7 +201,12 @@ class GamepadTeleopRunner:
                     idle_released = True
             else:
                 command_started = self.clock()
-                if not motor.set_wheel_speeds(target.left_qpps, target.right_qpps):
+                if not self._set_wheel_speeds(
+                    motor,
+                    target.left_qpps,
+                    target.right_qpps,
+                    now=command_started,
+                ):
                     stop_reason = "RoboClaw speed command was not acknowledged"
                     log.error("%s", stop_reason)
                     break
@@ -192,7 +216,14 @@ class GamepadTeleopRunner:
 
             if now >= next_telemetry:
                 telemetry_started = self.clock()
-                self._publish_telemetry(controller.state, wheels, target, motor, motor_max_qpps)
+                self._publish_telemetry(
+                    controller.state,
+                    wheels,
+                    target,
+                    motor,
+                    motor_max_qpps,
+                    controller_reader_alive=controller.reader_alive(),
+                )
                 telemetry_elapsed = self.clock() - telemetry_started
                 if telemetry_elapsed > SLOW_TELEMETRY_WARNING_SECONDS:
                     log.warning("telemetry update took %.3fs", telemetry_elapsed)
@@ -215,13 +246,20 @@ class GamepadTeleopRunner:
 
             self.sleep(self.config.loop_interval)
 
-        motor.set_wheel_speeds(0, 0)
+        self._set_wheel_speeds(motor, 0, 0, record=False)
         self._reset_slew()
         if disconnected.is_set():
             reason = controller.disconnect_reason or "controller disconnected"
+            self._set_drive_state("controller_lost", reason)
             log.warning("%s; waiting for reconnect", reason)
+            self._publish_status_update(controller_reader_alive=False)
         elif stop_reason is not None:
+            self._set_drive_state("motor_command_failed", stop_reason)
             log.warning("%s; waiting for reconnect", stop_reason)
+            self._publish_status_update(controller_reader_alive=controller.reader_alive())
+        else:
+            self._set_drive_state("stopped")
+            self._publish_status_update(controller_reader_alive=controller.reader_alive())
 
     def _reset_slew(self):
         self.last_target = WheelSpeedCommand(0, 0)
@@ -261,7 +299,69 @@ class GamepadTeleopRunner:
     def _release_idle(self, motor):
         motor.stop()
 
-    def _publish_telemetry(self, state, wheels, target, motor, motor_max_qpps):
+    def _set_drive_state(self, state: str, reason: str | None = None):
+        if state != self.drive_state or reason != self.stop_reason:
+            log.info("drive state old=%s new=%s reason=%s", self.drive_state, state, reason or "")
+        self.drive_state = state
+        self.stop_reason = reason
+
+    def _set_wheel_speeds(
+        self,
+        motor,
+        left_qpps: int,
+        right_qpps: int,
+        now: float | None = None,
+        record: bool = True,
+    ) -> bool:
+        ok = motor.set_wheel_speeds(left_qpps, right_qpps)
+        if record:
+            self._record_motor_command_result(ok, self.clock() if now is None else now)
+        return ok
+
+    def _record_motor_command_result(self, ok: bool, now: float):
+        self.last_motor_command_ok = ok
+        if ok:
+            self.consecutive_motor_command_failures = 0
+            self.last_motor_command_ack_at = now
+        else:
+            self.consecutive_motor_command_failures += 1
+
+    def _last_motor_command_ack_age(self, now: float) -> float | None:
+        if self.last_motor_command_ack_at is None:
+            return None
+        return max(0.0, now - self.last_motor_command_ack_at)
+
+    def _drive_status_payload(self, controller_reader_alive: bool | None = None) -> dict[str, Any]:
+        now = self.clock()
+        return drive_status_message(
+            state=self.drive_state,
+            stop_reason=self.stop_reason,
+            controller_reader_alive=controller_reader_alive,
+            motor_command_ok=self.last_motor_command_ok,
+            consecutive_motor_command_failures=self.consecutive_motor_command_failures,
+            last_motor_command_ack_age_seconds=self._last_motor_command_ack_age(now),
+            telemetry_publish_failures=self.telemetry_publish_failures,
+            last_telemetry_publish_ok=self.last_telemetry_publish_ok,
+        )
+
+    def _publish_status_update(self, controller_reader_alive: bool | None = None):
+        message = gamepad_teleop_update(
+            controller={"connected": False},
+            wheels={"read_ok": False},
+            motor_battery=motor_battery_message(None),
+            link_loop=link_loop_message(
+                read_success_rate=self._read_success_rate(),
+                consecutive_read_failures=self.consecutive_read_failures,
+                last_good_read_age_seconds=None,
+                telemetry_latency_ms=None,
+                command_loop_hz=self._command_loop_hz(),
+            ),
+            drive_tuning=self.config.drive_tuning.to_dict(),
+            drive_status=self._drive_status_payload(controller_reader_alive=controller_reader_alive),
+        )
+        self._publish_message(message)
+
+    def _publish_telemetry(self, state, wheels, target, motor, motor_max_qpps, controller_reader_alive: bool):
         now = self.clock()
         left_actual = None
         right_actual = None
@@ -310,11 +410,19 @@ class GamepadTeleopRunner:
                 command_loop_hz=self._command_loop_hz(),
             ),
             drive_tuning=self.config.drive_tuning.to_dict(),
+            drive_status=self._drive_status_payload(controller_reader_alive=controller_reader_alive),
         )
+        self._publish_message(message)
+
+    def _publish_message(self, message: dict[str, Any]):
         try:
-            self.telemetry_publisher(self.config.telemetry_socket, message)
+            published = self.telemetry_publisher(self.config.telemetry_socket, message)
         except Exception as exc:
             log.warning("telemetry publish failed: %s", exc)
+            published = False
+        self.last_telemetry_publish_ok = bool(published)
+        if not published:
+            self.telemetry_publish_failures += 1
 
     def _record_read_result(self, read_ok: bool, now: float):
         self.read_results.append(read_ok)

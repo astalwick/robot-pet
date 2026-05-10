@@ -618,6 +618,7 @@ class RobotDashboard(App):
         wheels = snapshot.get("wheels") or {}
         battery = snapshot.get("motor_battery") or {}
         link_loop = snapshot.get("link_loop") or {}
+        drive_status_payload = snapshot.get("drive_status") or {}
         drive_tuning = snapshot.get("drive_tuning")
         if drive_tuning is not None:
             self.active_drive_tuning = DriveTuning.from_dict(drive_tuning)
@@ -628,6 +629,7 @@ class RobotDashboard(App):
             wheels = {}
             battery = {"status": "stale"}
             link_loop = {"status": "stale"}
+            drive_status_payload = {"state": "stale"}
 
         hud = self.query_one("#hud-header", Static)
         hud.update(self._hud_banner(snapshot, sources, gamepad_status, system_status, controller, wheels, battery))
@@ -636,7 +638,7 @@ class RobotDashboard(App):
         self._render_battery(battery)
         self._render_controller(controller)
         self._render_wheels(wheels)
-        self._render_link_loop(link_loop)
+        self._render_link_loop(link_loop, drive_status_payload)
 
     def _source_label(self, source: dict[str, Any]) -> str:
         return "stale" if source.get("stale", True) else "live"
@@ -983,7 +985,8 @@ class RobotDashboard(App):
 
         self.query_one("#wheels-panel", Static).update(Text.from_markup("\n".join(lines)))
 
-    def _render_link_loop(self, link_loop: dict[str, Any]):
+    def _render_link_loop(self, link_loop: dict[str, Any], drive_status: dict[str, Any] | None = None):
+        drive_status = drive_status or {}
         status = self._link_loop_status(link_loop)
         if status == "live":
             status_glyph = GLYPH_OK
@@ -1015,10 +1018,38 @@ class RobotDashboard(App):
         loop_hz = link_loop.get("command_loop_hz")
         loop_text = f"{loop_hz:.1f} Hz" if loop_hz is not None else "--"
         loop_bar = cell_bar(loop_hz, limit=20.0, width=10, absolute=False) if loop_hz is not None else " " * 10
+        motor_failures = drive_status.get("consecutive_motor_command_failures")
+        motor_ok = drive_status.get("motor_command_ok")
+        publish_failures = drive_status.get("telemetry_publish_failures")
+        publish_ok = drive_status.get("last_telemetry_publish_ok")
 
         GW, VW = 10, 11
         lines = [
             f"[bold cyan]{GLYPH_LINK} LINK / LOOP HEALTH[/]  [{status_color}]{status_glyph} {status_text}[/]",
+            self._row("drive", "", str(drive_status.get("state") or "--"), gauge_w=GW, value_w=VW),
+            self._row(
+                "motor cmd",
+                "",
+                "ok" if motor_ok else ("fail" if motor_ok is False else "--"),
+                gauge_w=GW,
+                value_w=VW,
+                value_style="green" if motor_ok else ("red" if motor_ok is False else ""),
+            ),
+            self._row(
+                "cmd ack",
+                "",
+                fmt_relative_seconds(drive_status.get("last_motor_command_ack_age_seconds")),
+                gauge_w=GW,
+                value_w=VW,
+            ),
+            self._row(
+                "cmd fails",
+                cell_bar(motor_failures, limit=5, width=GW, absolute=False) if motor_failures else " " * GW,
+                "none" if motor_failures == 0 else (f"{motor_failures} streak" if motor_failures is not None else "--"),
+                gauge_w=GW,
+                value_w=VW,
+                value_style="red" if motor_failures else "",
+            ),
             self._row(
                 "roboclaw",
                 success_bar,
@@ -1044,6 +1075,22 @@ class RobotDashboard(App):
             ),
             self._row("latency", latency_bar, latency_text, gauge_w=GW, value_w=VW),
             self._row("drive loop", loop_bar, loop_text, gauge_w=GW, value_w=VW),
+            self._row(
+                "pub drops",
+                "",
+                str(publish_failures if publish_failures is not None else "--"),
+                gauge_w=GW,
+                value_w=VW,
+                value_style="yellow" if publish_failures else "",
+            ),
+            self._row(
+                "last pub",
+                "",
+                "ok" if publish_ok else ("fail" if publish_ok is False else "--"),
+                gauge_w=GW,
+                value_w=VW,
+                value_style="green" if publish_ok else ("yellow" if publish_ok is False else ""),
+            ),
         ]
         self.query_one("#link-panel", Static).update(Text.from_markup("\n".join(lines)))
 

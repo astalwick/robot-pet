@@ -348,6 +348,12 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertEqual(message["link_loop"]["consecutive_read_failures"], 0)
         self.assertIsNotNone(message["link_loop"]["telemetry_latency_ms"])
         self.assertIsNotNone(message["link_loop"]["command_loop_hz"])
+        self.assertEqual(message["drive_status"]["state"], "driving")
+        self.assertTrue(message["drive_status"]["controller_reader_alive"])
+        self.assertTrue(message["drive_status"]["motor_command_ok"])
+        self.assertEqual(message["drive_status"]["consecutive_motor_command_failures"], 0)
+        self.assertIsNotNone(message["drive_status"]["last_motor_command_ack_age_seconds"])
+        self.assertEqual(message["drive_status"]["telemetry_publish_failures"], 0)
         self.assertEqual(message["drive_tuning"]["speed_scale"], 0.25)
 
     def test_optional_telemetry_read_failure_does_not_stop_driving(self):
@@ -380,6 +386,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertIsNone(published[0]["motor_battery"]["pack_voltage"])
         self.assertEqual(published[0]["link_loop"]["read_success_rate"], 0.0)
         self.assertEqual(published[0]["link_loop"]["consecutive_read_failures"], 1)
+        self.assertTrue(published[0]["drive_status"]["motor_command_ok"])
 
     def test_telemetry_publish_failure_does_not_stop_driving(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
@@ -412,6 +419,60 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         runner._run_connected(controller, motor)
 
         self.assertGreaterEqual(motor.commands.count((250, 250)), 2)
+
+    def test_telemetry_publish_false_is_counted_in_next_status(self):
+        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
+        controller = FakeController(state)
+        motor = FakeMotor()
+        current_time = 0.0
+        published = []
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.2
+            if len(published) >= 1:
+                runner.request_stop()
+
+        def publish(_socket_path, message):
+            published.append(message)
+            return len(published) > 1
+
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=publish,
+        )
+
+        runner._run_connected(controller, motor)
+
+        self.assertGreaterEqual(len(published), 2)
+        self.assertEqual(published[-1]["drive_status"]["telemetry_publish_failures"], 1)
+        self.assertFalse(published[-1]["drive_status"]["last_telemetry_publish_ok"])
+
+    def test_motor_command_failure_publishes_drive_status(self):
+        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
+        controller = FakeController(state)
+        motor = FakeMotor(fail_nonzero=True)
+        published = []
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            sleep=lambda _seconds: None,
+            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+        )
+
+        runner._run_connected(controller, motor)
+
+        self.assertEqual(published[-1]["drive_status"]["state"], "motor_command_failed")
+        self.assertEqual(
+            published[-1]["drive_status"]["stop_reason"],
+            "RoboClaw speed command was not acknowledged",
+        )
+        self.assertFalse(published[-1]["drive_status"]["motor_command_ok"])
+        self.assertEqual(published[-1]["drive_status"]["consecutive_motor_command_failures"], 1)
 
 
 if __name__ == "__main__":

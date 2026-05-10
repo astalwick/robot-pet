@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from telemetry.messages import (
     controller_message,
     decode_json_line,
+    drive_status_message,
     encode_json_line,
     link_loop_message,
     motor_battery_message,
@@ -88,6 +89,18 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["last_good_read_age_seconds"], 0.4)
         self.assertEqual(message["telemetry_latency_ms"], 8.5)
         self.assertEqual(message["command_loop_hz"], 20.0)
+
+    def test_drive_status_message_includes_command_and_publish_health(self):
+        message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False)
+
+        self.assertEqual(message["state"], "driving")
+        self.assertIsNone(message["stop_reason"])
+        self.assertTrue(message["controller_reader_alive"])
+        self.assertTrue(message["motor_command_ok"])
+        self.assertEqual(message["consecutive_motor_command_failures"], 0)
+        self.assertEqual(message["last_motor_command_ack_age_seconds"], 0.2)
+        self.assertEqual(message["telemetry_publish_failures"], 1)
+        self.assertFalse(message["last_telemetry_publish_ok"])
 
 
 class SocketClientTest(unittest.TestCase):

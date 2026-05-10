@@ -113,14 +113,15 @@
     const wheels = gamepadLive ? (snapshot.wheels || {}) : {};
     const battery = gamepadLive ? (snapshot.motor_battery || {}) : { status: 'stale' };
     const linkLoop = gamepadLive ? (snapshot.link_loop || {}) : { status: 'stale' };
+    const driveStatusPayload = gamepadLive ? (snapshot.drive_status || {}) : { state: 'stale' };
     const pi = snapshot.pi || {};
 
-    renderHud(gamepadStale, systemStale, controller, wheels, battery, pi);
+    renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
     renderPi(pi);
     renderBattery(battery);
     renderController(controller);
     renderWheels(wheels);
-    renderLink(linkLoop);
+    renderLink(linkLoop, driveStatusPayload);
     setTelemetryStatus(gamepadStale ? 'stale' : 'live', gamepadStale ? 'warn' : 'ok');
   }
 
@@ -149,8 +150,8 @@
     if (history[key].length > HISTORY_LENGTH) history[key].shift();
   }
 
-  function renderHud(gamepadStale, systemStale, controller, wheels, battery, pi) {
-    const status = driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi);
+  function renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
+    const status = driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
     const driveEl = document.getElementById('drive-status');
     driveEl.textContent = status.label.toUpperCase();
     driveEl.className = `value ${status.cls}`;
@@ -161,11 +162,14 @@
     voltageEl.className = `value ${batteryClass(battery.status)}`;
   }
 
-  function driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi) {
+  function driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
     const batteryStatus = battery.status || 'unknown';
     const throttled = pi.throttled_flags;
+    const state = driveStatusPayload.state;
 
     if (gamepadStale) return { label: 'hold', cls: 'err' };
+    if (state === 'motor_command_failed' || state === 'controller_lost') return { label: 'hold', cls: 'err' };
+    if (state === 'waiting_for_controller' || state === 'waiting_for_roboclaw') return { label: state.replaceAll('_', ' '), cls: 'warn' };
     if (batteryStatus === 'critical' || batteryStatus === 'unknown') return { label: 'hold', cls: 'err' };
     if (!controller.connected) return { label: 'hold', cls: 'err' };
 
@@ -291,7 +295,7 @@
     };
   }
 
-  function renderLink(linkLoop) {
+  function renderLink(linkLoop, driveStatusPayload) {
     const status = linkStatus(linkLoop);
     const successRate = linkLoop.read_success_rate;
     const successText = successRate != null ? `${Math.round(successRate * 100)}% ok` : '--';
@@ -300,14 +304,24 @@
     const latency = linkLoop.telemetry_latency_ms;
     const loopHz = linkLoop.command_loop_hz;
     const latencyHealth = latency != null ? 100 - latency : null;
+    const motorFailures = driveStatusPayload.consecutive_motor_command_failures;
+    const motorOk = driveStatusPayload.motor_command_ok;
+    const publishFailures = driveStatusPayload.telemetry_publish_failures;
+    const publishOk = driveStatusPayload.last_telemetry_publish_ok;
 
     setRows('link-rows', [
       row('status', '', status.label.toUpperCase(), status.cls),
+      row('drive', '', driveStatusPayload.state || '--'),
+      row('motor cmd', '', motorOk === true ? 'ok' : (motorOk === false ? 'fail' : '--'), motorOk === true ? 'ok' : (motorOk === false ? 'err' : '')),
+      row('cmd ack', '', fmtRelativeSeconds(driveStatusPayload.last_motor_command_ack_age_seconds)),
+      row('cmd fails', renderBar(motorFailures, 5, motorFailures > 0 ? 'warn' : ''), motorFailures === 0 ? 'none' : (motorFailures != null ? `${motorFailures} streak` : '--'), motorFailures > 0 ? 'warn' : ''),
       row('roboclaw', renderBar(successRate, 1), successText, status.cls),
       row('last good', '', fmtRelativeSeconds(linkLoop.last_good_read_age_seconds)),
       row('failures', renderBar(failures, 10, failures > 0 ? 'warn' : ''), failureText, failures > 0 ? 'warn' : ''),
       row('latency', renderBar(latencyHealth, 100, '', false), latency != null ? `${Math.round(latency)}ms` : '--'),
       row('drive loop', renderBar(loopHz, 20), loopHz != null ? `${loopHz.toFixed(1)} Hz` : '--'),
+      row('pub drops', '', publishFailures != null ? publishFailures : '--', publishFailures > 0 ? 'warn' : ''),
+      row('last pub', '', publishOk === true ? 'ok' : (publishOk === false ? 'fail' : '--'), publishOk === true ? 'ok' : (publishOk === false ? 'warn' : '')),
     ]);
   }
 

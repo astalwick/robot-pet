@@ -135,6 +135,28 @@ def link_loop_message(
     }
 
 
+def drive_status_message(
+    state: str,
+    stop_reason: str | None,
+    controller_reader_alive: bool | None,
+    motor_command_ok: bool | None,
+    consecutive_motor_command_failures: int,
+    last_motor_command_ack_age_seconds: float | None,
+    telemetry_publish_failures: int,
+    last_telemetry_publish_ok: bool | None,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "stop_reason": stop_reason,
+        "controller_reader_alive": controller_reader_alive,
+        "motor_command_ok": motor_command_ok,
+        "consecutive_motor_command_failures": consecutive_motor_command_failures,
+        "last_motor_command_ack_age_seconds": last_motor_command_ack_age_seconds,
+        "telemetry_publish_failures": telemetry_publish_failures,
+        "last_telemetry_publish_ok": last_telemetry_publish_ok,
+    }
+
+
 def gamepad_teleop_update(
     controller: dict[str, Any],
     wheels: dict[str, Any],
@@ -142,6 +164,7 @@ def gamepad_teleop_update(
     now: float | None = None,
     link_loop: dict[str, Any] | None = None,
     drive_tuning: dict[str, Any] | None = None,
+    drive_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "source_update",
@@ -152,4 +175,5 @@ def gamepad_teleop_update(
         "motor_battery": motor_battery,
         "link_loop": link_loop,
         "drive_tuning": drive_tuning,
+        "drive_status": drive_status,
     }

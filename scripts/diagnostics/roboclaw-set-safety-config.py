@@ -43,7 +43,10 @@ def read_or_none(rc, method_name, address):
 
 def set_main_battery_min(rc, address, min_tenths, max_tenths):
     if hasattr(rc, "SetMainVoltages"):
-        return rc.SetMainVoltages(address, min_tenths, max_tenths)
+        try:
+            return rc.SetMainVoltages(address, min_tenths, max_tenths, 0)
+        except TypeError:
+            return rc.SetMainVoltages(address, min_tenths, max_tenths)
     return rc.SetMinVoltageMainBattery(address, min_tenths)
 
 

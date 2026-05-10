@@ -30,6 +30,13 @@ from config.teleop import (
     load_drive_tuning,
     save_drive_tuning,
 )
+from config.vision import (
+    DEFAULT_CONFIG_PATH as DEFAULT_VISION_CONFIG_PATH,
+    VisionConfig,
+    VisionConfigError,
+    load_vision_config,
+    save_vision_config,
+)
 from lib.log import setup_logging
 from telemetry.paths import (
     DEFAULT_SUBSCRIBE_SOCKET,
@@ -67,6 +74,24 @@ TUNING_FIELDS = (
     ("left_stick_deadzone", "Left stick deadzone", "0.15"),
     ("right_stick_deadzone", "Right stick deadzone", "0.15"),
     ("qpps_slew_limit", "QPPS slew", "encoder counts/sec/sec"),
+)
+
+VISION_FIELDS = (
+    {
+        "key": "enabled",
+        "label": "Vision enabled",
+        "type": "boolean",
+        "help": "Run face detection on the camera feed",
+    },
+    {
+        "key": "detection_rate_hz",
+        "label": "Detection rate (Hz)",
+        "type": "number",
+        "help": "0.2 .. 10.0",
+        "min": 0.2,
+        "max": 10.0,
+        "step": 0.1,
+    },
 )
 
 NO_CACHE_HEADERS = {
@@ -237,11 +262,13 @@ class WebDashboardState:
         snapshot_store: SnapshotStore,
         static_dir: Path,
         teleop_config_path: str,
+        vision_config_path: str,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
         self.static_dir = static_dir
         self.teleop_config_path = teleop_config_path
+        self.vision_config_path = vision_config_path
         self.log_hub = BroadcastHub(loop)
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
@@ -496,6 +523,48 @@ async def drive_config_apply_handler(request: web.Request) -> web.Response:
     return web.json_response({"error": output, **drive_tuning_payload(tuning)}, status=500)
 
 
+def vision_config_payload(config: VisionConfig) -> dict[str, Any]:
+    return {
+        "values": config.to_dict(),
+        "fields": [dict(field) for field in VISION_FIELDS],
+    }
+
+
+async def vision_config_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    try:
+        config = load_vision_config(state.vision_config_path)
+    except VisionConfigError as exc:
+        return web.json_response(
+            {
+                **vision_config_payload(VisionConfig()),
+                "error": str(exc),
+            },
+            status=200,
+        )
+    return web.json_response(vision_config_payload(config))
+
+
+async def vision_config_apply_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    try:
+        values = await request.json()
+        if not isinstance(values, dict):
+            raise ValueError("expected a JSON object")
+        config = VisionConfig.from_dict(values)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid vision config: {exc}"}, status=400)
+
+    try:
+        await asyncio.to_thread(save_vision_config, config, state.vision_config_path)
+    except OSError as exc:
+        state.log_hub.publish(f"Vision config save failed: {exc}")
+        return web.json_response({"error": str(exc)}, status=500)
+
+    state.log_hub.publish("Vision config saved.")
+    return web.json_response({"ok": True, **vision_config_payload(config)})
+
+
 def build_app(state: WebDashboardState) -> web.Application:
     app = web.Application(middlewares=[no_cache_middleware])
     app["state"] = state
@@ -507,6 +576,8 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_post("/redeploy/run", redeploy_run_handler)
     app.router.add_get("/config/drive", drive_config_handler)
     app.router.add_post("/config/drive", drive_config_apply_handler)
+    app.router.add_get("/config/vision", vision_config_handler)
+    app.router.add_post("/config/vision", vision_config_apply_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 
@@ -514,7 +585,13 @@ def build_app(state: WebDashboardState) -> web.Application:
 async def run_service(args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     snapshot_store = SnapshotStore(loop)
-    state = WebDashboardState(loop, snapshot_store, Path(args.static_dir), args.teleop_config)
+    state = WebDashboardState(
+        loop,
+        snapshot_store,
+        Path(args.static_dir),
+        args.teleop_config,
+        args.vision_config,
+    )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
     subscriber.start()
@@ -543,6 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_WEB_DASHBOARD_PORT)
     parser.add_argument("--telemetry-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH)
+    parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
     parser.add_argument("--static-dir", default=str(STATIC_DIR))
     return parser
 

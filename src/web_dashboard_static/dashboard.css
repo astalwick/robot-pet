@@ -322,6 +322,20 @@ button:disabled {
   gap: 0.65rem;
 }
 
+.config-section {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+
+.config-section:first-child {
+  margin-top: 0;
+}
+
 .field {
   display: grid;
   grid-template-columns: 10rem 1fr;

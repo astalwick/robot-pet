@@ -2,8 +2,10 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -83,18 +85,23 @@ class FormatSseEventTest(unittest.TestCase):
 )
 class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.teleop_config_path = os.path.join(self.tmpdir.name, "teleop.json")
+        self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
         self.store = SnapshotStore(asyncio.get_running_loop())
         self.state = WebDashboardState(
             asyncio.get_running_loop(),
             self.store,
             STATIC_DIR,
-            "/tmp/test-robot-pet-teleop.json",
+            self.teleop_config_path,
+            self.vision_config_path,
         )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
 
     async def asyncTearDown(self):
         await self.client.close()
+        self.tmpdir.cleanup()
 
     async def test_index_serves_dashboard_html(self):
         async with self.client.get("/") as resp:
@@ -148,6 +155,42 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                     pass
 
         self.assertIn(target, buffer)
+
+    async def test_get_config_vision_returns_fields_and_default_values(self):
+        async with self.client.get("/config/vision") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+
+        keys = {field["key"] for field in payload["fields"]}
+        self.assertEqual(keys, {"enabled", "detection_rate_hz"})
+        types = {field["key"]: field["type"] for field in payload["fields"]}
+        self.assertEqual(types, {"enabled": "boolean", "detection_rate_hz": "number"})
+        self.assertIn("enabled", payload["values"])
+        self.assertIn("detection_rate_hz", payload["values"])
+
+    async def test_post_config_vision_writes_file_to_disk(self):
+        body = {"enabled": False, "detection_rate_hz": 1.5}
+        async with self.client.post("/config/vision", json=body) as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+
+        self.assertTrue(payload["ok"])
+        with open(self.vision_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertEqual(saved, {"enabled": False, "detection_rate_hz": 1.5})
+
+    async def test_post_config_vision_does_not_call_restart_gamepad_teleop(self):
+        body = {"enabled": True, "detection_rate_hz": 2.0}
+        with mock.patch("robot_web_dashboard.restart_gamepad_teleop") as restart:
+            async with self.client.post("/config/vision", json=body) as resp:
+                self.assertEqual(resp.status, 200)
+        restart.assert_not_called()
+
+    async def test_post_config_vision_rejects_non_object_body(self):
+        async with self.client.post("/config/vision", json=[1, 2, 3]) as resp:
+            self.assertEqual(resp.status, 400)
+            payload = await resp.json()
+        self.assertIn("error", payload)
 
     async def _publish_repeatedly(self, snapshot):
         while True:

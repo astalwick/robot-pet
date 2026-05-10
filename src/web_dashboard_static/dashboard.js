@@ -434,23 +434,63 @@
     error.textContent = '';
     modal.classList.remove('hidden');
 
-    const response = await fetch('/config/drive');
-    const payload = await response.json();
-    if (payload.error) error.textContent = payload.error;
-    renderConfigFields(payload.fields, payload.values);
+    const [driveResp, visionResp] = await Promise.all([
+      fetch('/config/drive'),
+      fetch('/config/vision'),
+    ]);
+    const drive = await driveResp.json();
+    const vision = await visionResp.json();
+
+    const messages = [];
+    if (drive.error) messages.push(`Drive: ${drive.error}`);
+    if (vision.error) messages.push(`Vision: ${vision.error}`);
+    error.textContent = messages.join('\n');
+
+    renderConfigFields(drive, vision);
   }
 
-  function renderConfigFields(fields, values) {
-    document.getElementById('config-fields').innerHTML = fields.map((field) => {
-      const value = values[field.key];
+  function renderConfigFields(drive, vision) {
+    const driveHtml = drive.fields.map((field) => fieldHtml(field, drive.values, 'drive')).join('');
+    const visionHtml = vision.fields.map((field) => fieldHtml(field, vision.values, 'vision')).join('');
+    document.getElementById('config-fields').innerHTML = `
+      <h3 class="config-section">Drive</h3>
+      ${driveHtml}
+      <h3 class="config-section">Vision</h3>
+      ${visionHtml}
+    `;
+  }
+
+  function fieldHtml(field, values, section) {
+    const value = values[field.key];
+    const inputId = `config-${section}-${field.key}`;
+    if (field.type === 'boolean') {
       return `
         <div class="field">
-          <label for="config-${field.key}">${escapeHtml(field.label)}</label>
-          <input id="config-${field.key}" name="${field.key}" value="${Number(value).toFixed(2)}" inputmode="decimal">
+          <label for="${inputId}">${escapeHtml(field.label)}</label>
+          <input type="checkbox" id="${inputId}" data-section="${section}" data-key="${field.key}" ${value ? 'checked' : ''}>
           <span class="help">${escapeHtml(field.help)}</span>
         </div>
       `;
-    }).join('');
+    }
+    if (field.type === 'number') {
+      const minAttr = field.min !== undefined ? ` min="${field.min}"` : '';
+      const maxAttr = field.max !== undefined ? ` max="${field.max}"` : '';
+      const stepAttr = field.step !== undefined ? ` step="${field.step}"` : ' step="any"';
+      return `
+        <div class="field">
+          <label for="${inputId}">${escapeHtml(field.label)}</label>
+          <input type="number" id="${inputId}" data-section="${section}" data-key="${field.key}" value="${Number(value)}"${minAttr}${maxAttr}${stepAttr}>
+          <span class="help">${escapeHtml(field.help)}</span>
+        </div>
+      `;
+    }
+    return `
+      <div class="field">
+        <label for="${inputId}">${escapeHtml(field.label)}</label>
+        <input id="${inputId}" data-section="${section}" data-key="${field.key}" value="${Number(value).toFixed(2)}" inputmode="decimal">
+        <span class="help">${escapeHtml(field.help)}</span>
+      </div>
+    `;
   }
 
   function closeConfig() {
@@ -461,22 +501,47 @@
     event.preventDefault();
     const error = document.getElementById('config-error');
     error.textContent = '';
-    const values = {};
-    new FormData(event.currentTarget).forEach((value, key) => {
-      values[key] = Number(value);
+
+    const driveValues = {};
+    const visionValues = {};
+    event.currentTarget.querySelectorAll('input[data-section]').forEach((input) => {
+      const target = input.dataset.section === 'drive' ? driveValues : visionValues;
+      if (input.type === 'checkbox') {
+        target[input.dataset.key] = input.checked;
+      } else {
+        target[input.dataset.key] = Number(input.value);
+      }
     });
 
-    const response = await fetch('/config/drive', {
+    const messages = [];
+    const visionResult = await postConfig('/config/vision', visionValues);
+    if (!visionResult.ok) messages.push(`Vision: ${visionResult.error}`);
+    const driveResult = await postConfig('/config/drive', driveValues);
+    if (!driveResult.ok) messages.push(`Drive: ${driveResult.error}`);
+
+    if (messages.length) {
+      error.textContent = messages.join('\n');
+      return;
+    }
+    closeConfig();
+  }
+
+  async function postConfig(url, values) {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
     });
-    const payload = await response.json();
-    if (!response.ok) {
-      error.textContent = payload.error || 'Drive tuning apply failed.';
-      return;
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (err) {
+      // Non-JSON body — fall through to generic error.
     }
-    closeConfig();
+    if (!response.ok) {
+      return { ok: false, error: payload.error || `${url} apply failed (${response.status})` };
+    }
+    return { ok: true };
   }
 
   function appendLog(line) {

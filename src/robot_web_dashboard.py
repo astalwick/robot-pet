@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -527,7 +528,10 @@ async def run_service(args: argparse.Namespace) -> None:
     log.info("subscribing to telemetry at %s", args.telemetry_socket)
 
     try:
-        await asyncio.Future()
+        stop_event = asyncio.Event()
+        loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+        loop.add_signal_handler(signal.SIGINT, stop_event.set)
+        await stop_event.wait()
     finally:
         await runner.cleanup()
         subscriber.stop()

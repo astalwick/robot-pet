@@ -1,6 +1,6 @@
 # robo-pet
 
-A Raspberry Pi 5 robot: differential drive, voice interaction, eventually autonomous navigation.
+A Raspberry Pi 5 robot: differential drive, live camera, gamepad teleop, browser and SSH operator dashboards. Voice interaction and autonomous navigation come later.
 
 ## Quick Start
 
@@ -10,7 +10,7 @@ A Raspberry Pi 5 robot: differential drive, voice interaction, eventually autono
 ./initialize-pi.sh
 ```
 
-This sets up SSH keys, installs dependencies, configures UART, and starts the robot-brain service.
+This sets up SSH keys, installs dependencies, configures UART, and installs the systemd services.
 
 **On the Pi**, once hardware is connected:
 
@@ -18,6 +18,15 @@ This sets up SSH keys, installs dependencies, configures UART, and starts the ro
 source ~/robot-pet/.venv/bin/activate
 python scripts/test-motor.py  # Verify motors work
 ```
+
+## Operator Surfaces
+
+Two operator UIs ship today; both read from `robot-telemetry.service` and can write drive tuning + restart `gamepad-teleop.service`.
+
+- **Web dashboard** — `http://<pi-host>:8080/`. Live MJPEG camera, telemetry, service logs, redeploy, and drive tuning. Default surface from a laptop.
+- **SSH TUI** — `python src/robot_dashboard.py` on the Pi. Same telemetry/logs/redeploy/tuning, no video. Emergency surface when the network or browser is unavailable.
+
+See `docs/tui-dashboard.md` and `docs/gamepad-teleop.md` for details.
 
 ## Project Structure
 
@@ -27,54 +36,62 @@ python scripts/test-motor.py  # Verify motors work
 ├── systemd/               # Service unit files
 │   ├── robot-brain.service
 │   ├── robot-telemetry.service
+│   ├── robot-camera.service
+│   ├── robot-web-dashboard.service
 │   └── gamepad-teleop.service
 ├── src/
-│   ├── config/            # Persistent runtime config helpers
+│   ├── config/            # Persistent runtime config helpers (drive tuning)
 │   ├── control/           # Teleop policy and differential drive mixing
 │   ├── drivers/           # Hardware drivers (pure Python, ROS2-ready)
-│   │   ├── motor.py       # RoboClaw motor controller
-│   │   └── controller.py  # Xbox 360 gamepad
+│   │   ├── motor.py       # RoboClaw 2x7A motor controller
+│   │   ├── controller.py  # Xbox 360 gamepad
+│   │   └── camera.py      # Pi camera (picamera2)
 │   ├── telemetry/         # Local JSON/socket telemetry helpers
-│   ├── lib/               # Shared utilities
-│   │   └── log.py         # Logging setup
-│   ├── robot_brain.py     # Main orchestrator service
-│   ├── robot_telemetry.py # Local telemetry hub
-│   ├── robot_dashboard.py # SSH Textual dashboard
-│   └── gamepad_teleop.py  # Boot-ready gamepad teleop service
+│   ├── lib/log.py         # Logging setup (journald-friendly)
+│   ├── robot_brain.py         # Orchestrator service (stub)
+│   ├── robot_telemetry.py     # Local telemetry hub
+│   ├── robot_camera.py        # Pi camera owner; serves MJPEG/snapshot on :8081
+│   ├── robot_web_dashboard.py # Browser dashboard on :8080
+│   ├── robot_dashboard.py     # SSH Textual dashboard
+│   ├── gamepad_teleop.py      # Boot-ready gamepad teleop service
+│   └── web_dashboard_static/  # HTML/CSS/JS for the browser dashboard (no build step)
 ├── scripts/               # Manual tools and hardware diagnostics
-│   ├── diagnostics/
+│   ├── diagnostics/       # Controller and RoboClaw bring-up scripts
 │   ├── test-motor.py
 │   └── redeploy-robot.sh
 └── docs/
     ├── ARCHITECTURE.md    # System design, ROS2 migration path
-    └── phases/            # Long-term roadmap, phase docs, and build planning
-        ├── bom-by-phase.md
-        ├── index.md
-        ├── phase-0-assembly-guide.md
-        ├── robot-build-gotchas.md
-        └── legacy/
+    ├── gamepad-teleop.md  # Teleop service, controls, tuning, foreground debug
+    ├── tui-dashboard.md   # SSH TUI usage
+    ├── phases/            # Long-term roadmap and BOM by phase
+    ├── plans/             # Per-feature implementation plans
+    └── ideas/             # Scratch / pre-plan notes
 ```
 
 ## Hardware
 
 - **Brain:** Raspberry Pi 5 (4GB)
 - **Motion:** RoboClaw 2x7A + goBILDA 5203 motors + 96mm wheels
+- **Vision:** Raspberry Pi Camera (picamera2)
+- **Input:** Xbox 360 wireless controller
 - **Power:** 3S LiPo (motors) + USB-C power bank (Pi)
 
 See `docs/phases/index.md` for the roadmap and `docs/phases/bom-by-phase.md` for the full BOM.
 
 ## Architecture
 
-Designed for eventual ROS2 migration. Drivers in `src/drivers/` are pure Python classes with no framework dependencies—they'll drop directly into ROS2 nodes. The current systemd services are temporary scaffolding.
+Designed for eventual ROS2 migration. Drivers in `src/drivers/` are pure Python classes with no framework dependencies — they'll drop directly into ROS2 nodes. The current systemd services are temporary scaffolding that map naturally onto future ROS2 nodes (camera node, motion node, etc.).
 
 See `docs/ARCHITECTURE.md` for details.
 
 ## Development
 
 ```bash
-# Deploy changes to Pi
-ssh pi@robot-pi.local 'cd ~/robot-pet && git pull && ./setup.sh'
+# Redeploy on the Pi (pulls, reinstalls, restarts services)
+ssh pi@robot-pi.local '~/robot-pet/scripts/redeploy-robot.sh'
 
-# View logs
-ssh pi@robot-pi.local 'journalctl -u robot-brain -f'
+# Or trigger redeploy from either operator dashboard (web at :8080, or the SSH TUI).
+
+# View logs for everything operator-visible
+ssh pi@robot-pi.local 'journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -u robot-camera -u robot-web-dashboard -f'
 ```

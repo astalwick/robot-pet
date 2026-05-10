@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import shutil
 import subprocess
 import time
@@ -120,7 +121,11 @@ class TelemetryHub:
     async def run(self):
         await self.start()
         try:
-            await asyncio.Future()
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+            loop.add_signal_handler(signal.SIGINT, stop_event.set)
+            await stop_event.wait()
         finally:
             await self.stop()
 

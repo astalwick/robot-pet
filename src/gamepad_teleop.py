@@ -141,6 +141,7 @@ class GamepadTeleopRunner:
         idle_released = False
         motor_max_qpps = self._read_motor_max_qpps(motor)
         last_stall_log_at = 0.0
+        stop_reason = None
         self._reset_slew()
 
         while not self.stop_requested and not disconnected.is_set():
@@ -155,10 +156,9 @@ class GamepadTeleopRunner:
             else:
                 self._reset_slew()
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
-            if hasattr(controller, "reader_alive") and not controller.reader_alive() and (closed_loop_active or not target_is_zero):
-                reason = getattr(controller, "disconnect_reason", None) or "controller input reader stopped"
-                log.error("%s; stopping motors", reason)
-                self._safe_zero_speed(motor)
+            if not controller.reader_alive() and (closed_loop_active or not target_is_zero):
+                stop_reason = controller.disconnect_reason or "controller input reader stopped"
+                log.error("%s; stopping motors", stop_reason)
                 break
 
             motor_command_elapsed = 0.0
@@ -168,9 +168,9 @@ class GamepadTeleopRunner:
                 if closed_loop_active:
                     command_started = self.clock()
                     if not motor.set_wheel_speeds(0, 0):
-                        log.error("RoboClaw zero-speed command was not acknowledged")
-                        self._safe_zero_speed(motor)
-                        return
+                        stop_reason = "RoboClaw zero-speed command was not acknowledged"
+                        log.error("%s", stop_reason)
+                        break
                     motor_command_elapsed = self.clock() - command_started
                     closed_loop_active = False
                     idle_started_at = now
@@ -183,9 +183,9 @@ class GamepadTeleopRunner:
             else:
                 command_started = self.clock()
                 if not motor.set_wheel_speeds(target.left_qpps, target.right_qpps):
-                    log.error("RoboClaw speed command was not acknowledged")
-                    self._safe_zero_speed(motor)
-                    return
+                    stop_reason = "RoboClaw speed command was not acknowledged"
+                    log.error("%s", stop_reason)
+                    break
                 motor_command_elapsed = self.clock() - command_started
                 closed_loop_active = True
                 idle_released = False
@@ -215,11 +215,13 @@ class GamepadTeleopRunner:
 
             self.sleep(self.config.loop_interval)
 
-        self._safe_zero_speed(motor)
+        motor.set_wheel_speeds(0, 0)
         self._reset_slew()
         if disconnected.is_set():
-            reason = getattr(controller, "disconnect_reason", None) or "controller disconnected"
+            reason = controller.disconnect_reason or "controller disconnected"
             log.warning("%s; waiting for reconnect", reason)
+        elif stop_reason is not None:
+            log.warning("%s; waiting for reconnect", stop_reason)
 
     def _reset_slew(self):
         self.last_target = WheelSpeedCommand(0, 0)
@@ -255,9 +257,6 @@ class GamepadTeleopRunner:
         if target > current:
             return current + max_delta
         return current - max_delta
-
-    def _safe_zero_speed(self, motor):
-        motor.set_wheel_speeds(0, 0)
 
     def _release_idle(self, motor):
         motor.stop()

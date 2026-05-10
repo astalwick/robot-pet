@@ -7,6 +7,7 @@ SERVICES=(
   robot-telemetry.service
   gamepad-teleop.service
   robot-camera.service
+  robot-vision.service
   robot-web-dashboard.service
 )
 
@@ -42,19 +43,23 @@ else
   exit 1
 fi
 
-echo "[3/6] Installing Python package metadata and dependencies..."
+echo "[3/7] Installing OpenCV system package..."
+sudo apt install -y python3-opencv
+
+echo "[4/7] Installing Python package metadata and dependencies..."
 "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
 
-echo "[4/6] Running tests..."
+echo "[5/7] Running tests..."
 "$REPO_DIR/.venv/bin/python" -m unittest discover tests
 
-echo "[5/6] Installing and reloading systemd units..."
+echo "[6/7] Installing and reloading systemd units..."
 for service in "${SERVICES[@]}"; do
   sudo install -m 0644 "$REPO_DIR/systemd/$service" "/etc/systemd/system/$service"
 done
 sudo systemctl daemon-reload
+sudo systemctl enable robot-vision.service
 
-echo "[6/6] Restarting robot services..."
+echo "[7/7] Restarting robot services..."
 for service in "${SERVICES[@]}"; do
   echo "restarting $service"
   sudo systemctl restart "$service"

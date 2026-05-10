@@ -30,6 +30,7 @@ src/
 ├── robot_brain.py        # systemd service - orchestrator (temporary)
 ├── robot_telemetry.py    # systemd service - local telemetry hub (temporary)
 ├── robot_camera.py       # systemd service - owns the Pi camera, serves MJPEG/snapshot
+├── robot_vision.py       # systemd service - polls camera snapshots, detects faces
 ├── robot_web_dashboard.py # systemd service - browser operator dashboard (read-only)
 ├── robot_dashboard.py    # foreground SSH Textual dashboard
 ├── gamepad_teleop.py     # systemd service - boot-ready gamepad teleop (temporary)
@@ -110,6 +111,7 @@ src/
 | `robot-telemetry` | In-memory local telemetry hub for dashboard clients | Active |
 | `gamepad-teleop` | Xbox controller to RoboClaw closed-loop speed teleop | Active |
 | `robot-camera` | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP | Active |
+| `robot-vision` | Polls camera snapshots and publishes face-detection telemetry | Active |
 | `robot-web-dashboard` | Browser dashboard with live camera, telemetry, logs, redeploy, and drive tuning | Active |
 | `robot-dashboard` | Foreground SSH TUI for telemetry, logs, and drive tuning | Manual tool |
 | `robot-motion` | Autonomous motor control | Not yet created |
@@ -118,6 +120,8 @@ src/
 `robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/teleop.json` and restart `gamepad-teleop.service`; it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 
 `robot-camera` is the only normal owner of the Pi camera. It instantiates one `CameraDriver`, captures JPEG frames continuously, and fans them out as HTTP responses (`GET /snapshot.jpg`, `GET /stream.mjpg`). Other consumers — the browser dashboard today, perception services later — subscribe over HTTP rather than opening the camera themselves. Telemetry stays separate: `robot-telemetry` carries low-rate JSON state, never video.
+
+`robot-vision` polls `robot-camera` snapshots over HTTP, runs OpenCV face detection on CPU, and publishes normalized face boxes through the telemetry hub. It honors the `enabled` flag in `/home/pi/.config/robot-pet/vision.json` and stays idle (no snapshot fetches, no inference) when vision is disabled. Camera or detector failures are surfaced via telemetry status without crashing the service.
 
 `robot-web-dashboard` serves the operator UI, service logs, operator action endpoints, and a Server-Sent Events telemetry stream on port 8080. The browser HTML embeds the camera service URL using `location.hostname`, so a remote MacBook loads MJPEG from the Pi rather than its own loopback. Redeploy uses the same arm-then-run flow as the SSH TUI, and drive tuning uses the same OK/Cancel apply semantics.
 
@@ -131,8 +135,9 @@ All services log to stdout/stderr. systemd captures output to journald.
 - View telemetry logs: `journalctl -u robot-telemetry -f`
 - View gamepad teleop logs: `journalctl -u gamepad-teleop -f`
 - View camera service logs: `journalctl -u robot-camera -f`
+- View vision service logs: `journalctl -u robot-vision -f`
 - View web dashboard logs: `journalctl -u robot-web-dashboard -f`
-- View multiple: `journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -u robot-camera -u robot-web-dashboard -f`
+- View multiple: `journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -u robot-camera -u robot-vision -u robot-web-dashboard -f`
 - Format: `LEVEL service-name: message`
 
 Timestamps come from journald, not the application.

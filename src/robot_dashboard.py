@@ -39,6 +39,8 @@ LOG_COMMAND = [
     "-u",
     "robot-camera",
     "-u",
+    "robot-vision",
+    "-u",
     "robot-web-dashboard",
     "-f",
     "-n",

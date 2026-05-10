@@ -1,0 +1,18 @@
+[Unit]
+Description=Robot Vision (face detection)
+After=robot-camera.service robot-telemetry.service
+Wants=robot-camera.service robot-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_vision.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

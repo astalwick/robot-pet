@@ -37,6 +37,7 @@ See `docs/tui-dashboard.md` and `docs/gamepad-teleop.md` for details.
 │   ├── robot-brain.service
 │   ├── robot-telemetry.service
 │   ├── robot-camera.service
+│   ├── robot-vision.service
 │   ├── robot-web-dashboard.service
 │   └── gamepad-teleop.service
 ├── src/
@@ -51,6 +52,7 @@ See `docs/tui-dashboard.md` and `docs/gamepad-teleop.md` for details.
 │   ├── robot_brain.py         # Orchestrator service (stub)
 │   ├── robot_telemetry.py     # Local telemetry hub
 │   ├── robot_camera.py        # Pi camera owner; serves MJPEG/snapshot on :8081
+│   ├── robot_vision.py        # Polls camera snapshots, runs face detection
 │   ├── robot_web_dashboard.py # Browser dashboard on :8080
 │   ├── robot_dashboard.py     # SSH Textual dashboard
 │   ├── gamepad_teleop.py      # Boot-ready gamepad teleop service
@@ -93,5 +95,5 @@ ssh pi@robot-pi.local '~/robot-pet/scripts/redeploy-robot.sh'
 # Or trigger redeploy from either operator dashboard (web at :8080, or the SSH TUI).
 
 # View logs for everything operator-visible
-ssh pi@robot-pi.local 'journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -u robot-camera -u robot-web-dashboard -f'
+ssh pi@robot-pi.local 'journalctl -u robot-brain -u robot-telemetry -u gamepad-teleop -u robot-camera -u robot-vision -u robot-web-dashboard -f'
 ```

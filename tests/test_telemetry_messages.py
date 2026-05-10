@@ -18,6 +18,7 @@ from telemetry.messages import (
     motor_battery_message,
     motor_battery_status,
     stale_label,
+    vision_update,
     wheel_message,
 )
 from telemetry.socket_client import publish_message
@@ -89,6 +90,47 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["last_good_read_age_seconds"], 0.4)
         self.assertEqual(message["telemetry_latency_ms"], 8.5)
         self.assertEqual(message["command_loop_hz"], 20.0)
+
+    def test_vision_update_carries_faces_and_metadata(self):
+        message = vision_update(
+            enabled=True,
+            status="detecting",
+            faces=[{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}],
+            image_width=1280,
+            image_height=720,
+            detection_rate_hz=2.0,
+            last_detection_time=1234.5,
+            now=2000.0,
+        )
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "vision")
+        self.assertEqual(message["time"], 2000.0)
+        self.assertTrue(message["enabled"])
+        self.assertEqual(message["status"], "detecting")
+        self.assertEqual(message["faces"][0]["width"], 0.3)
+        self.assertEqual(message["image_width"], 1280)
+        self.assertEqual(message["image_height"], 720)
+        self.assertEqual(message["detection_rate_hz"], 2.0)
+        self.assertEqual(message["last_detection_time"], 1234.5)
+        self.assertIsNone(message["error"])
+
+    def test_vision_update_carries_error_when_provided(self):
+        message = vision_update(
+            enabled=True,
+            status="error",
+            faces=[],
+            image_width=None,
+            image_height=None,
+            detection_rate_hz=2.0,
+            last_detection_time=None,
+            error="bad config",
+            now=1.0,
+        )
+
+        self.assertEqual(message["status"], "error")
+        self.assertEqual(message["faces"], [])
+        self.assertEqual(message["error"], "bad config")
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False)

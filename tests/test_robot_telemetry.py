@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
-from telemetry.messages import decode_json_line, gamepad_teleop_update
+from telemetry.messages import decode_json_line, gamepad_teleop_update, vision_update
 from telemetry.socket_client import publish_message
 
 
@@ -101,6 +101,37 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         snapshot = self.hub.build_snapshot()
 
         self.assertTrue(snapshot["sources"]["gamepad_teleop"]["stale"])
+
+    async def test_snapshot_lists_vision_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("vision", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["vision"]["stale"])
+        self.assertIsNone(snapshot["vision"])
+
+    async def test_vision_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        message = vision_update(
+            enabled=True,
+            status="detecting",
+            faces=[{"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}],
+            image_width=1280,
+            image_height=720,
+            detection_rate_hz=2.0,
+            last_detection_time=1234.5,
+        )
+
+        self.assertTrue(publish_message(self.publish_socket, message))
+        snapshot = await self._read_until(reader, lambda item: item.get("vision") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["vision"]["status"], "detecting")
+        self.assertEqual(snapshot["vision"]["faces"][0]["width"], 0.3)
+        self.assertEqual(snapshot["vision"]["image_width"], 1280)
+        self.assertFalse(snapshot["sources"]["vision"]["stale"])
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

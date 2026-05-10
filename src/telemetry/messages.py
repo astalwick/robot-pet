@@ -157,6 +157,32 @@ def drive_status_message(
     }
 
 
+def vision_update(
+    enabled: bool,
+    status: str,
+    faces: list[dict[str, float]],
+    image_width: int | None,
+    image_height: int | None,
+    detection_rate_hz: float,
+    last_detection_time: float | None,
+    error: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "vision",
+        "time": now if now is not None else time.time(),
+        "enabled": enabled,
+        "status": status,
+        "faces": faces,
+        "image_width": image_width,
+        "image_height": image_height,
+        "detection_rate_hz": detection_rate_hz,
+        "last_detection_time": last_detection_time,
+        "error": error,
+    }
+
+
 def gamepad_teleop_update(
     controller: dict[str, Any],
     wheels: dict[str, Any],

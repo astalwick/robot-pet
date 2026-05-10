@@ -21,6 +21,7 @@ from telemetry.paths import DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
 
 DEFAULT_RATE_HZ = 5.0
 DEFAULT_STALE_TIMEOUT = 1.0
+WRITER_CLOSE_TIMEOUT = 1.0
 
 log = setup_logging("robot-telemetry")
 
@@ -148,12 +149,10 @@ class TelemetryHub:
         for server in self._servers:
             server.close()
             await server.wait_closed()
-        for writer in list(self.subscribers):
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+        subscribers = list(self.subscribers)
+        self.subscribers.clear()
+        for writer in subscribers:
+            await close_writer(writer)
         for socket_path in (self.publish_socket, self.subscribe_socket):
             try:
                 os.unlink(socket_path)
@@ -170,11 +169,7 @@ class TelemetryHub:
         except Exception as exc:
             log.warning("publisher update failed: %s", exc)
         finally:
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+            await close_writer(writer)
 
     async def _handle_subscriber(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.subscribers.add(writer)
@@ -186,7 +181,7 @@ class TelemetryHub:
             pass
         finally:
             self.subscribers.discard(writer)
-            writer.close()
+            await close_writer(writer)
 
     async def _broadcast_loop(self):
         while True:
@@ -259,6 +254,14 @@ class TelemetryHub:
             os.unlink(socket_path)
         except FileNotFoundError:
             pass
+
+
+async def close_writer(writer: asyncio.StreamWriter) -> None:
+    writer.close()
+    try:
+        await asyncio.wait_for(writer.wait_closed(), timeout=WRITER_CLOSE_TIMEOUT)
+    except (asyncio.TimeoutError, OSError):
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:

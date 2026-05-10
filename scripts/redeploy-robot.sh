@@ -58,12 +58,12 @@ for service in "${SERVICES[@]}"; do
 done
 sudo systemctl daemon-reload
 echo "enabling robot-vision.service"
-timeout 45 sudo systemctl enable robot-vision.service
+sudo systemctl enable robot-vision.service
 
 echo "[7/7] Restarting robot services..."
 for service in "${SERVICES[@]}"; do
   echo "restarting $service"
-  timeout 45 sudo systemctl restart "$service"
+  sudo systemctl restart "$service"
 done
 
 echo ""

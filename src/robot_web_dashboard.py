@@ -48,6 +48,7 @@ from telemetry.socket_client import subscribe
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_dashboard_static"
 REDEPLOY_ARM_SECONDS = 10.0
+SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 # Keep aligned with `systemctl enable` in setup.sh (all shipped robot *.service units).
 LOG_COMMAND = [
@@ -599,7 +600,7 @@ async def run_service(args: argparse.Namespace) -> None:
     subscriber.start()
 
     app = build_app(state)
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, shutdown_timeout=SHUTDOWN_TIMEOUT_SECONDS)
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()

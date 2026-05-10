@@ -191,7 +191,7 @@ for service in \
   robot-web-dashboard.service
 do
   echo "    enabling $service"
-  timeout 45 sudo systemctl enable "$service"
+  sudo systemctl enable "$service"
 done
 for service in \
   robot-vision.service \
@@ -202,7 +202,7 @@ for service in \
   robot-brain.service
 do
   echo "    restarting $service"
-  timeout 45 sudo systemctl restart "$service"
+  sudo systemctl restart "$service"
 done
 
 echo ""

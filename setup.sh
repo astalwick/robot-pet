@@ -11,7 +11,7 @@ echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
 echo "[1/12] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[2/12] Adding $USER to dialout group..."
@@ -134,7 +134,7 @@ INSTALL_PATH="$(command -v install)"
 APT_PATH="$(command -v apt)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
-$USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv
+$USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv opencv-data
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
@@ -182,18 +182,28 @@ for service_file in "$REPO_DIR/systemd/"*.service; do
   sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
 done
 sudo systemctl daemon-reload
-sudo systemctl enable robot-brain.service
-sudo systemctl enable robot-telemetry.service
-sudo systemctl enable gamepad-teleop.service
-sudo systemctl enable robot-camera.service
-sudo systemctl enable robot-vision.service
-sudo systemctl enable robot-web-dashboard.service
-sudo systemctl restart robot-brain.service
-sudo systemctl restart robot-telemetry.service
-sudo systemctl restart gamepad-teleop.service
-sudo systemctl restart robot-camera.service
-sudo systemctl restart robot-vision.service
-sudo systemctl restart robot-web-dashboard.service
+for service in \
+  robot-brain.service \
+  robot-telemetry.service \
+  gamepad-teleop.service \
+  robot-camera.service \
+  robot-vision.service \
+  robot-web-dashboard.service
+do
+  echo "    enabling $service"
+  timeout 45 sudo systemctl enable "$service"
+done
+for service in \
+  robot-brain.service \
+  robot-telemetry.service \
+  gamepad-teleop.service \
+  robot-camera.service \
+  robot-vision.service \
+  robot-web-dashboard.service
+do
+  echo "    restarting $service"
+  timeout 45 sudo systemctl restart "$service"
+done
 
 echo ""
 echo "=== Setup complete! ==="

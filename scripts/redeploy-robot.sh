@@ -43,8 +43,8 @@ else
   exit 1
 fi
 
-echo "[3/7] Installing OpenCV system package..."
-sudo apt install -y python3-opencv
+echo "[3/7] Installing OpenCV system packages..."
+sudo apt install -y python3-opencv opencv-data
 
 echo "[4/7] Installing Python package metadata and dependencies..."
 "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
@@ -57,12 +57,13 @@ for service in "${SERVICES[@]}"; do
   sudo install -m 0644 "$REPO_DIR/systemd/$service" "/etc/systemd/system/$service"
 done
 sudo systemctl daemon-reload
-sudo systemctl enable robot-vision.service
+echo "enabling robot-vision.service"
+timeout 45 sudo systemctl enable robot-vision.service
 
 echo "[7/7] Restarting robot services..."
 for service in "${SERVICES[@]}"; do
   echo "restarting $service"
-  sudo systemctl restart "$service"
+  timeout 45 sudo systemctl restart "$service"
 done
 
 echo ""

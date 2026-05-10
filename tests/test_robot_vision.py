@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from robot_vision import (
     CameraFetchError,
     DetectorUnavailable,
+    HaarFaceDetector,
     VisionService,
     normalize_box,
 )
@@ -81,6 +83,56 @@ class NormalizeBoxTest(unittest.TestCase):
     def test_normalize_box_rejects_zero_image_size(self):
         with self.assertRaises(ValueError):
             normalize_box((0, 0, 1, 1), 0, 100)
+
+
+class HaarFaceDetectorTest(unittest.TestCase):
+    def test_missing_cv2_data_reports_detector_unavailable(self):
+        class FakeCascade:
+            def __init__(self, _path):
+                pass
+
+            def empty(self):
+                return True
+
+        fake_cv2 = type(
+            "FakeCv2",
+            (),
+            {"CascadeClassifier": FakeCascade},
+        )()
+
+        with mock.patch.dict(
+            sys.modules, {"cv2": fake_cv2, "numpy": object()}
+        ), self.assertRaises(DetectorUnavailable) as context:
+            HaarFaceDetector()
+
+        self.assertIn("could not load Haar cascade", str(context.exception))
+
+    def test_uses_system_cascade_path_when_cv2_data_is_missing(self):
+        used_paths: list[str] = []
+
+        class FakeCascade:
+            def __init__(self, path):
+                used_paths.append(path)
+
+            def empty(self):
+                return False
+
+        fake_cv2 = type(
+            "FakeCv2",
+            (),
+            {"CascadeClassifier": FakeCascade},
+        )()
+
+        with mock.patch.dict(sys.modules, {"cv2": fake_cv2, "numpy": object()}), mock.patch(
+            "robot_vision.os.path.exists",
+            lambda path: path == "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+        ):
+            HaarFaceDetector()
+
+        self.assertEqual(
+            used_paths,
+            ["/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"],
+        )
 
 
 class VisionServiceTest(unittest.TestCase):

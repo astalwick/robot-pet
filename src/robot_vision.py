@@ -76,7 +76,16 @@ class HaarFaceDetector:
         except ImportError as exc:
             raise DetectorUnavailable(f"OpenCV not installed: {exc}") from exc
 
-        cascade_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+        cascade_name = "haarcascade_frontalface_default.xml"
+        cascade_paths = [
+            os.path.join("/usr/share/opencv4/haarcascades", cascade_name),
+            os.path.join("/usr/share/opencv/haarcascades", cascade_name),
+        ]
+        cv2_data = getattr(cv2, "data", None)
+        if cv2_data is not None:
+            cascade_paths.insert(0, os.path.join(cv2_data.haarcascades, cascade_name))
+
+        cascade_path = next((path for path in cascade_paths if os.path.exists(path)), cascade_paths[0])
         cascade = cv2.CascadeClassifier(cascade_path)
         if cascade.empty():
             raise DetectorUnavailable(f"could not load Haar cascade at {cascade_path}")

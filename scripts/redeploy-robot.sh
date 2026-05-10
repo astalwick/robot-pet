@@ -3,12 +3,26 @@ set -euo pipefail
 
 REPO_DIR="${ROBOT_PET_REPO_DIR:-$HOME/robot-pet}"
 SERVICES=(
+  robot-brain.service
+  robot-telemetry.service
+  robot-camera.service
+  gamepad-teleop.service
   robot-vision.service
+  robot-web-dashboard.service
+)
+STOP_SERVICES=(
+  robot-vision.service
+  gamepad-teleop.service
   robot-camera.service
   robot-telemetry.service
-  robot-web-dashboard.service
-  gamepad-teleop.service
   robot-brain.service
+)
+START_SERVICES=(
+  robot-brain.service
+  robot-telemetry.service
+  robot-camera.service
+  gamepad-teleop.service
+  robot-vision.service
 )
 
 echo "== Robo-Pet redeploy =="
@@ -61,10 +75,16 @@ echo "enabling robot-vision.service"
 sudo systemctl enable robot-vision.service
 
 echo "[7/7] Restarting robot services..."
-for service in "${SERVICES[@]}"; do
-  echo "restarting $service"
-  sudo systemctl restart "$service"
+for service in "${STOP_SERVICES[@]}"; do
+  echo "stopping $service"
+  sudo systemctl stop "$service"
+done
+for service in "${START_SERVICES[@]}"; do
+  echo "starting $service"
+  sudo systemctl start "$service"
 done
 
 echo ""
 echo "Redeploy complete."
+echo "restarting robot-web-dashboard.service"
+sudo systemctl restart --no-block robot-web-dashboard.service

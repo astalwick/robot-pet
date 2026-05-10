@@ -137,12 +137,23 @@ cat >"$SUDOERS_TMP" <<SUDOERS
 $USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv opencv-data
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-brain.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-telemetry.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start gamepad-teleop.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-camera.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-brain.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-telemetry.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop gamepad-teleop.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-camera.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
 SUDOERS
 sudo visudo -cf "$SUDOERS_TMP"
@@ -195,14 +206,25 @@ do
 done
 for service in \
   robot-vision.service \
+  gamepad-teleop.service \
   robot-camera.service \
   robot-telemetry.service \
   robot-web-dashboard.service \
-  gamepad-teleop.service \
   robot-brain.service
 do
-  echo "    restarting $service"
-  sudo systemctl restart "$service"
+  echo "    stopping $service"
+  sudo systemctl stop "$service"
+done
+for service in \
+  robot-brain.service \
+  robot-telemetry.service \
+  robot-camera.service \
+  gamepad-teleop.service \
+  robot-vision.service \
+  robot-web-dashboard.service
+do
+  echo "    starting $service"
+  sudo systemctl start "$service"
 done
 
 echo ""

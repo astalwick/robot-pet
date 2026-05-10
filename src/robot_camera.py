@@ -28,6 +28,7 @@ DEFAULT_CAPTURE_FPS = 10.0
 DEFAULT_JPEG_QUALITY = 75
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
 FIRST_FRAME_TIMEOUT_SECONDS = 3.0
+SHUTDOWN_TIMEOUT_SECONDS = 2.0
 CAPTURE_FAILURE_HEALTH_THRESHOLD = 3
 MJPEG_BOUNDARY = "robotpet-frame"
 
@@ -356,7 +357,7 @@ async def run_service(args: argparse.Namespace) -> None:
     )
 
     app = build_app(state)
-    runner = web.AppRunner(app)
+    runner = web.AppRunner(app, shutdown_timeout=SHUTDOWN_TIMEOUT_SECONDS)
     await runner.setup()
     site = web.TCPSite(runner, args.host, args.port)
     await site.start()

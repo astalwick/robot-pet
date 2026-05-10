@@ -134,6 +134,57 @@ class HaarFaceDetectorTest(unittest.TestCase):
             ["/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"],
         )
 
+    def test_large_images_are_downscaled_for_detection(self):
+        detect_shapes = []
+
+        class FakeImage:
+            def __init__(self, height, width, channels=None):
+                self.shape = (height, width) if channels is None else (height, width, channels)
+
+        class FakeCascade:
+            def __init__(self, _path):
+                pass
+
+            def empty(self):
+                return False
+
+            def detectMultiScale(self, image, **_kwargs):
+                detect_shapes.append(image.shape)
+                return [(50, 60, 40, 30)]
+
+        class FakeCv2:
+            IMREAD_COLOR = 1
+            COLOR_BGR2GRAY = 2
+            INTER_AREA = 3
+
+            def CascadeClassifier(self, path):
+                return FakeCascade(path)
+
+            def imdecode(self, _buffer, _mode):
+                return FakeImage(720, 1280, 3)
+
+            def cvtColor(self, _image, _mode):
+                return FakeImage(720, 1280)
+
+            def resize(self, _image, size, interpolation=None):
+                return FakeImage(size[1], size[0])
+
+        class FakeNumpy:
+            uint8 = object()
+
+            def frombuffer(self, data, dtype=None):
+                return data
+
+        with mock.patch.dict(
+            sys.modules, {"cv2": FakeCv2(), "numpy": FakeNumpy()}
+        ), mock.patch("robot_vision.os.path.exists", lambda _path: True):
+            detector = HaarFaceDetector()
+            faces, image_width, image_height = detector(b"jpeg")
+
+        self.assertEqual(detect_shapes, [(360, 640)])
+        self.assertEqual((image_width, image_height), (1280, 720))
+        self.assertEqual(faces, [(100, 120, 80, 60)])
+
 
 class VisionServiceTest(unittest.TestCase):
     def test_disabled_mode_does_not_fetch_snapshots(self):

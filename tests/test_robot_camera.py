@@ -16,6 +16,7 @@ try:
         CameraServiceState,
         FrameStore,
         MJPEG_BOUNDARY,
+        SHUTDOWN_TIMEOUT_SECONDS,
         build_app,
         mjpeg_part,
         wait_for_frame,
@@ -193,6 +194,13 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
                     pass
 
         self.assertIn(target, buffer)
+
+    def test_runner_uses_short_shutdown_timeout_for_open_streams(self):
+        with open(os.path.join(ROOT, "src", "robot_camera.py")) as file_obj:
+            source = file_obj.read()
+
+        self.assertIn("web.AppRunner(app, shutdown_timeout=SHUTDOWN_TIMEOUT_SECONDS)", source)
+        self.assertLessEqual(SHUTDOWN_TIMEOUT_SECONDS, 5.0)
 
     async def _publish_repeatedly(self, jpeg: bytes) -> None:
         while True:

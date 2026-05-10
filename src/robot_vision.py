@@ -29,6 +29,7 @@ DEFAULT_CAMERA_URL = "http://127.0.0.1:8081/snapshot.jpg"
 DEFAULT_SNAPSHOT_TIMEOUT = 1.0
 CONFIG_POLL_INTERVAL = 1.0
 DISABLED_PUBLISH_INTERVAL = 1.0
+DETECTION_MAX_WIDTH = 640
 
 log = setup_logging("robot-vision")
 
@@ -105,8 +106,32 @@ class HaarFaceDetector:
 
         height, width = image.shape[:2]
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        rects = self._cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5)
-        faces = [(int(x), int(y), int(w), int(h)) for (x, y, w, h) in rects]
+        detect_gray = gray
+        scale = 1.0
+        if width > DETECTION_MAX_WIDTH:
+            scale = DETECTION_MAX_WIDTH / width
+            detect_gray = cv2.resize(
+                gray,
+                (DETECTION_MAX_WIDTH, max(1, int(height * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
+
+        rects = self._cascade.detectMultiScale(
+            detect_gray,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(24, 24),
+        )
+        faces = []
+        for x, y, w, h in rects:
+            faces.append(
+                (
+                    int(x / scale),
+                    int(y / scale),
+                    int(w / scale),
+                    int(h / scale),
+                )
+            )
         return faces, width, height
 
 

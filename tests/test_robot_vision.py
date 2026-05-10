@@ -186,6 +186,17 @@ class VisionServiceTest(unittest.TestCase):
         self.assertAlmostEqual(message["faces"][0]["width"], 0.05)
         self.assertEqual(sleep_seconds, 0.5)
 
+    def test_detected_faces_are_logged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "vision.json")
+            write_config(config_path, {"enabled": True, "detection_rate_hz": 2.0})
+
+            service, _published, _fetched = make_service(config_path)
+            with self.assertLogs("robot-vision", level="INFO") as logs:
+                service.tick()
+
+        self.assertIn("detected 1 face(s)", "\n".join(logs.output))
+
     def test_camera_fetch_failure_publishes_camera_unavailable(self):
         def failing_fetch(_url):
             raise CameraFetchError("connection refused")

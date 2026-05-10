@@ -263,6 +263,11 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("containedImageRect", self.dashboard_js)
         self.assertIn("sourceAspect", self.dashboard_js)
 
+    def test_overlay_uses_camera_section_size_without_affecting_layout(self):
+        self.assertIn("cameraSection.clientWidth", self.dashboard_js)
+        self.assertIn("cameraSection.clientHeight", self.dashboard_js)
+        self.assertIn("position: absolute", self.dashboard_css)
+
 
 if __name__ == "__main__":
     unittest.main()

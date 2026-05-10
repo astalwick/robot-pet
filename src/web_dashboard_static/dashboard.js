@@ -152,9 +152,9 @@
       return;
     }
 
-    const camera = document.getElementById('camera-stream');
+    const cameraSection = document.getElementById('camera-section');
     const rect = containedImageRect(
-      camera.clientWidth, camera.clientHeight, imageWidth, imageHeight,
+      cameraSection.clientWidth, cameraSection.clientHeight, imageWidth, imageHeight,
     );
     const faces = vision.faces || [];
     overlay.innerHTML = faces.map((face) => faceBoxHtml(face, rect)).join('');

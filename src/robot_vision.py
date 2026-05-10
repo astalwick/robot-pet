@@ -198,6 +198,8 @@ class VisionService:
             return self._next_sleep(now)
 
         faces = [normalize_box(box, image_width, image_height) for box in faces_pixels]
+        if faces:
+            log.info("detected %d face(s) in %dx%d image", len(faces), image_width, image_height)
         self._last_detection_time = now
         self.publish(
             vision_update(

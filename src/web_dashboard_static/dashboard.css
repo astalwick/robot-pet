@@ -82,6 +82,7 @@ main {
 }
 
 #camera-section {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -94,6 +95,19 @@ main {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+#face-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.face-box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.45);
+  pointer-events: none;
 }
 
 #panels {

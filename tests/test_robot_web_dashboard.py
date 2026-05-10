@@ -171,9 +171,10 @@ class DashboardJsTest(unittest.TestCase):
     """Verifies the camera URL is built from the page hostname, not loopback."""
 
     def setUp(self):
-        self.dashboard_js = (
-            Path(ROOT) / "src" / "web_dashboard_static" / "dashboard.js"
-        ).read_text()
+        static_dir = Path(ROOT) / "src" / "web_dashboard_static"
+        self.dashboard_js = (static_dir / "dashboard.js").read_text()
+        self.dashboard_html = (static_dir / "index.html").read_text()
+        self.dashboard_css = (static_dir / "dashboard.css").read_text()
 
     def test_camera_url_uses_window_location_hostname(self):
         self.assertIn("window.location.hostname", self.dashboard_js)
@@ -197,6 +198,27 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
         self.assertIn("const min = -(2 ** 31);", self.dashboard_js)
         self.assertNotIn("1 << 31", self.dashboard_js)
+
+    def test_face_overlay_element_lives_inside_camera_section(self):
+        self.assertIn('id="face-overlay"', self.dashboard_html)
+        section_start = self.dashboard_html.index('id="camera-section"')
+        section_end = self.dashboard_html.index("</section>", section_start)
+        self.assertIn('id="face-overlay"', self.dashboard_html[section_start:section_end])
+
+    def test_face_overlay_does_not_intercept_pointer_events(self):
+        self.assertIn("#face-overlay", self.dashboard_css)
+        self.assertIn("pointer-events: none", self.dashboard_css)
+
+    def test_overlay_clears_when_vision_source_is_stale(self):
+        self.assertIn("visionSource.stale === true", self.dashboard_js)
+
+    def test_overlay_clears_when_last_detection_is_old(self):
+        self.assertIn("VISION_STALE_SECONDS", self.dashboard_js)
+        self.assertIn("snapshotTime - lastDetection", self.dashboard_js)
+
+    def test_overlay_handles_letterboxing_via_contained_rect(self):
+        self.assertIn("containedImageRect", self.dashboard_js)
+        self.assertIn("sourceAspect", self.dashboard_js)
 
 
 if __name__ == "__main__":

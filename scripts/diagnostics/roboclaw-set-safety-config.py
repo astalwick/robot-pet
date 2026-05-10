@@ -52,7 +52,7 @@ def set_main_battery_min(rc, address, min_tenths, max_tenths):
 
 def set_motor_current_limit(method, address, current_raw):
     try:
-        return method(address, current_raw, 0)
+        return method(address, current_raw, current_raw)
     except TypeError:
         return method(address, current_raw)
 
@@ -82,7 +82,7 @@ def main():
     parser.add_argument("--baud", type=int, default=38400, help="Serial baud rate")
     parser.add_argument("--main-min-volts", type=float, default=9.6, help="Main battery cutoff voltage")
     parser.add_argument("--main-max-volts", type=float, default=None, help="Main battery max voltage; defaults to current setting")
-    parser.add_argument("--motor-current-amps", type=float, default=10.0, help="M1/M2 current limit")
+    parser.add_argument("--motor-current-amps", type=float, default=14.99, help="M1/M2 current limit")
     parser.add_argument("--yes", action="store_true", help="Apply without interactive confirmation")
     args = parser.parse_args()
 

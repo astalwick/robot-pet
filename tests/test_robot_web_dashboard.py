@@ -319,6 +319,11 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("target[input.dataset.key] = input.value", self.dashboard_js)
         self.assertIn("fetch('/config/voice')", self.dashboard_js)
 
+    def test_config_modal_fields_scroll_inside_viewport(self):
+        self.assertIn("max-height: calc(100vh - 2rem)", self.dashboard_css)
+        self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto auto", self.dashboard_css)
+        self.assertIn("overflow-y: auto", self.dashboard_css)
+
 
 if __name__ == "__main__":
     unittest.main()

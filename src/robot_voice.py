@@ -41,6 +41,7 @@ class RobotVoiceService:
             "last_assistant_text": None,
             "last_error": None,
         }
+        self.last_logged_error: str | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -126,6 +127,12 @@ class RobotVoiceService:
 
     def publish(self, config: VoiceConfig, **updates: object) -> None:
         self.status.update(updates)
+        last_error = optional_text(self.status["last_error"])
+        if last_error and last_error != self.last_logged_error:
+            log.error("voice error: %s", last_error)
+            self.last_logged_error = last_error
+        elif last_error is None:
+            self.last_logged_error = None
         publish_message(
             self.telemetry_socket,
             voice_update(
@@ -140,7 +147,7 @@ class RobotVoiceService:
                 partial_transcript=optional_text(self.status["partial_transcript"]),
                 last_committed_transcript=optional_text(self.status["last_committed_transcript"]),
                 last_assistant_text=optional_text(self.status["last_assistant_text"]),
-                last_error=optional_text(self.status["last_error"]),
+                last_error=last_error,
             ),
         )
 

@@ -12,6 +12,26 @@ class ReSpeakerError(RuntimeError):
     pass
 
 
+def format_sounddevice_devices(kind: str) -> str:
+    try:
+        import sounddevice as sd
+    except ModuleNotFoundError:
+        return "sounddevice is not installed"
+
+    rows = []
+    for index, device in enumerate(sd.query_devices()):
+        channels = device["max_input_channels"] if kind == "input" else device["max_output_channels"]
+        if channels:
+            rows.append(f"{index}: {device['name']}")
+    return "; ".join(rows) if rows else f"no {kind} devices reported by PortAudio"
+
+
+def sounddevice_selector(device: str) -> str:
+    if device.startswith("plughw:"):
+        return "hw:" + device.removeprefix("plughw:")
+    return device
+
+
 def extract_mono_channel(interleaved_pcm: bytes, channels: int, channel_index: int) -> bytes:
     if channel_index < 0 or channel_index >= channels:
         raise ReSpeakerError(f"channel_index must be between 0 and {channels - 1}")
@@ -60,14 +80,19 @@ class ReSpeakerAudio:
             if not status:
                 loop.call_soon_threadsafe(enqueue, bytes(indata))
 
-        with sd.RawInputStream(
-            device=self.input_device,
-            samplerate=self.sample_rate,
-            blocksize=MIC_BLOCKSIZE,
-            channels=self.capture_channels,
-            dtype="int16",
-            callback=callback,
-        ):
+        try:
+            stream = sd.RawInputStream(
+                device=sounddevice_selector(self.input_device),
+                samplerate=self.sample_rate,
+                blocksize=MIC_BLOCKSIZE,
+                channels=self.capture_channels,
+                dtype="int16",
+                callback=callback,
+            )
+        except Exception as exc:
+            raise ReSpeakerError(f"{exc}; input devices: {format_sounddevice_devices('input')}") from exc
+
+        with stream:
             while not stop_event.is_set():
                 interleaved = await queue.get()
                 yield extract_mono_channel(interleaved, self.capture_channels, self.capture_channel_index)
@@ -76,12 +101,17 @@ class ReSpeakerAudio:
         import sounddevice as sd
 
         chunk_bytes = self.sample_rate * self.output_channels * 2 * OUTPUT_WRITE_CHUNK_MS // 1000
-        with sd.RawOutputStream(
-            device=self.output_device,
-            samplerate=self.sample_rate,
-            channels=self.output_channels,
-            dtype="int16",
-            blocksize=0,
-        ) as output:
+        try:
+            stream = sd.RawOutputStream(
+                device=sounddevice_selector(self.output_device),
+                samplerate=self.sample_rate,
+                channels=self.output_channels,
+                dtype="int16",
+                blocksize=0,
+            )
+        except Exception as exc:
+            raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
+
+        with stream as output:
             for index in range(0, len(audio), chunk_bytes):
                 await asyncio.to_thread(output.write, audio[index : index + chunk_bytes])

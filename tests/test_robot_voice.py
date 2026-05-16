@@ -54,6 +54,23 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(message["status"] == "error" for message in published))
         self.assertTrue(any("ELEVENLABS_API_KEY" in message["last_error"] for message in published))
 
+    async def test_voice_errors_are_logged_once(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+
+        with mock.patch("robot_voice.log") as log:
+            service.publish(service_config(), status="error", last_error="bad output")
+            service.publish(service_config(), status="error", last_error="bad output")
+            service.publish(service_config(), status="listening", last_error=None)
+            service.publish(service_config(), status="error", last_error="bad output")
+
+        self.assertEqual(log.error.call_count, 2)
+
+
+def service_config():
+    from config.voice import VoiceConfig
+
+    return VoiceConfig()
+
 
 if __name__ == "__main__":
     unittest.main()

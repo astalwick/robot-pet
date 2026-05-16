@@ -42,12 +42,14 @@
 
   function setupCameraStream() {
     const camera = document.getElementById('camera-stream');
+    if (!camera) return;
     camera.addEventListener('error', scheduleCameraReconnect);
     refreshCameraStream();
   }
 
   function refreshCameraStream() {
     const camera = document.getElementById('camera-stream');
+    if (!camera) return;
     camera.src = `http://${window.location.hostname}:8081/stream.mjpg?t=${Date.now()}`;
   }
 
@@ -60,23 +62,30 @@
   }
 
   function bindActions() {
-    document.getElementById('voice-toggle-button').addEventListener('click', onVoiceToggle);
-    document.getElementById('redeploy-button').addEventListener('click', onRedeploy);
-    document.getElementById('config-button').addEventListener('click', openConfig);
-    document.getElementById('config-cancel').addEventListener('click', closeConfig);
-    document.getElementById('config-modal').addEventListener('click', (event) => {
+    on('voice-toggle-button', 'click', onVoiceToggle);
+    on('redeploy-button', 'click', onRedeploy);
+    on('config-button', 'click', openConfig);
+    on('config-cancel', 'click', closeConfig);
+    on('config-modal', 'click', (event) => {
       if (event.target.id === 'config-modal') closeConfig();
     });
-    document.getElementById('config-form').addEventListener('submit', applyConfig);
-    document.getElementById('logs-clear').addEventListener('click', () => {
-      document.getElementById('logs-output').textContent = '';
+    on('config-form', 'submit', applyConfig);
+    on('logs-clear', 'click', () => {
+      const output = document.getElementById('logs-output');
+      if (output) output.textContent = '';
     });
-    document.getElementById('logs-pause').addEventListener('click', () => {
+    on('logs-pause', 'click', () => {
       logsPaused = !logsPaused;
-      document.getElementById('logs-pause').textContent = logsPaused ? 'Resume' : 'Pause';
+      const button = document.getElementById('logs-pause');
+      if (button) button.textContent = logsPaused ? 'Resume' : 'Pause';
     });
-    document.getElementById('voice-rows').addEventListener('input', onVoiceGainInput);
-    document.getElementById('voice-rows').addEventListener('change', onVoiceGainCommit);
+    on('voice-rows', 'input', onVoiceGainInput);
+    on('voice-rows', 'change', onVoiceGainCommit);
+  }
+
+  function on(id, eventName, handler) {
+    const element = document.getElementById(id);
+    if (element) element.addEventListener(eventName, handler);
   }
 
   function connectTelemetry() {
@@ -389,13 +398,15 @@
 
   function setTelemetryStatus(label, cls) {
     const el = document.getElementById('telemetry-freshness');
+    if (!el) return;
     el.textContent = label;
     el.className = `value ${cls}`;
   }
 
   function updateSession() {
     const seconds = Math.floor((Date.now() - sessionStart) / 1000);
-    document.getElementById('session-uptime').textContent = formatDuration(seconds);
+    const uptime = document.getElementById('session-uptime');
+    if (uptime) uptime.textContent = formatDuration(seconds);
   }
 
   function renderPi(pi) {
@@ -525,9 +536,27 @@
 
   async function onRedeploy() {
     const endpoint = Date.now() <= redeployArmedUntil ? '/redeploy/run' : '/redeploy/arm';
-    const response = await fetch(endpoint, { method: 'POST' });
-    const status = await response.json();
-    applyRedeployStatus(status);
+    const previous = {
+      redeployArmedUntil,
+      redeployRunning,
+    };
+    if (endpoint === '/redeploy/arm') {
+      redeployArmedUntil = Date.now() + 10000;
+    } else {
+      redeployRunning = true;
+      redeployArmedUntil = 0;
+    }
+    updateRedeployButton();
+    try {
+      const response = await fetch(endpoint, { method: 'POST' });
+      const status = await response.json();
+      applyRedeployStatus(status);
+    } catch (err) {
+      redeployArmedUntil = previous.redeployArmedUntil;
+      redeployRunning = previous.redeployRunning;
+      updateRedeployButton();
+      appendLog(`redeploy request failed: ${err}`);
+    }
   }
 
   async function onVoiceToggle() {
@@ -612,6 +641,7 @@
 
   function updateRedeployButton() {
     const button = document.getElementById('redeploy-button');
+    if (!button) return;
     if (redeployRunning) {
       button.textContent = 'Redeploying...';
       button.disabled = true;

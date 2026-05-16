@@ -286,6 +286,7 @@ class DashboardJsTest(unittest.TestCase):
     def test_redeploy_status_is_polled_until_cleared(self):
         self.assertIn("setInterval(refreshRedeployStatus, 1000)", self.dashboard_js)
         self.assertIn("fetch('/redeploy/status')", self.dashboard_js)
+        self.assertIn("redeployArmedUntil = Date.now() + 10000", self.dashboard_js)
 
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
@@ -327,6 +328,10 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("onVoiceToggle", self.dashboard_js)
         self.assertIn("updateVoiceToggleButton", self.dashboard_js)
         self.assertIn(".record-dot", self.dashboard_css)
+
+    def test_button_binding_tolerates_missing_elements(self):
+        self.assertIn("function on(id, eventName, handler)", self.dashboard_js)
+        self.assertIn("if (element) element.addEventListener", self.dashboard_js)
 
     def test_voice_card_has_gain_controls(self):
         self.assertIn("gainControlRow('mic gain', 'input_gain'", self.dashboard_js)

@@ -204,10 +204,14 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("input_device", keys)
         self.assertIn("output_device", keys)
         self.assertIn("capture_channel_index", keys)
+        self.assertIn("input_gain", keys)
+        self.assertIn("output_gain", keys)
         types = {field["key"]: field["type"] for field in payload["fields"]}
         self.assertEqual(types["enabled"], "boolean")
         self.assertEqual(types["input_device"], "text")
         self.assertEqual(types["capture_channel_index"], "number")
+        self.assertEqual(types["input_gain"], "number")
+        self.assertEqual(types["output_gain"], "number")
         self.assertFalse(payload["values"]["enabled"])
         self.assertEqual(payload["values"]["input_device"], "hw:0,0")
 
@@ -217,6 +221,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             "input_device": "hw:1,0",
             "output_device": "plughw:1,0",
             "capture_channel_index": 0,
+            "input_gain": 1.4,
+            "output_gain": 0.8,
             "voice_id": "voice-a",
             "alternate_voice_id": "voice-b",
         }
@@ -231,6 +237,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["input_device"], "hw:1,0")
         self.assertEqual(saved["output_device"], "plughw:1,0")
         self.assertEqual(saved["capture_channel_index"], 0)
+        self.assertEqual(saved["input_gain"], 1.4)
+        self.assertEqual(saved["output_gain"], 0.8)
         self.assertEqual(saved["voice_id"], "voice-a")
         self.assertEqual(saved["alternate_voice_id"], "voice-b")
 
@@ -313,6 +321,18 @@ class DashboardJsTest(unittest.TestCase):
     def test_dashboard_renders_voice_status_panel(self):
         self.assertIn('id="voice-rows"', self.dashboard_html)
         self.assertIn("renderVoice(snapshot, sources)", self.dashboard_js)
+
+    def test_header_has_voice_toggle_button(self):
+        self.assertIn('id="voice-toggle-button"', self.dashboard_html)
+        self.assertIn("onVoiceToggle", self.dashboard_js)
+        self.assertIn("updateVoiceToggleButton", self.dashboard_js)
+        self.assertIn(".record-dot", self.dashboard_css)
+
+    def test_voice_card_has_gain_controls(self):
+        self.assertIn("gainControlRow('mic gain', 'input_gain'", self.dashboard_js)
+        self.assertIn("gainControlRow('speaker', 'output_gain'", self.dashboard_js)
+        self.assertIn("onVoiceGainChange", self.dashboard_js)
+        self.assertIn("data-voice-key", self.dashboard_js)
 
     def test_config_renderer_supports_text_fields_without_number_coercion(self):
         self.assertIn("field.type === 'text'", self.dashboard_js)

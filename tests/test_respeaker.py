@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from drivers.respeaker import (
     ReSpeakerAudio,
     ReSpeakerError,
+    apply_pcm16_gain,
     extract_mono_channel,
     format_sounddevice_devices,
     sounddevice_selector,
@@ -72,6 +73,13 @@ class ReSpeakerTest(unittest.TestCase):
     def test_plughw_config_maps_to_portaudio_hw_selector(self):
         self.assertEqual(sounddevice_selector("plughw:0,0"), "hw:0,0")
         self.assertEqual(sounddevice_selector("hw:0,0"), "hw:0,0")
+
+    def test_pcm_gain_scales_samples(self):
+        self.assertEqual(apply_pcm16_gain(pcm16([1000, -1000]), 0.5), pcm16([500, -500]))
+        self.assertEqual(apply_pcm16_gain(pcm16([1000, -1000]), 2.0), pcm16([2000, -2000]))
+
+    def test_pcm_gain_clips_to_int16(self):
+        self.assertEqual(apply_pcm16_gain(pcm16([30000, -30000]), 2.0), pcm16([32767, -32768]))
 
 
 if __name__ == "__main__":

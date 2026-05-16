@@ -142,6 +142,8 @@ class TelemetryMessagesTest(unittest.TestCase):
             sample_rate=16000,
             capture_channels=6,
             capture_channel_index=1,
+            input_gain=1.2,
+            output_gain=0.8,
             assistant_speaking=False,
             partial_transcript="what is",
             last_committed_transcript="what is your name",
@@ -160,6 +162,8 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["sample_rate"], 16000)
         self.assertEqual(message["capture_channels"], 6)
         self.assertEqual(message["capture_channel_index"], 1)
+        self.assertEqual(message["input_gain"], 1.2)
+        self.assertEqual(message["output_gain"], 0.8)
         self.assertFalse(message["assistant_speaking"])
         self.assertEqual(message["partial_transcript"], "what is")
         self.assertEqual(message["last_committed_transcript"], "what is your name")

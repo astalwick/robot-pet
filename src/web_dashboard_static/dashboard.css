@@ -262,6 +262,45 @@ button.armed {
   border-color: var(--warn);
 }
 
+.voice-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.voice-toggle.ok {
+  border-color: var(--ok);
+}
+
+.voice-toggle.warn {
+  border-color: var(--warn);
+}
+
+.voice-toggle.err {
+  border-color: var(--err);
+}
+
+.record-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: var(--text-dim);
+  display: inline-block;
+}
+
+.voice-toggle.ok .record-dot {
+  background: var(--err);
+  box-shadow: 0 0 8px rgba(248, 113, 113, 0.8);
+}
+
+.voice-toggle.warn .record-dot {
+  background: var(--warn);
+}
+
+.voice-toggle.err .record-dot {
+  background: var(--err);
+}
+
 button:disabled {
   cursor: wait;
   color: var(--text-dim);
@@ -361,6 +400,11 @@ button:disabled {
   background: var(--bg-deep);
   border: 1px solid var(--border);
   padding: 0.35rem 0.5rem;
+}
+
+.control-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
 .field .help {

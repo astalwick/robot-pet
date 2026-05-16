@@ -25,6 +25,8 @@ class VoiceConfigTest(unittest.TestCase):
                 input_device="hw:1,0",
                 output_device="plughw:1,0",
                 capture_channel_index=0,
+                input_gain=1.5,
+                output_gain=0.7,
                 voice_id="voice-a",
                 alternate_voice_id="voice-b",
             )
@@ -62,6 +64,10 @@ class VoiceConfigTest(unittest.TestCase):
             VoiceConfig.from_dict({"capture_channels": 2})
         with self.assertRaisesRegex(VoiceConfigError, "output_channels"):
             VoiceConfig.from_dict({"output_channels": 2})
+
+    def test_audio_gains_are_clamped(self):
+        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).input_gain, 0.0)
+        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).output_gain, 3.0)
 
 
 if __name__ == "__main__":

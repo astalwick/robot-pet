@@ -20,6 +20,8 @@
   let redeployRunning = false;
   let logsPaused = false;
   let cameraRetry = null;
+  let latestVoice = null;
+  let voiceConfigBusy = false;
 
   // Build the camera URL from the page hostname so a remote browser
   // (e.g. MacBook) loads MJPEG from the Pi, not from its own loopback.
@@ -54,6 +56,7 @@
   }
 
   function bindActions() {
+    document.getElementById('voice-toggle-button').addEventListener('click', onVoiceToggle);
     document.getElementById('redeploy-button').addEventListener('click', onRedeploy);
     document.getElementById('config-button').addEventListener('click', openConfig);
     document.getElementById('config-cancel').addEventListener('click', closeConfig);
@@ -68,6 +71,8 @@
       logsPaused = !logsPaused;
       document.getElementById('logs-pause').textContent = logsPaused ? 'Resume' : 'Pause';
     });
+    document.getElementById('voice-rows').addEventListener('input', onVoiceGainInput);
+    document.getElementById('voice-rows').addEventListener('change', onVoiceGainChange);
   }
 
   function connectTelemetry() {
@@ -131,9 +136,11 @@
   function renderVoice(snapshot, sources) {
     const voiceSource = sources.voice || {};
     const voice = snapshot.voice || {};
+    latestVoice = voice;
     const stale = voiceSource.stale !== false;
     const status = stale ? 'stale' : (voice.status || 'unknown');
     const lastError = voice.last_error;
+    updateVoiceToggleButton(voice, status, stale, lastError);
 
     setRows('voice-rows', [
       row('status', '', status.toUpperCase(), voiceStatusClass(status, lastError)),
@@ -141,9 +148,51 @@
       row('input', '', voice.input_device || '--'),
       row('output', '', voice.output_device || '--'),
       row('channel', '', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--'),
+      gainControlRow('mic gain', 'input_gain', voice.input_gain),
+      gainControlRow('speaker', 'output_gain', voice.output_gain),
       row('transcript', '', voice.last_committed_transcript || voice.partial_transcript || '--', voice.last_committed_transcript || voice.partial_transcript ? '' : 'muted'),
       row('error', '', lastError || '--', lastError ? 'err' : 'muted'),
     ]);
+  }
+
+  function updateVoiceToggleButton(voice, status, stale, lastError) {
+    const button = document.getElementById('voice-toggle-button');
+    const label = button.querySelector('.voice-toggle-label');
+    button.classList.remove('ok', 'warn', 'err', 'muted');
+    if (voiceConfigBusy) {
+      label.textContent = 'Voice...';
+      button.classList.add('warn');
+      button.disabled = true;
+      return;
+    }
+    button.disabled = false;
+    if (lastError || status === 'error') {
+      label.textContent = 'Voice Error';
+      button.classList.add('err');
+    } else if (voice.enabled && !stale) {
+      label.textContent = status === 'speaking' ? 'Speaking' : 'Listening';
+      button.classList.add('ok');
+    } else if (voice.enabled) {
+      label.textContent = 'Voice On';
+      button.classList.add('warn');
+    } else {
+      label.textContent = 'Voice Off';
+      button.classList.add('muted');
+    }
+    button.setAttribute('aria-label', label.textContent);
+  }
+
+  function gainControlRow(label, key, value) {
+    const gain = Number(value == null ? 1.0 : value);
+    return `
+      <div class="row control-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="bar-cell">
+          <input type="range" min="0" max="3" step="0.1" value="${gain.toFixed(1)}" data-voice-key="${key}" aria-label="${escapeHtml(label)}">
+        </span>
+        <span class="value" data-voice-value="${key}">${gain.toFixed(1)}</span>
+      </div>
+    `;
   }
 
   function voiceStatusClass(status, lastError) {
@@ -415,6 +464,52 @@
     const response = await fetch(endpoint, { method: 'POST' });
     const status = await response.json();
     applyRedeployStatus(status);
+  }
+
+  async function onVoiceToggle() {
+    if (voiceConfigBusy) return;
+    const values = await fetchVoiceValues();
+    if (!values) return;
+    await updateVoiceConfig({ enabled: !values.enabled });
+  }
+
+  function onVoiceGainInput(event) {
+    const input = event.target;
+    if (!input.dataset.voiceKey) return;
+    const value = document.querySelector(`[data-voice-value="${input.dataset.voiceKey}"]`);
+    if (value) value.textContent = Number(input.value).toFixed(1);
+  }
+
+  async function onVoiceGainChange(event) {
+    const input = event.target;
+    if (!input.dataset.voiceKey || voiceConfigBusy) return;
+    await updateVoiceConfig({ [input.dataset.voiceKey]: Number(input.value) });
+  }
+
+  async function fetchVoiceValues() {
+    try {
+      const response = await fetch('/config/voice');
+      if (!response.ok) return null;
+      const payload = await response.json();
+      return payload.values || null;
+    } catch (err) {
+      appendLog(`voice config fetch failed: ${err}`);
+      return null;
+    }
+  }
+
+  async function updateVoiceConfig(patch) {
+    voiceConfigBusy = true;
+    updateVoiceToggleButton(latestVoice || {}, 'updating', false, null);
+    try {
+      const values = await fetchVoiceValues();
+      if (!values) return;
+      const result = await postConfig('/config/voice', { ...values, ...patch });
+      if (!result.ok) appendLog(`voice config update failed: ${result.error}`);
+    } finally {
+      voiceConfigBusy = false;
+      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
+    }
   }
 
   async function refreshRedeployStatus() {

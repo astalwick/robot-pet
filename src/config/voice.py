@@ -11,6 +11,8 @@ from typing import Any
 
 
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/voice.json"
+MIN_AUDIO_GAIN = 0.0
+MAX_AUDIO_GAIN = 3.0
 
 
 class VoiceConfigError(ValueError):
@@ -26,6 +28,8 @@ class VoiceConfig:
     capture_channels: int = 6
     capture_channel_index: int = 1
     output_channels: int = 1
+    input_gain: float = 1.0
+    output_gain: float = 1.0
     voice_id: str | None = None
     alternate_voice_id: str | None = None
 
@@ -40,6 +44,8 @@ class VoiceConfig:
             capture_channels=int(values.get("capture_channels", defaults.capture_channels)),
             capture_channel_index=int(values.get("capture_channel_index", defaults.capture_channel_index)),
             output_channels=int(values.get("output_channels", defaults.output_channels)),
+            input_gain=clamp(float(values.get("input_gain", defaults.input_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
+            output_gain=clamp(float(values.get("output_gain", defaults.output_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
             alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
         )
@@ -65,6 +71,10 @@ def optional_string(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
 
 
 def load_voice_config(path: str = DEFAULT_CONFIG_PATH) -> VoiceConfig:

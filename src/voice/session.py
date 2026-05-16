@@ -43,6 +43,8 @@ class VoiceSession:
             capture_channels=config.capture_channels,
             capture_channel_index=config.capture_channel_index,
             output_channels=config.output_channels,
+            input_gain=config.input_gain,
+            output_gain=config.output_gain,
         )
         self.scribe_streamer = scribe_streamer
         self.stop_event = asyncio.Event()

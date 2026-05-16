@@ -143,6 +143,8 @@ class RobotVoiceService:
                 sample_rate=config.sample_rate,
                 capture_channels=config.capture_channels,
                 capture_channel_index=config.capture_channel_index,
+                input_gain=config.input_gain,
+                output_gain=config.output_gain,
                 assistant_speaking=bool(self.status["assistant_speaking"]),
                 partial_transcript=optional_text(self.status["partial_transcript"]),
                 last_committed_transcript=optional_text(self.status["last_committed_transcript"]),

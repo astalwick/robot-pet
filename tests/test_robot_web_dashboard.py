@@ -331,7 +331,8 @@ class DashboardJsTest(unittest.TestCase):
     def test_voice_card_has_gain_controls(self):
         self.assertIn("gainControlRow('mic gain', 'input_gain'", self.dashboard_js)
         self.assertIn("gainControlRow('speaker', 'output_gain'", self.dashboard_js)
-        self.assertIn("onVoiceGainChange", self.dashboard_js)
+        self.assertIn("onVoiceGainCommit", self.dashboard_js)
+        self.assertIn("voicePendingPatch", self.dashboard_js)
         self.assertIn("data-voice-key", self.dashboard_js)
 
     def test_config_renderer_supports_text_fields_without_number_coercion(self):

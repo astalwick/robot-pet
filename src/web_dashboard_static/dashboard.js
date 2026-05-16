@@ -21,7 +21,11 @@
   let logsPaused = false;
   let cameraRetry = null;
   let latestVoice = null;
-  let voiceConfigBusy = false;
+  let voiceRowsReady = false;
+  let voiceRequestedEnabled = null;
+  let voiceTogglePending = false;
+  const voicePendingPatch = {};
+  const voiceGainSaveTimers = {};
 
   // Build the camera URL from the page hostname so a remote browser
   // (e.g. MacBook) loads MJPEG from the Pi, not from its own loopback.
@@ -72,7 +76,7 @@
       document.getElementById('logs-pause').textContent = logsPaused ? 'Resume' : 'Pause';
     });
     document.getElementById('voice-rows').addEventListener('input', onVoiceGainInput);
-    document.getElementById('voice-rows').addEventListener('change', onVoiceGainChange);
+    document.getElementById('voice-rows').addEventListener('change', onVoiceGainCommit);
   }
 
   function connectTelemetry() {
@@ -137,38 +141,47 @@
     const voiceSource = sources.voice || {};
     const voice = snapshot.voice || {};
     latestVoice = voice;
+    clearAppliedVoicePatch(voice);
     const stale = voiceSource.stale !== false;
-    const status = stale ? 'stale' : (voice.status || 'unknown');
-    const lastError = voice.last_error;
-    updateVoiceToggleButton(voice, status, stale, lastError);
+    const displayVoice = { ...voice, ...voicePendingPatch };
+    if (voiceRequestedEnabled !== null) displayVoice.enabled = voiceRequestedEnabled;
+    const status = voiceRequestedEnabled === true ? 'starting' : (voiceRequestedEnabled === false ? 'stopping' : (stale ? 'stale' : (voice.status || 'unknown')));
+    const lastError = voiceRequestedEnabled === null ? voice.last_error : null;
 
-    setRows('voice-rows', [
-      row('status', '', status.toUpperCase(), voiceStatusClass(status, lastError)),
-      row('listen', '', voice.enabled ? 'enabled' : 'disabled', voice.enabled ? 'ok' : 'muted'),
-      row('input', '', voice.input_device || '--'),
-      row('output', '', voice.output_device || '--'),
-      row('channel', '', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--'),
-      gainControlRow('mic gain', 'input_gain', voice.input_gain),
-      gainControlRow('speaker', 'output_gain', voice.output_gain),
-      row('transcript', '', voice.last_committed_transcript || voice.partial_transcript || '--', voice.last_committed_transcript || voice.partial_transcript ? '' : 'muted'),
-      row('error', '', lastError || '--', lastError ? 'err' : 'muted'),
-    ]);
+    ensureVoiceRows();
+    setVoiceValue('status', status.toUpperCase(), voiceStatusClass(status, lastError));
+    setVoiceValue('listen', displayVoice.enabled ? 'enabled' : 'disabled', displayVoice.enabled ? 'ok' : 'muted');
+    setVoiceValue('input', displayVoice.input_device || '--');
+    setVoiceValue('output', displayVoice.output_device || '--');
+    setVoiceValue('channel', displayVoice.capture_channel_index != null ? String(displayVoice.capture_channel_index) : '--');
+    updateGainControl('input_gain', displayVoice.input_gain);
+    updateGainControl('output_gain', displayVoice.output_gain);
+    const transcript = displayVoice.last_committed_transcript || displayVoice.partial_transcript || '--';
+    setVoiceValue('transcript', transcript, transcript === '--' ? 'muted' : '');
+    setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
+    updateVoiceToggleButton(displayVoice, status, stale, lastError);
   }
 
   function updateVoiceToggleButton(voice, status, stale, lastError) {
     const button = document.getElementById('voice-toggle-button');
     const label = button.querySelector('.voice-toggle-label');
     button.classList.remove('ok', 'warn', 'err', 'muted');
-    if (voiceConfigBusy) {
-      label.textContent = 'Voice...';
-      button.classList.add('warn');
-      button.disabled = true;
-      return;
-    }
     button.disabled = false;
-    if (lastError || status === 'error') {
+    if (voiceTogglePending && voiceRequestedEnabled === true) {
+      label.textContent = 'Starting';
+      button.classList.add('warn');
+    } else if (voiceTogglePending && voiceRequestedEnabled === false) {
+      label.textContent = 'Stopping';
+      button.classList.add('warn');
+    } else if (lastError || status === 'error') {
       label.textContent = 'Voice Error';
       button.classList.add('err');
+    } else if (status === 'stopping') {
+      label.textContent = 'Stopping';
+      button.classList.add('warn');
+    } else if (status === 'starting') {
+      label.textContent = 'Starting';
+      button.classList.add('warn');
     } else if (voice.enabled && !stale) {
       label.textContent = status === 'speaking' ? 'Speaking' : 'Listening';
       button.classList.add('ok');
@@ -182,17 +195,68 @@
     button.setAttribute('aria-label', label.textContent);
   }
 
-  function gainControlRow(label, key, value) {
-    const gain = Number(value == null ? 1.0 : value);
+  function ensureVoiceRows() {
+    if (voiceRowsReady) return;
+    document.getElementById('voice-rows').innerHTML = [
+      voiceValueRow('status'),
+      voiceValueRow('listen'),
+      voiceValueRow('input'),
+      voiceValueRow('output'),
+      voiceValueRow('channel'),
+      gainControlRow('mic gain', 'input_gain'),
+      gainControlRow('speaker', 'output_gain'),
+      voiceValueRow('transcript'),
+      voiceValueRow('error'),
+    ].join('');
+    voiceRowsReady = true;
+  }
+
+  function voiceValueRow(key) {
+    return `
+      <div class="row">
+        <span class="label">${escapeHtml(key)}</span>
+        <span class="bar-cell"></span>
+        <span class="value muted" data-voice-value="${key}">--</span>
+      </div>
+    `;
+  }
+
+  function gainControlRow(label, key) {
     return `
       <div class="row control-row">
         <span class="label">${escapeHtml(label)}</span>
         <span class="bar-cell">
-          <input type="range" min="0" max="3" step="0.1" value="${gain.toFixed(1)}" data-voice-key="${key}" aria-label="${escapeHtml(label)}">
+          <input type="range" min="0" max="3" step="0.1" value="1.0" data-voice-key="${key}" aria-label="${escapeHtml(label)}">
         </span>
-        <span class="value" data-voice-value="${key}">${gain.toFixed(1)}</span>
+        <span class="value" data-voice-value="${key}">1.0</span>
       </div>
     `;
+  }
+
+  function setVoiceValue(key, value, cls = '') {
+    const element = document.querySelector(`[data-voice-value="${key}"]`);
+    if (!element) return;
+    element.textContent = value;
+    element.className = `value ${cls}`;
+  }
+
+  function updateGainControl(key, value) {
+    const gain = Number(value == null ? 1.0 : value);
+    const input = document.querySelector(`input[data-voice-key="${key}"]`);
+    if (input && document.activeElement !== input) input.value = gain.toFixed(1);
+    setVoiceValue(key, gain.toFixed(1));
+  }
+
+  function clearAppliedVoicePatch(voice) {
+    ['input_gain', 'output_gain'].forEach((key) => {
+      if (voicePendingPatch[key] != null && Number(voice[key]).toFixed(1) === Number(voicePendingPatch[key]).toFixed(1)) {
+        delete voicePendingPatch[key];
+      }
+    });
+    if (voiceRequestedEnabled !== null && voice.enabled === voiceRequestedEnabled) {
+      voiceRequestedEnabled = null;
+      voiceTogglePending = false;
+    }
   }
 
   function voiceStatusClass(status, lastError) {
@@ -467,23 +531,42 @@
   }
 
   async function onVoiceToggle() {
-    if (voiceConfigBusy) return;
-    const values = await fetchVoiceValues();
-    if (!values) return;
-    await updateVoiceConfig({ enabled: !values.enabled });
+    if (voiceTogglePending) return;
+    const currentEnabled = voiceRequestedEnabled !== null ? voiceRequestedEnabled : !!(latestVoice && latestVoice.enabled);
+    voiceRequestedEnabled = !currentEnabled;
+    voiceTogglePending = true;
+    updateVoiceToggleButton({ ...(latestVoice || {}), enabled: voiceRequestedEnabled }, voiceRequestedEnabled ? 'starting' : 'stopping', false, null);
+    const result = await updateVoiceConfig({ enabled: voiceRequestedEnabled });
+    if (!result.ok) {
+      appendLog(`voice config update failed: ${result.error}`);
+      voiceRequestedEnabled = null;
+      voiceTogglePending = false;
+      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
+    }
   }
 
   function onVoiceGainInput(event) {
     const input = event.target;
     if (!input.dataset.voiceKey) return;
-    const value = document.querySelector(`[data-voice-value="${input.dataset.voiceKey}"]`);
-    if (value) value.textContent = Number(input.value).toFixed(1);
+    const key = input.dataset.voiceKey;
+    voicePendingPatch[key] = Number(input.value);
+    setVoiceValue(key, Number(input.value).toFixed(1));
+    clearTimeout(voiceGainSaveTimers[key]);
+    voiceGainSaveTimers[key] = setTimeout(() => saveVoiceGain(key), 350);
   }
 
-  async function onVoiceGainChange(event) {
+  function onVoiceGainCommit(event) {
     const input = event.target;
-    if (!input.dataset.voiceKey || voiceConfigBusy) return;
-    await updateVoiceConfig({ [input.dataset.voiceKey]: Number(input.value) });
+    if (!input.dataset.voiceKey) return;
+    clearTimeout(voiceGainSaveTimers[input.dataset.voiceKey]);
+    saveVoiceGain(input.dataset.voiceKey);
+  }
+
+  async function saveVoiceGain(key) {
+    const value = voicePendingPatch[key];
+    if (value == null) return;
+    const result = await updateVoiceConfig({ [key]: value });
+    if (!result.ok) appendLog(`voice config update failed: ${result.error}`);
   }
 
   async function fetchVoiceValues() {
@@ -499,16 +582,12 @@
   }
 
   async function updateVoiceConfig(patch) {
-    voiceConfigBusy = true;
-    updateVoiceToggleButton(latestVoice || {}, 'updating', false, null);
     try {
       const values = await fetchVoiceValues();
-      if (!values) return;
-      const result = await postConfig('/config/voice', { ...values, ...patch });
-      if (!result.ok) appendLog(`voice config update failed: ${result.error}`);
-    } finally {
-      voiceConfigBusy = false;
-      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
+      if (!values) return { ok: false, error: 'could not load voice config' };
+      return await postConfig('/config/voice', { ...values, ...patch });
+    } catch (err) {
+      return { ok: false, error: String(err) };
     }
   }
 

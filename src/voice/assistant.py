@@ -279,6 +279,8 @@ async def handle_scribe_events(
     debounce_task: asyncio.Task[None] | None = None
     last_local_speech_at = 0.0
     last_local_speech_rms = 0
+    recent_assistant_text = ""
+    recent_assistant_echo_until = 0.0
 
     def status(**values: object) -> None:
         if on_status:
@@ -301,6 +303,7 @@ async def handle_scribe_events(
             await asyncio.sleep(quiet_remaining_secs)
 
     async def maybe_commit_history(turn: ActiveTurn) -> None:
+        nonlocal recent_assistant_text, recent_assistant_echo_until
         if active_turn is not turn or turn.history_committed or turn.speculative or not turn.task.done():
             return
         try:
@@ -311,6 +314,8 @@ async def handle_scribe_events(
             status(status="error", last_error=str(exc))
             return
         turn.assistant_text = assistant_text
+        recent_assistant_text = assistant_text
+        recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
         history.append_exchange(turn.committed_text or turn.prompt, assistant_text)
         turn.history_committed = True
         status(status="listening", assistant_speaking=False, last_assistant_text=assistant_text)
@@ -367,9 +372,15 @@ async def handle_scribe_events(
 
     async def handle_partial(text: str) -> None:
         nonlocal debounce_task
-        status(status="hearing", partial_transcript=text)
         now = asyncio.get_running_loop().time()
         local_speech_recent = now - last_local_speech_at <= policy.local_speech_window_secs
+        if is_recent_assistant_echo(text, now):
+            await cancel_task(debounce_task)
+            debounce_task = None
+            status(status="listening")
+            return
+
+        status(status="hearing", partial_transcript=text)
         if active_turn and active_turn.is_active() and active_turn.is_speaking():
             active_turn.mark_speech_started(now)
             should_barge_in, _reason = policy.barge_in_decision(
@@ -400,9 +411,13 @@ async def handle_scribe_events(
 
     async def handle_commit(text: str) -> None:
         nonlocal debounce_task
-        status(status="thinking", last_committed_transcript=text)
         await cancel_task(debounce_task)
         debounce_task = None
+        if is_recent_assistant_echo(text, asyncio.get_running_loop().time()):
+            status(status="listening")
+            return
+
+        status(status="thinking", last_committed_transcript=text)
         should_start_from_commit, _reason = policy.commit_decision(text)
 
         if active_turn and active_turn.is_active():
@@ -421,6 +436,16 @@ async def handle_scribe_events(
             if not should_start_from_commit:
                 return
             await start_turn(text, speculative=False)
+
+    def is_recent_assistant_echo(text: str, now: float) -> bool:
+        if policy.has_explicit_interrupt(text):
+            return False
+        assistant_text = ""
+        if active_turn is not None:
+            assistant_text = active_turn.assistant_streamed_text()
+        if recent_assistant_text and now <= recent_assistant_echo_until:
+            assistant_text = f"{assistant_text} {recent_assistant_text}".strip()
+        return bool(assistant_text and policy.matches_assistant_echo(text, assistant_text))
 
     try:
         while not stop_event.is_set():

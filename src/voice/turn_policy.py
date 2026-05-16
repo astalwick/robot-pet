@@ -30,6 +30,7 @@ class TurnPolicy:
     assistant_echo_similarity: float = 0.9
     assistant_echo_recent_words: int = 60
     assistant_echo_window_slop_words: int = 2
+    assistant_echo_memory_secs: float = 10.0
     explicit_interrupt_scan_words: int = 3
     incomplete_partial_suffixes: tuple[str, ...] = ("-", ",", ":", ";")
     complete_partial_suffixes: tuple[str, ...] = (".", "?", "!")

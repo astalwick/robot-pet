@@ -88,6 +88,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.teleop_config_path = os.path.join(self.tmpdir.name, "teleop.json")
         self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
+        self.voice_config_path = os.path.join(self.tmpdir.name, "voice.json")
         self.store = SnapshotStore(asyncio.get_running_loop())
         self.state = WebDashboardState(
             asyncio.get_running_loop(),
@@ -95,6 +96,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             STATIC_DIR,
             self.teleop_config_path,
             self.vision_config_path,
+            self.voice_config_path,
         )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
@@ -192,6 +194,46 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             payload = await resp.json()
         self.assertIn("error", payload)
 
+    async def test_get_config_voice_returns_fields_and_default_values(self):
+        async with self.client.get("/config/voice") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+
+        keys = {field["key"] for field in payload["fields"]}
+        self.assertIn("enabled", keys)
+        self.assertIn("input_device", keys)
+        self.assertIn("output_device", keys)
+        self.assertIn("capture_channel_index", keys)
+        types = {field["key"]: field["type"] for field in payload["fields"]}
+        self.assertEqual(types["enabled"], "boolean")
+        self.assertEqual(types["input_device"], "text")
+        self.assertEqual(types["capture_channel_index"], "number")
+        self.assertFalse(payload["values"]["enabled"])
+        self.assertEqual(payload["values"]["input_device"], "hw:0,0")
+
+    async def test_post_config_voice_writes_file_to_disk(self):
+        body = {
+            "enabled": True,
+            "input_device": "hw:1,0",
+            "output_device": "plughw:1,0",
+            "capture_channel_index": 0,
+            "voice_id": "voice-a",
+            "alternate_voice_id": "voice-b",
+        }
+        async with self.client.post("/config/voice", json=body) as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+
+        self.assertTrue(payload["ok"])
+        with open(self.voice_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertTrue(saved["enabled"])
+        self.assertEqual(saved["input_device"], "hw:1,0")
+        self.assertEqual(saved["output_device"], "plughw:1,0")
+        self.assertEqual(saved["capture_channel_index"], 0)
+        self.assertEqual(saved["voice_id"], "voice-a")
+        self.assertEqual(saved["alternate_voice_id"], "voice-b")
+
     async def _publish_repeatedly(self, snapshot):
         while True:
             self.store.publish(snapshot)
@@ -267,6 +309,15 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("cameraSection.clientWidth", self.dashboard_js)
         self.assertIn("cameraSection.clientHeight", self.dashboard_js)
         self.assertIn("position: absolute", self.dashboard_css)
+
+    def test_dashboard_renders_voice_status_panel(self):
+        self.assertIn('id="voice-rows"', self.dashboard_html)
+        self.assertIn("renderVoice(snapshot, sources)", self.dashboard_js)
+
+    def test_config_renderer_supports_text_fields_without_number_coercion(self):
+        self.assertIn("field.type === 'text'", self.dashboard_js)
+        self.assertIn("target[input.dataset.key] = input.value", self.dashboard_js)
+        self.assertIn("fetch('/config/voice')", self.dashboard_js)
 
 
 if __name__ == "__main__":

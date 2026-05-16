@@ -11,15 +11,16 @@ echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
 echo "[1/12] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[2/12] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
-# Add user to input group for controller/gamepad access (idempotent)
-echo "[3/12] Adding $USER to input group..."
+# Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
+echo "[3/12] Adding $USER to input and audio groups..."
 sudo usermod -a -G input "$USER"
+sudo usermod -a -G audio "$USER"
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[4/12] Configuring UART for RoboClaw..."
@@ -134,24 +135,28 @@ INSTALL_PATH="$(command -v install)"
 APT_PATH="$(command -v apt)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
-$USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv opencv-data
+$USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv opencv-data alsa-utils sox portaudio19-dev
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-vision.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
@@ -199,6 +204,7 @@ for service in \
   gamepad-teleop.service \
   robot-camera.service \
   robot-vision.service \
+  robot-voice.service \
   robot-web-dashboard.service
 do
   echo "    enabling $service"
@@ -208,6 +214,7 @@ for service in \
   robot-vision.service \
   gamepad-teleop.service \
   robot-camera.service \
+  robot-voice.service \
   robot-telemetry.service \
   robot-web-dashboard.service \
   robot-brain.service
@@ -221,6 +228,7 @@ for service in \
   robot-camera.service \
   gamepad-teleop.service \
   robot-vision.service \
+  robot-voice.service \
   robot-web-dashboard.service
 do
   echo "    starting $service"
@@ -246,7 +254,10 @@ echo "    sudo systemctl status robot-camera"
 echo "    journalctl -u robot-camera -f"
 echo "    sudo systemctl status robot-vision"
 echo "    journalctl -u robot-vision -f"
+echo "    sudo systemctl status robot-voice"
+echo "    journalctl -u robot-voice -f"
 echo "    sudo systemctl status robot-web-dashboard"
 echo "    journalctl -u robot-web-dashboard -f"
 echo ""
 echo "Open the web dashboard at http://<this-pi>:8080/"
+echo "Create /home/pi/.config/robot-pet/voice.env with ELEVENLABS_API_KEY and OPENAI_API_KEY before enabling Listen."

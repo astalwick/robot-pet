@@ -8,12 +8,14 @@ SERVICES=(
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
+  robot-voice.service
   robot-web-dashboard.service
 )
 STOP_SERVICES=(
   robot-vision.service
   gamepad-teleop.service
   robot-camera.service
+  robot-voice.service
   robot-telemetry.service
   robot-brain.service
 )
@@ -23,6 +25,7 @@ START_SERVICES=(
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
+  robot-voice.service
 )
 
 echo "== Robo-Pet redeploy =="
@@ -57,8 +60,8 @@ else
   exit 1
 fi
 
-echo "[3/7] Installing OpenCV system packages..."
-sudo apt install -y python3-opencv opencv-data
+echo "[3/7] Installing system packages..."
+sudo apt install -y python3-opencv opencv-data alsa-utils sox portaudio19-dev
 
 echo "[4/7] Installing Python package metadata and dependencies..."
 "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
@@ -73,6 +76,8 @@ done
 sudo systemctl daemon-reload
 echo "enabling robot-vision.service"
 sudo systemctl enable robot-vision.service
+echo "enabling robot-voice.service"
+sudo systemctl enable robot-voice.service
 
 echo "[7/7] Restarting robot services..."
 for service in "${STOP_SERVICES[@]}"; do

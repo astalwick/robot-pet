@@ -183,6 +183,40 @@ def vision_update(
     }
 
 
+def voice_update(
+    enabled: bool,
+    status: str,
+    input_device: str,
+    output_device: str,
+    sample_rate: int,
+    capture_channels: int,
+    capture_channel_index: int,
+    assistant_speaking: bool = False,
+    partial_transcript: str | None = None,
+    last_committed_transcript: str | None = None,
+    last_assistant_text: str | None = None,
+    last_error: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "voice",
+        "time": now if now is not None else time.time(),
+        "enabled": enabled,
+        "status": status,
+        "input_device": input_device,
+        "output_device": output_device,
+        "sample_rate": sample_rate,
+        "capture_channels": capture_channels,
+        "capture_channel_index": capture_channel_index,
+        "assistant_speaking": assistant_speaking,
+        "partial_transcript": partial_transcript,
+        "last_committed_transcript": last_committed_transcript,
+        "last_assistant_text": last_assistant_text,
+        "last_error": last_error,
+    }
+
+
 def gamepad_teleop_update(
     controller: dict[str, Any],
     wheels: dict[str, Any],

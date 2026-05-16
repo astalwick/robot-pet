@@ -19,6 +19,7 @@ from telemetry.messages import (
     motor_battery_status,
     stale_label,
     vision_update,
+    voice_update,
     wheel_message,
 )
 from telemetry.socket_client import publish_message
@@ -131,6 +132,39 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["status"], "error")
         self.assertEqual(message["faces"], [])
         self.assertEqual(message["error"], "bad config")
+
+    def test_voice_update_carries_status_and_audio_config(self):
+        message = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+            assistant_speaking=False,
+            partial_transcript="what is",
+            last_committed_transcript="what is your name",
+            last_assistant_text="I am Bloop.",
+            last_error=None,
+            now=2000.0,
+        )
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "voice")
+        self.assertEqual(message["time"], 2000.0)
+        self.assertTrue(message["enabled"])
+        self.assertEqual(message["status"], "listening")
+        self.assertEqual(message["input_device"], "hw:0,0")
+        self.assertEqual(message["output_device"], "plughw:0,0")
+        self.assertEqual(message["sample_rate"], 16000)
+        self.assertEqual(message["capture_channels"], 6)
+        self.assertEqual(message["capture_channel_index"], 1)
+        self.assertFalse(message["assistant_speaking"])
+        self.assertEqual(message["partial_transcript"], "what is")
+        self.assertEqual(message["last_committed_transcript"], "what is your name")
+        self.assertEqual(message["last_assistant_text"], "I am Bloop.")
+        self.assertIsNone(message["last_error"])
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False)

@@ -1,0 +1,20 @@
+[Unit]
+Description=Robot Voice Assistant
+After=network-online.target robot-telemetry.service
+Wants=network-online.target robot-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+EnvironmentFile=-/home/pi/.config/robot-pet/voice.env
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_voice.py
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

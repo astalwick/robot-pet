@@ -13,12 +13,16 @@ dependencies = [
     "evdev",
     "gpiozero",
     "numpy",
+    "openai",
     "pyserial",
     "rich",
+    "certifi",
+    "sounddevice",
     "textual",
+    "websockets",
 ]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["config", "control", "drivers", "lib", "telemetry"]
-py-modules = ["gamepad_teleop", "robot_brain", "robot_camera", "robot_dashboard", "robot_telemetry", "robot_vision", "robot_web_dashboard"]
+packages = ["config", "control", "drivers", "lib", "telemetry", "voice"]
+py-modules = ["gamepad_teleop", "robot_brain", "robot_camera", "robot_dashboard", "robot_telemetry", "robot_vision", "robot_voice", "robot_web_dashboard"]

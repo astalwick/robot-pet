@@ -9,7 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
-from telemetry.messages import decode_json_line, gamepad_teleop_update, vision_update
+from telemetry.messages import decode_json_line, gamepad_teleop_update, vision_update, voice_update
 from telemetry.socket_client import publish_message
 
 
@@ -109,6 +109,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["sources"]["vision"]["stale"])
         self.assertIsNone(snapshot["vision"])
 
+    async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("voice", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["voice"]["stale"])
+        self.assertIsNone(snapshot["voice"])
+
     async def test_vision_update_appears_in_subscriber_snapshot(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
         await reader.readline()
@@ -132,6 +139,29 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["vision"]["faces"][0]["width"], 0.3)
         self.assertEqual(snapshot["vision"]["image_width"], 1280)
         self.assertFalse(snapshot["sources"]["vision"]["stale"])
+
+    async def test_voice_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        message = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+        )
+
+        self.assertTrue(publish_message(self.publish_socket, message))
+        snapshot = await self._read_until(reader, lambda item: item.get("voice") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["voice"]["status"], "listening")
+        self.assertEqual(snapshot["voice"]["capture_channel_index"], 1)
+        self.assertFalse(snapshot["sources"]["voice"]["stale"])
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

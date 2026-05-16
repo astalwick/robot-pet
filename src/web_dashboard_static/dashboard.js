@@ -123,8 +123,34 @@
     renderController(controller);
     renderWheels(wheels);
     renderLink(linkLoop, driveStatusPayload);
+    renderVoice(snapshot, sources);
     renderFaceOverlay(snapshot, sources);
     setTelemetryStatus(gamepadStale ? 'stale' : 'live', gamepadStale ? 'warn' : 'ok');
+  }
+
+  function renderVoice(snapshot, sources) {
+    const voiceSource = sources.voice || {};
+    const voice = snapshot.voice || {};
+    const stale = voiceSource.stale !== false;
+    const status = stale ? 'stale' : (voice.status || 'unknown');
+    const lastError = voice.last_error;
+
+    setRows('voice-rows', [
+      row('status', '', status.toUpperCase(), voiceStatusClass(status, lastError)),
+      row('listen', '', voice.enabled ? 'enabled' : 'disabled', voice.enabled ? 'ok' : 'muted'),
+      row('input', '', voice.input_device || '--'),
+      row('output', '', voice.output_device || '--'),
+      row('channel', '', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--'),
+      row('transcript', '', voice.last_committed_transcript || voice.partial_transcript || '--', voice.last_committed_transcript || voice.partial_transcript ? '' : 'muted'),
+      row('error', '', lastError || '--', lastError ? 'err' : 'muted'),
+    ]);
+  }
+
+  function voiceStatusClass(status, lastError) {
+    if (lastError || status === 'error' || status === 'stale') return 'err';
+    if (status === 'starting' || status === 'reconnecting' || status === 'hearing' || status === 'thinking') return 'warn';
+    if (status === 'listening' || status === 'speaking') return 'ok';
+    return 'muted';
   }
 
   function renderFaceOverlay(snapshot, sources) {
@@ -434,29 +460,35 @@
     error.textContent = '';
     modal.classList.remove('hidden');
 
-    const [driveResp, visionResp] = await Promise.all([
+    const [driveResp, visionResp, voiceResp] = await Promise.all([
       fetch('/config/drive'),
       fetch('/config/vision'),
+      fetch('/config/voice'),
     ]);
     const drive = await driveResp.json();
     const vision = await visionResp.json();
+    const voice = await voiceResp.json();
 
     const messages = [];
     if (drive.error) messages.push(`Drive: ${drive.error}`);
     if (vision.error) messages.push(`Vision: ${vision.error}`);
+    if (voice.error) messages.push(`Voice: ${voice.error}`);
     error.textContent = messages.join('\n');
 
-    renderConfigFields(drive, vision);
+    renderConfigFields(drive, vision, voice);
   }
 
-  function renderConfigFields(drive, vision) {
+  function renderConfigFields(drive, vision, voice) {
     const driveHtml = drive.fields.map((field) => fieldHtml(field, drive.values, 'drive')).join('');
     const visionHtml = vision.fields.map((field) => fieldHtml(field, vision.values, 'vision')).join('');
+    const voiceHtml = voice.fields.map((field) => fieldHtml(field, voice.values, 'voice')).join('');
     document.getElementById('config-fields').innerHTML = `
       <h3 class="config-section">Drive</h3>
       ${driveHtml}
       <h3 class="config-section">Vision</h3>
       ${visionHtml}
+      <h3 class="config-section">Voice</h3>
+      ${voiceHtml}
     `;
   }
 
@@ -484,6 +516,15 @@
         </div>
       `;
     }
+    if (field.type === 'text') {
+      return `
+        <div class="field">
+          <label for="${inputId}">${escapeHtml(field.label)}</label>
+          <input type="text" id="${inputId}" data-section="${section}" data-key="${field.key}" value="${escapeHtml(value || '')}">
+          <span class="help">${escapeHtml(field.help)}</span>
+        </div>
+      `;
+    }
     return `
       <div class="field">
         <label for="${inputId}">${escapeHtml(field.label)}</label>
@@ -504,10 +545,13 @@
 
     const driveValues = {};
     const visionValues = {};
+    const voiceValues = {};
     event.currentTarget.querySelectorAll('input[data-section]').forEach((input) => {
-      const target = input.dataset.section === 'drive' ? driveValues : visionValues;
+      const target = input.dataset.section === 'drive' ? driveValues : (input.dataset.section === 'vision' ? visionValues : voiceValues);
       if (input.type === 'checkbox') {
         target[input.dataset.key] = input.checked;
+      } else if (input.type === 'text') {
+        target[input.dataset.key] = input.value;
       } else {
         target[input.dataset.key] = Number(input.value);
       }
@@ -516,6 +560,8 @@
     const messages = [];
     const visionResult = await postConfig('/config/vision', visionValues);
     if (!visionResult.ok) messages.push(`Vision: ${visionResult.error}`);
+    const voiceResult = await postConfig('/config/voice', voiceValues);
+    if (!voiceResult.ok) messages.push(`Voice: ${voiceResult.error}`);
     const driveResult = await postConfig('/config/drive', driveValues);
     if (!driveResult.ok) messages.push(`Drive: ${driveResult.error}`);
 

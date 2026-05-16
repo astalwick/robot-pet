@@ -37,6 +37,13 @@ from config.vision import (
     load_vision_config,
     save_vision_config,
 )
+from config.voice import (
+    DEFAULT_CONFIG_PATH as DEFAULT_VOICE_CONFIG_PATH,
+    VoiceConfig,
+    VoiceConfigError,
+    load_voice_config,
+    save_voice_config,
+)
 from lib.log import setup_logging
 from telemetry.paths import (
     DEFAULT_SUBSCRIBE_SOCKET,
@@ -63,6 +70,8 @@ LOG_COMMAND = [
     "robot-camera",
     "-u",
     "robot-vision",
+    "-u",
+    "robot-voice",
     "-u",
     "robot-web-dashboard",
     "-f",
@@ -94,6 +103,48 @@ VISION_FIELDS = (
         "min": 0.2,
         "max": 10.0,
         "step": 0.1,
+    },
+)
+
+VOICE_FIELDS = (
+    {
+        "key": "enabled",
+        "label": "Listen enabled",
+        "type": "boolean",
+        "help": "Open the ReSpeaker and listen for assistant requests",
+    },
+    {
+        "key": "input_device",
+        "label": "Input device",
+        "type": "text",
+        "help": "ALSA capture device, e.g. hw:0,0",
+    },
+    {
+        "key": "output_device",
+        "label": "Output device",
+        "type": "text",
+        "help": "ALSA playback device, e.g. plughw:0,0",
+    },
+    {
+        "key": "capture_channel_index",
+        "label": "Capture channel",
+        "type": "number",
+        "help": "0 .. 5",
+        "min": 0,
+        "max": 5,
+        "step": 1,
+    },
+    {
+        "key": "voice_id",
+        "label": "Voice ID",
+        "type": "text",
+        "help": "Optional ElevenLabs voice ID",
+    },
+    {
+        "key": "alternate_voice_id",
+        "label": "Alt voice ID",
+        "type": "text",
+        "help": "Optional switch_voice target",
     },
 )
 
@@ -266,12 +317,14 @@ class WebDashboardState:
         static_dir: Path,
         teleop_config_path: str,
         vision_config_path: str,
+        voice_config_path: str,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
         self.static_dir = static_dir
         self.teleop_config_path = teleop_config_path
         self.vision_config_path = vision_config_path
+        self.voice_config_path = voice_config_path
         self.log_hub = BroadcastHub(loop)
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
@@ -568,6 +621,48 @@ async def vision_config_apply_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **vision_config_payload(config)})
 
 
+def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
+    return {
+        "values": config.to_dict(),
+        "fields": [dict(field) for field in VOICE_FIELDS],
+    }
+
+
+async def voice_config_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    try:
+        config = load_voice_config(state.voice_config_path)
+    except VoiceConfigError as exc:
+        return web.json_response(
+            {
+                **voice_config_payload(VoiceConfig()),
+                "error": str(exc),
+            },
+            status=200,
+        )
+    return web.json_response(voice_config_payload(config))
+
+
+async def voice_config_apply_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    try:
+        values = await request.json()
+        if not isinstance(values, dict):
+            raise ValueError("expected a JSON object")
+        config = VoiceConfig.from_dict(values)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid voice config: {exc}"}, status=400)
+
+    try:
+        await asyncio.to_thread(save_voice_config, config, state.voice_config_path)
+    except OSError as exc:
+        state.log_hub.publish(f"Voice config save failed: {exc}")
+        return web.json_response({"error": str(exc)}, status=500)
+
+    state.log_hub.publish("Voice config saved.")
+    return web.json_response({"ok": True, **voice_config_payload(config)})
+
+
 def build_app(state: WebDashboardState) -> web.Application:
     app = web.Application(middlewares=[no_cache_middleware])
     app["state"] = state
@@ -581,6 +676,8 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_post("/config/drive", drive_config_apply_handler)
     app.router.add_get("/config/vision", vision_config_handler)
     app.router.add_post("/config/vision", vision_config_apply_handler)
+    app.router.add_get("/config/voice", voice_config_handler)
+    app.router.add_post("/config/voice", voice_config_apply_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 
@@ -594,6 +691,7 @@ async def run_service(args: argparse.Namespace) -> None:
         Path(args.static_dir),
         args.teleop_config,
         args.vision_config,
+        args.voice_config,
     )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
@@ -624,6 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
+    parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
     parser.add_argument("--static-dir", default=str(STATIC_DIR))
     return parser
 

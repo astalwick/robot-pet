@@ -288,6 +288,10 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("fetch('/redeploy/status')", self.dashboard_js)
         self.assertIn("redeployArmedUntil = Date.now() + 10000", self.dashboard_js)
 
+    def test_redeploy_status_poll_does_not_clear_arm_while_request_in_flight(self):
+        self.assertIn("redeployRequestInFlight", self.dashboard_js)
+        self.assertIn("} else if (!redeployRequestInFlight) {", self.dashboard_js)
+
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
         self.assertIn("const min = -(2 ** 31);", self.dashboard_js)
@@ -328,6 +332,10 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("onVoiceToggle", self.dashboard_js)
         self.assertIn("updateVoiceToggleButton", self.dashboard_js)
         self.assertIn(".record-dot", self.dashboard_css)
+
+    def test_voice_toggle_disables_button_while_pending(self):
+        self.assertIn("button.disabled = voiceTogglePending", self.dashboard_js)
+        self.assertIn("voice toggle timed out waiting for telemetry", self.dashboard_js)
 
     def test_button_binding_tolerates_missing_elements(self):
         self.assertIn("function on(id, eventName, handler)", self.dashboard_js)

@@ -18,12 +18,14 @@
   let maxAbsSpeedQpps = 1;
   let redeployArmedUntil = 0;
   let redeployRunning = false;
+  let redeployRequestInFlight = false;
   let logsPaused = false;
   let cameraRetry = null;
   let latestVoice = null;
   let voiceRowsReady = false;
   let voiceRequestedEnabled = null;
   let voiceTogglePending = false;
+  let voiceToggleTimeout = null;
   const voicePendingPatch = {};
   const voiceGainSaveTimers = {};
 
@@ -175,7 +177,7 @@
     const button = document.getElementById('voice-toggle-button');
     const label = button.querySelector('.voice-toggle-label');
     button.classList.remove('ok', 'warn', 'err', 'muted');
-    button.disabled = false;
+    button.disabled = voiceTogglePending;
     if (voiceTogglePending && voiceRequestedEnabled === true) {
       label.textContent = 'Starting';
       button.classList.add('warn');
@@ -263,8 +265,7 @@
       }
     });
     if (voiceRequestedEnabled !== null && voice.enabled === voiceRequestedEnabled) {
-      voiceRequestedEnabled = null;
-      voiceTogglePending = false;
+      clearVoiceTogglePending();
     }
   }
 
@@ -535,6 +536,7 @@
   }
 
   async function onRedeploy() {
+    if (redeployRequestInFlight) return;
     const endpoint = Date.now() <= redeployArmedUntil ? '/redeploy/run' : '/redeploy/arm';
     const previous = {
       redeployArmedUntil,
@@ -547,6 +549,7 @@
       redeployArmedUntil = 0;
     }
     updateRedeployButton();
+    redeployRequestInFlight = true;
     try {
       const response = await fetch(endpoint, { method: 'POST' });
       const status = await response.json();
@@ -556,7 +559,16 @@
       redeployRunning = previous.redeployRunning;
       updateRedeployButton();
       appendLog(`redeploy request failed: ${err}`);
+    } finally {
+      redeployRequestInFlight = false;
     }
+  }
+
+  function clearVoiceTogglePending() {
+    clearTimeout(voiceToggleTimeout);
+    voiceToggleTimeout = null;
+    voiceRequestedEnabled = null;
+    voiceTogglePending = false;
   }
 
   async function onVoiceToggle() {
@@ -565,11 +577,17 @@
     voiceRequestedEnabled = !currentEnabled;
     voiceTogglePending = true;
     updateVoiceToggleButton({ ...(latestVoice || {}), enabled: voiceRequestedEnabled }, voiceRequestedEnabled ? 'starting' : 'stopping', false, null);
+    clearTimeout(voiceToggleTimeout);
+    voiceToggleTimeout = setTimeout(() => {
+      if (!voiceTogglePending) return;
+      appendLog('voice toggle timed out waiting for telemetry');
+      clearVoiceTogglePending();
+      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
+    }, 10000);
     const result = await updateVoiceConfig({ enabled: voiceRequestedEnabled });
     if (!result.ok) {
       appendLog(`voice config update failed: ${result.error}`);
-      voiceRequestedEnabled = null;
-      voiceTogglePending = false;
+      clearVoiceTogglePending();
       updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
     }
   }
@@ -634,7 +652,11 @@
   function applyRedeployStatus(status) {
     const wasRunning = redeployRunning;
     redeployRunning = status.running === true;
-    redeployArmedUntil = status.armed ? Date.now() + (status.armed_seconds_remaining * 1000) : 0;
+    if (status.armed) {
+      redeployArmedUntil = Date.now() + (status.armed_seconds_remaining * 1000);
+    } else if (!redeployRequestInFlight) {
+      redeployArmedUntil = 0;
+    }
     if (wasRunning && !redeployRunning) refreshCameraStream();
     updateRedeployButton();
   }
@@ -642,13 +664,12 @@
   function updateRedeployButton() {
     const button = document.getElementById('redeploy-button');
     if (!button) return;
+    button.disabled = redeployRunning || redeployRequestInFlight;
     if (redeployRunning) {
       button.textContent = 'Redeploying...';
-      button.disabled = true;
       button.classList.remove('armed');
       return;
     }
-    button.disabled = false;
     if (Date.now() <= redeployArmedUntil) {
       button.textContent = 'Redeploy Armed';
       button.classList.add('armed');

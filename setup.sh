@@ -192,23 +192,20 @@ python -m pip install -e "$REPO_DIR"
 echo "[11/14] Running tests..."
 python -m unittest discover tests
 
-# ReSpeaker XVF3800 host tools (Pi 64-bit binaries from upstream repo)
-echo "[12/14] Installing ReSpeaker xvf_host (rpi_64bit)..."
-XVF_DIR="$REPO_DIR/scripts/diagnostics/respeaker-xvf-rpi64"
-if [[ "$(uname -m)" != "aarch64" ]]; then
-    echo "    Skipping (not aarch64; run setup on the Pi)"
-elif [[ -x "$XVF_DIR/xvf_host" ]]; then
-    echo "    Already installed at $XVF_DIR"
+# ReSpeaker Flex python_control (USB tuning via pyusb)
+echo "[12/14] Installing ReSpeaker Flex python_control..."
+RESPEAKER_PY_DIR="$REPO_DIR/scripts/diagnostics/respeaker-flex-python-control"
+if [[ -f "$RESPEAKER_PY_DIR/xvf_host.py" ]]; then
+    echo "    Already installed at $RESPEAKER_PY_DIR"
 else
-    xvf_tmp="$(mktemp -d)"
-    curl -fsSL -o "$xvf_tmp/respeaker.tar.gz" \
-        "https://codeload.github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/tar.gz/master"
-    mkdir -p "$XVF_DIR"
-    tar -xzf "$xvf_tmp/respeaker.tar.gz" -C "$XVF_DIR" --strip-components=3 \
-        reSpeaker_XVF3800_USB_4MIC_ARRAY-master/host_control/rpi_64bit
-    rm -rf "$xvf_tmp"
-    chmod +x "$XVF_DIR/xvf_host" "$XVF_DIR/xvf_i2c_dfu"
-    echo "    Installed to $XVF_DIR"
+    respeaker_tmp="$(mktemp -d)"
+    curl -fsSL -o "$respeaker_tmp/respeaker-flex.tar.gz" \
+        "https://codeload.github.com/respeaker/reSpeaker_Flex/tar.gz/main"
+    mkdir -p "$RESPEAKER_PY_DIR"
+    tar -xzf "$respeaker_tmp/respeaker-flex.tar.gz" -C "$RESPEAKER_PY_DIR" --strip-components=2 \
+        reSpeaker_Flex-main/python_control
+    rm -rf "$respeaker_tmp"
+    echo "    Installed to $RESPEAKER_PY_DIR"
 fi
 
 # Set ReSpeaker PCM volume and persist via alsa-restore.service on next boot

@@ -15,6 +15,7 @@ dependencies = [
     "numpy",
     "openai",
     "pyserial",
+    "pyusb",
     "rich",
     "certifi",
     "sounddevice",

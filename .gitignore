@@ -47,7 +47,7 @@ Thumbs.db
 # --- Project-specific ---
 artifacts/
 data/
-scripts/diagnostics/respeaker-xvf-rpi64/*
-!scripts/diagnostics/respeaker-xvf-rpi64/README.md
+scripts/diagnostics/respeaker-flex-python-control/*
+!scripts/diagnostics/respeaker-flex-python-control/README.md
 *.img
 *.iso

@@ -29,6 +29,41 @@
   let voicePersistWork = Promise.resolve();
   const voicePendingPatch = {};
   const voiceGainSaveTimers = {};
+  let voicePersistSerial = 0;
+  let redeployWorkSerial = 0;
+  let lastRedeployButtonLabel = '';
+  let lastVoiceDbgKey = '';
+  let lastVoiceButtonLabel = '';
+
+  function voiceDbg(step, detail) {
+    console.log('[dashboard voice]', step, detail || '');
+  }
+
+  function redeployDbg(step, detail) {
+    console.log('[dashboard redeploy]', step, detail || '');
+  }
+
+  function voiceSnapshot() {
+    return {
+      want: voiceWantEnabled,
+      telemetry: voiceTelemetryEnabled,
+      pending: voiceUiPending(),
+      hydrated: voiceHydrated,
+      persistSerial: voicePersistSerial,
+      status: latestVoice ? latestVoice.status : null,
+      enabled: latestVoice ? latestVoice.enabled : null,
+    };
+  }
+
+  function redeploySnapshot() {
+    return {
+      armedUntil: redeployArmedUntil,
+      armed: Date.now() <= redeployArmedUntil,
+      running: redeployRunning,
+      workSerial: redeployWorkSerial,
+      msUntilDisarm: Math.max(0, redeployArmedUntil - Date.now()),
+    };
+  }
 
   // Build the camera URL from the page hostname so a remote browser
   // (e.g. MacBook) loads MJPEG from the Pi, not from its own loopback.
@@ -65,6 +100,7 @@
   }
 
   function bindActions() {
+    voiceDbg('bind', 'attaching click handlers');
     on('voice-toggle-button', 'click', onVoiceToggle);
     on('redeploy-button', 'click', onRedeploy);
     on('config-button', 'click', openConfig);
@@ -153,10 +189,21 @@
     const voiceSource = sources.voice || {};
     const voice = snapshot.voice || {};
     latestVoice = voice;
+    const prevTelemetry = voiceTelemetryEnabled;
     voiceTelemetryEnabled = !!voice.enabled;
     if (!voiceHydrated) {
       voiceWantEnabled = voiceTelemetryEnabled;
       voiceHydrated = true;
+      voiceDbg('hydrate', { fromTelemetry: voiceTelemetryEnabled, status: voice.status });
+    }
+    const dbgKey = `${voiceWantEnabled}|${voiceTelemetryEnabled}|${voice.status}|${voiceUiPending()}`;
+    if (dbgKey !== lastVoiceDbgKey) {
+      lastVoiceDbgKey = dbgKey;
+      voiceDbg('telemetry', {
+        telemetryChanged: prevTelemetry !== voiceTelemetryEnabled,
+        prevTelemetry,
+        now: voiceSnapshot(),
+      });
     }
     clearAppliedVoicePatch(voice);
     const stale = voiceSource.stale !== false;
@@ -207,6 +254,10 @@
     else button.classList.add('warn');
     label.textContent = text;
     button.setAttribute('aria-label', text);
+    if (text !== lastVoiceButtonLabel) {
+      lastVoiceButtonLabel = text;
+      voiceDbg('button', { label: text, disabled: button.disabled, ...voiceSnapshot() });
+    }
   }
 
   function ensureVoiceRows() {
@@ -547,61 +598,94 @@
   }
 
   function onRedeploy() {
-    if (redeployRunning) return;
+    redeployDbg('click', { before: redeploySnapshot() });
+    if (redeployRunning) {
+      redeployDbg('click ignored', 'redeployRunning is true');
+      return;
+    }
     if (Date.now() > redeployArmedUntil) {
       redeployArmedUntil = Date.now() + 10000;
+      redeployDbg('click -> arm (local)', { after: redeploySnapshot() });
       updateRedeployButton();
-      redeployWork = redeployWork.then(postRedeployArm).catch((err) => {
+      const job = ++redeployWorkSerial;
+      redeployWork = redeployWork.then(() => postRedeployArm(job)).catch((err) => {
+        redeployDbg('arm chain error', { job, err: String(err), ...redeploySnapshot() });
         redeployArmedUntil = 0;
         updateRedeployButton();
         appendLog(`redeploy arm failed: ${err}`);
       });
+      redeployDbg('arm queued', { job, ...redeploySnapshot() });
       return;
     }
     redeployArmedUntil = 0;
     redeployRunning = true;
+    redeployDbg('click -> run (local)', { after: redeploySnapshot() });
     updateRedeployButton();
-    redeployWork = redeployWork.then(postRedeployRun).catch((err) => {
+    const job = ++redeployWorkSerial;
+    redeployWork = redeployWork.then(() => postRedeployRun(job)).catch((err) => {
+      redeployDbg('run chain error', { job, err: String(err), ...redeploySnapshot() });
       redeployRunning = false;
       updateRedeployButton();
       appendLog(`redeploy run failed: ${err}`);
     });
+    redeployDbg('run queued', { job, ...redeploySnapshot() });
   }
 
-  async function postRedeployArm() {
+  async function postRedeployArm(job) {
+    redeployDbg('arm fetch start', { job, ...redeploySnapshot() });
     const response = await fetch('/redeploy/arm', { method: 'POST' });
-    applyRedeployStatus(await response.json());
+    const status = await response.json();
+    redeployDbg('arm fetch done', { job, ok: response.ok, status, ...redeploySnapshot() });
+    applyRedeployStatus(status, 'arm-response');
   }
 
-  async function postRedeployRun() {
+  async function postRedeployRun(job) {
+    redeployDbg('run fetch start', { job, ...redeploySnapshot() });
     const response = await fetch('/redeploy/run', { method: 'POST' });
-    applyRedeployStatus(await response.json());
+    const status = await response.json();
+    redeployDbg('run fetch done', { job, ok: response.ok, status, ...redeploySnapshot() });
+    applyRedeployStatus(status, 'run-response');
   }
 
   function onVoiceToggle() {
+    const before = voiceSnapshot();
+    voiceDbg('click', { before });
     voiceWantEnabled = !voiceWantEnabled;
+    voiceDbg('click -> want updated', { after: voiceSnapshot() });
     updateVoiceToggleButton();
     queueVoicePersist();
   }
 
   function queueVoicePersist() {
-    voicePersistWork = voicePersistWork.then(persistVoiceWant).catch((err) => {
+    const job = ++voicePersistSerial;
+    voiceDbg('persist queued', { job, ...voiceSnapshot() });
+    voicePersistWork = voicePersistWork.then(() => persistVoiceWant(job)).catch((err) => {
+      voiceDbg('persist chain error', { job, err: String(err), ...voiceSnapshot() });
       appendLog(`voice config save failed: ${err}`);
       voiceWantEnabled = voiceTelemetryEnabled;
+      voiceDbg('persist reverted want to telemetry', voiceSnapshot());
       updateVoiceToggleButton();
     });
   }
 
-  async function persistVoiceWant() {
+  async function persistVoiceWant(job) {
     const want = voiceWantEnabled;
+    voiceDbg('persist start', { job, want, ...voiceSnapshot() });
     const result = await updateVoiceConfig({ enabled: want });
+    voiceDbg('persist post done', { job, want, result, ...voiceSnapshot() });
     if (!result.ok) {
       appendLog(`voice config update failed: ${result.error}`);
       voiceWantEnabled = voiceTelemetryEnabled;
+      voiceDbg('persist failed -> reverted want', voiceSnapshot());
       updateVoiceToggleButton();
       return;
     }
-    if (voiceWantEnabled !== want) await persistVoiceWant();
+    if (voiceWantEnabled !== want) {
+      voiceDbg('persist want changed during save, saving again', { job, saved: want, now: voiceWantEnabled });
+      await persistVoiceWant(job);
+      return;
+    }
+    voiceDbg('persist complete', { job, ...voiceSnapshot() });
   }
 
   function onVoiceGainInput(event) {
@@ -629,23 +713,35 @@
   }
 
   async function fetchVoiceValues() {
+    voiceDbg('config fetch start', null);
     try {
       const response = await fetch('/config/voice');
-      if (!response.ok) return null;
+      if (!response.ok) {
+        voiceDbg('config fetch failed', { status: response.status });
+        return null;
+      }
       const payload = await response.json();
+      voiceDbg('config fetch ok', { enabled: payload.values ? payload.values.enabled : null });
       return payload.values || null;
     } catch (err) {
+      voiceDbg('config fetch error', String(err));
       appendLog(`voice config fetch failed: ${err}`);
       return null;
     }
   }
 
   async function updateVoiceConfig(patch) {
+    voiceDbg('config update start', patch);
     try {
       const values = await fetchVoiceValues();
       if (!values) return { ok: false, error: 'could not load voice config' };
-      return await postConfig('/config/voice', { ...values, ...patch });
+      const merged = { ...values, ...patch };
+      voiceDbg('config post start', { enabled: merged.enabled });
+      const result = await postConfig('/config/voice', merged);
+      voiceDbg('config post done', result);
+      return result;
     } catch (err) {
+      voiceDbg('config update error', String(err));
       return { ok: false, error: String(err) };
     }
   }
@@ -655,15 +751,17 @@
     try {
       const response = await fetch('/redeploy/status');
       if (!response.ok) return;
-      applyRedeployStatus(await response.json());
+      applyRedeployStatus(await response.json(), 'poll');
     } catch (err) {
-      // The web dashboard restarts during redeploy; the next poll will reconnect.
+      redeployDbg('poll error', String(err));
     }
   }
 
-  function applyRedeployStatus(status) {
+  function applyRedeployStatus(status, source) {
+    const before = redeploySnapshot();
     const wasRunning = redeployRunning;
     redeployRunning = status.running === true;
+    redeployDbg('apply status', { source, status, before, after: redeploySnapshot() });
     if (wasRunning && !redeployRunning) refreshCameraStream();
     updateRedeployButton();
   }
@@ -683,6 +781,15 @@
     } else {
       button.textContent = 'Redeploy';
       button.classList.remove('armed');
+    }
+    const text = button.textContent;
+    if (text !== lastRedeployButtonLabel) {
+      lastRedeployButtonLabel = text;
+      redeployDbg('button', {
+        text,
+        disabled: button.disabled,
+        ...redeploySnapshot(),
+      });
     }
   }
 

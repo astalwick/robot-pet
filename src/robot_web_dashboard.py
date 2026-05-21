@@ -630,94 +630,11 @@ def drive_tuning_payload(tuning: DriveTuning) -> dict[str, Any]:
     }
 
 
-async def drive_config_handler(request: web.Request) -> web.Response:
-    state: WebDashboardState = request.app["state"]
-    try:
-        tuning = load_drive_tuning(state.teleop_config_path)
-    except DriveTuningConfigError as exc:
-        return web.json_response(
-            {
-                **drive_tuning_payload(DriveTuning()),
-                "error": str(exc),
-            },
-            status=200,
-        )
-    return web.json_response(drive_tuning_payload(tuning))
-
-
-async def drive_config_apply_handler(request: web.Request) -> web.Response:
-    state: WebDashboardState = request.app["state"]
-    if state.get_tuning_apply_running():
-        return web.json_response({"error": "Drive tuning apply already running."}, status=409)
-
-    try:
-        values = await request.json()
-        if not isinstance(values, dict):
-            raise ValueError("expected a JSON object")
-        tuning = DriveTuning.from_dict(values)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        return web.json_response({"error": f"Invalid drive tuning: {exc}"}, status=400)
-
-    state.set_tuning_apply_running(True)
-    state.log_hub.publish("Saving drive tuning and restarting gamepad-teleop...")
-    try:
-        await asyncio.to_thread(save_drive_tuning, tuning, state.teleop_config_path)
-        result = await asyncio.to_thread(restart_gamepad_teleop)
-    except Exception as exc:
-        state.log_hub.publish(f"Drive tuning apply failed: {exc}")
-        return web.json_response({"error": str(exc)}, status=500)
-    finally:
-        state.set_tuning_apply_running(False)
-
-    if result.returncode == 0:
-        state.log_hub.publish("Drive tuning saved. gamepad-teleop restarted.")
-        return web.json_response({"ok": True, **drive_tuning_payload(tuning)})
-
-    output = (result.stderr or result.stdout).strip()
-    state.log_hub.publish(f"Drive tuning saved, but restart failed: {output}")
-    return web.json_response({"error": output, **drive_tuning_payload(tuning)}, status=500)
-
-
 def vision_config_payload(config: VisionConfig) -> dict[str, Any]:
     return {
         "values": config.to_dict(),
         "fields": [dict(field) for field in VISION_FIELDS],
     }
-
-
-async def vision_config_handler(request: web.Request) -> web.Response:
-    state: WebDashboardState = request.app["state"]
-    try:
-        config = load_vision_config(state.vision_config_path)
-    except VisionConfigError as exc:
-        return web.json_response(
-            {
-                **vision_config_payload(VisionConfig()),
-                "error": str(exc),
-            },
-            status=200,
-        )
-    return web.json_response(vision_config_payload(config))
-
-
-async def vision_config_apply_handler(request: web.Request) -> web.Response:
-    state: WebDashboardState = request.app["state"]
-    try:
-        values = await request.json()
-        if not isinstance(values, dict):
-            raise ValueError("expected a JSON object")
-        config = VisionConfig.from_dict(values)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        return web.json_response({"error": f"Invalid vision config: {exc}"}, status=400)
-
-    try:
-        await asyncio.to_thread(save_vision_config, config, state.vision_config_path)
-    except OSError as exc:
-        state.log_hub.publish(f"Vision config save failed: {exc}")
-        return web.json_response({"error": str(exc)}, status=500)
-
-    state.log_hub.publish("Vision config saved.")
-    return web.json_response({"ok": True, **vision_config_payload(config)})
 
 
 def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
@@ -727,39 +644,122 @@ def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
     }
 
 
-async def voice_config_handler(request: web.Request) -> web.Response:
+CONFIGS: dict[str, dict[str, Any]] = {
+    "drive": {
+        "path_attr": "teleop_config_path",
+        "load": load_drive_tuning,
+        "save": save_drive_tuning,
+        "from_dict": DriveTuning.from_dict,
+        "default": DriveTuning,
+        "error": DriveTuningConfigError,
+        "payload": drive_tuning_payload,
+        "saved_log": "Drive tuning saved.",
+    },
+    "vision": {
+        "path_attr": "vision_config_path",
+        "load": load_vision_config,
+        "save": save_vision_config,
+        "from_dict": VisionConfig.from_dict,
+        "default": VisionConfig,
+        "error": VisionConfigError,
+        "payload": vision_config_payload,
+        "saved_log": "Vision config saved.",
+    },
+    "voice": {
+        "path_attr": "voice_config_path",
+        "load": load_voice_config,
+        "save": save_voice_config,
+        "from_dict": VoiceConfig.from_dict,
+        "default": VoiceConfig,
+        "error": VoiceConfigError,
+        "payload": voice_config_payload,
+        "saved_log": "Voice config saved.",
+    },
+}
+
+
+def _config_path(state: WebDashboardState, name: str) -> str:
+    return getattr(state, CONFIGS[name]["path_attr"])
+
+
+async def config_get(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    spec = CONFIGS.get(name)
+    if spec is None:
+        raise web.HTTPNotFound()
+
     state: WebDashboardState = request.app["state"]
+    path = _config_path(state, name)
     try:
-        config = load_voice_config(state.voice_config_path)
-    except VoiceConfigError as exc:
+        config = await asyncio.to_thread(spec["load"], path)
+    except spec["error"] as exc:
         return web.json_response(
             {
-                **voice_config_payload(VoiceConfig()),
+                **spec["payload"](spec["default"]()),
                 "error": str(exc),
             },
             status=200,
         )
-    return web.json_response(voice_config_payload(config))
+    return web.json_response(spec["payload"](config))
 
 
-async def voice_config_apply_handler(request: web.Request) -> web.Response:
+async def config_apply(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    spec = CONFIGS.get(name)
+    if spec is None:
+        raise web.HTTPNotFound()
+
     state: WebDashboardState = request.app["state"]
-    try:
-        values = await request.json()
-        if not isinstance(values, dict):
-            raise ValueError("expected a JSON object")
-        config = VoiceConfig.from_dict(values)
-    except (json.JSONDecodeError, TypeError, ValueError) as exc:
-        return web.json_response({"error": f"Invalid voice config: {exc}"}, status=400)
+    path = _config_path(state, name)
 
     try:
-        await asyncio.to_thread(save_voice_config, config, state.voice_config_path)
+        patch = await request.json()
+        if not isinstance(patch, dict):
+            raise ValueError("expected a JSON object")
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid {name} config: {exc}"}, status=400)
+
+    try:
+        current = await asyncio.to_thread(spec["load"], path)
+    except spec["error"]:
+        current = spec["default"]()
+
+    try:
+        config = spec["from_dict"]({**current.to_dict(), **patch})
+    except (TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid {name} config: {exc}"}, status=400)
+
+    if name == "drive":
+        if state.get_tuning_apply_running():
+            return web.json_response({"error": "Drive tuning apply already running."}, status=409)
+
+        state.set_tuning_apply_running(True)
+        state.log_hub.publish("Saving drive tuning and restarting gamepad-teleop...")
+        try:
+            await asyncio.to_thread(spec["save"], config, path)
+            result = await asyncio.to_thread(restart_gamepad_teleop)
+        except Exception as exc:
+            state.log_hub.publish(f"Drive tuning apply failed: {exc}")
+            return web.json_response({"error": str(exc)}, status=500)
+        finally:
+            state.set_tuning_apply_running(False)
+
+        if result.returncode == 0:
+            state.log_hub.publish("Drive tuning saved. gamepad-teleop restarted.")
+            return web.json_response({"ok": True, **spec["payload"](config)})
+
+        output = (result.stderr or result.stdout).strip()
+        state.log_hub.publish(f"Drive tuning saved, but restart failed: {output}")
+        return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+
+    try:
+        await asyncio.to_thread(spec["save"], config, path)
     except OSError as exc:
-        state.log_hub.publish(f"Voice config save failed: {exc}")
+        state.log_hub.publish(f"{name} config save failed: {exc}")
         return web.json_response({"error": str(exc)}, status=500)
 
-    state.log_hub.publish("Voice config saved.")
-    return web.json_response({"ok": True, **voice_config_payload(config)})
+    state.log_hub.publish(spec["saved_log"])
+    return web.json_response({"ok": True, **spec["payload"](config)})
 
 
 def build_app(state: WebDashboardState) -> web.Application:
@@ -771,12 +771,8 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_get("/redeploy/status", redeploy_status_handler)
     app.router.add_post("/redeploy/arm", redeploy_arm_handler)
     app.router.add_post("/redeploy/run", redeploy_run_handler)
-    app.router.add_get("/config/drive", drive_config_handler)
-    app.router.add_post("/config/drive", drive_config_apply_handler)
-    app.router.add_get("/config/vision", vision_config_handler)
-    app.router.add_post("/config/vision", vision_config_apply_handler)
-    app.router.add_get("/config/voice", voice_config_handler)
-    app.router.add_post("/config/voice", voice_config_apply_handler)
+    app.router.add_get("/config/{name}", config_get)
+    app.router.add_post("/config/{name}", config_apply)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 

@@ -255,6 +255,35 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["voice_id"], "voice-a")
         self.assertEqual(saved["alternate_voice_id"], "voice-b")
 
+    async def test_post_config_voice_partial_merge_preserves_other_keys(self):
+        with open(self.voice_config_path, "w") as file_obj:
+            json.dump(
+                {
+                    "enabled": False,
+                    "input_device": "hw:2,0",
+                    "output_device": "plughw:2,0",
+                    "capture_channel_index": 1,
+                    "input_gain": 1.0,
+                    "output_gain": 1.0,
+                },
+                file_obj,
+            )
+
+        async with self.client.post("/config/voice", json={"input_gain": 1.5}) as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+        self.assertTrue(payload["ok"])
+
+        with open(self.voice_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertEqual(saved["input_gain"], 1.5)
+        self.assertEqual(saved["input_device"], "hw:2,0")
+        self.assertFalse(saved["enabled"])
+
+    async def test_config_unknown_name_returns_404(self):
+        async with self.client.get("/config/nope") as resp:
+            self.assertEqual(resp.status, 404)
+
     async def _publish_repeatedly(self, snapshot):
         while True:
             self.store.publish(snapshot)
@@ -290,6 +319,7 @@ class DashboardJsTest(unittest.TestCase):
         self.telemetry_js = self._module("telemetry.js")
         self.voice_js = self._module("voice.js")
         self.config_js = self._module("config.js")
+        self.config_store_js = self._module("config-store.js")
         self.dom_js = self._module("dom.js")
         self.main_js = self._module("main.js")
         self.dashboard_html = (static_dir / "index.html").read_text()
@@ -361,11 +391,9 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("export function renderVoice(snapshot, sources)", self.voice_js)
         self.assertIn("renderVoice(snapshot, sources)", self.telemetry_js)
 
-    def test_dashboard_exposes_barge_in_tuning_controls(self):
-        self.assertIn("barge_in_enabled", self.voice_js)
-        self.assertIn("barge_in_min_rms", self.voice_js)
-        self.assertIn("barge_in_sustain_ms", self.voice_js)
-        self.assertIn("barge_in_playback_leakage_ratio", self.voice_js)
+    def test_dashboard_exposes_barge_in_visibility_not_inline_editors(self):
+        self.assertNotIn("voiceToggleRow('barge-in'", self.voice_js)
+        self.assertNotIn("barge_in_min_rms", self.voice_js)
         self.assertIn("barge_in_event", self.voice_js)
         self.assertIn("JUST NOW", self.voice_js)
         self.assertIn("HEARING STT", self.voice_js)
@@ -387,15 +415,14 @@ class DashboardJsTest(unittest.TestCase):
         self.assertNotIn("'Listening'", self.voice_js)
         self.assertNotIn("'Voice Error'", self.voice_js)
 
-    def test_voice_toggle_uses_want_state_not_merged_toggle(self):
+    def test_voice_toggle_uses_want_state_and_config_store(self):
         self.assertIn("voiceWantEnabled", self.voice_js)
         self.assertIn("voiceTelemetryEnabled", self.voice_js)
         self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.voice_js)
         self.assertIn("voiceUiPending", self.voice_js)
-        self.assertIn("voicePersistWork = voicePersistWork.then", self.voice_js)
-        self.assertNotIn("voiceTargetEnabled", self.voice_js)
-        self.assertNotIn("voiceEffectiveEnabled", self.voice_js)
-        self.assertNotIn("if (voiceTogglePending) return", self.voice_js)
+        self.assertIn("configStore.voice.patch({ enabled: voiceWantEnabled })", self.voice_js)
+        self.assertNotIn("voicePersistWork", self.voice_js)
+        self.assertNotIn("fetchVoiceValues", self.voice_js)
 
     def test_button_binding_tolerates_missing_elements(self):
         self.assertIn("export function on(id, eventName, handler)", self.dom_js)
@@ -427,13 +454,22 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("gainControlRow('mic gain', 'input_gain'", self.voice_js)
         self.assertIn("gainControlRow('speaker', 'output_gain'", self.voice_js)
         self.assertIn("onVoiceGainCommit", self.voice_js)
-        self.assertIn("voicePendingPatch", self.voice_js)
+        self.assertIn("configStore.voice.patch", self.voice_js)
+        self.assertIn("configStore.voice.get", self.voice_js)
         self.assertIn("data-voice-key", self.voice_js)
+
+    def test_config_store_owns_save_queue(self):
+        self.assertIn("saveWork", self.config_store_js)
+        self.assertIn("patch(partial)", self.config_store_js)
+        self.assertIn("runSave", self.config_store_js)
+        self.assertIn("export const configStore", self.config_store_js)
 
     def test_config_renderer_supports_text_fields_without_number_coercion(self):
         self.assertIn("field.type === 'text'", self.config_js)
         self.assertIn("target[input.dataset.key] = input.value", self.config_js)
-        self.assertIn("fetch('/config/voice')", self.config_js)
+        self.assertIn("configStore.voice.apply", self.config_js)
+        self.assertIn("loadAll", self.config_js)
+        self.assertNotIn("fetchVoiceValues", self.voice_js)
 
     def test_config_modal_fields_scroll_inside_viewport(self):
         self.assertIn("max-height: calc(100vh - 2rem)", self.dashboard_css)

@@ -1,29 +1,5 @@
 import { escapeHtml } from './dom.js';
-
-export async function postConfig(url, values) {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(values),
-  });
-  let payload = {};
-  try {
-    payload = await response.json();
-  } catch (err) {
-    // Non-JSON body — fall through to generic error.
-  }
-  if (!response.ok) {
-    return { ok: false, error: payload.error || `${url} apply failed (${response.status})` };
-  }
-  return { ok: true };
-}
-
-export async function fetchVoiceValues() {
-  const response = await fetch('/config/voice');
-  if (!response.ok) return null;
-  const payload = await response.json();
-  return payload.values || null;
-}
+import { configStore, loadAll } from './config-store.js';
 
 function fieldHtml(field, values, section) {
   const value = values[field.key];
@@ -67,10 +43,10 @@ function fieldHtml(field, values, section) {
     `;
 }
 
-function renderConfigFields(drive, vision, voice) {
-  const driveHtml = drive.fields.map((field) => fieldHtml(field, drive.values, 'drive')).join('');
-  const visionHtml = vision.fields.map((field) => fieldHtml(field, vision.values, 'vision')).join('');
-  const voiceHtml = voice.fields.map((field) => fieldHtml(field, voice.values, 'voice')).join('');
+function renderConfigFields() {
+  const driveHtml = configStore.drive.fields.map((field) => fieldHtml(field, configStore.drive.server, 'drive')).join('');
+  const visionHtml = configStore.vision.fields.map((field) => fieldHtml(field, configStore.vision.server, 'vision')).join('');
+  const voiceHtml = configStore.voice.fields.map((field) => fieldHtml(field, configStore.voice.server, 'voice')).join('');
   document.getElementById('config-fields').innerHTML = `
       <h3 class="config-section">Drive</h3>
       ${driveHtml}
@@ -91,22 +67,14 @@ async function openConfig() {
   error.textContent = '';
   modal.classList.remove('hidden');
 
-  const [driveResp, visionResp, voiceResp] = await Promise.all([
-    fetch('/config/drive'),
-    fetch('/config/vision'),
-    fetch('/config/voice'),
-  ]);
-  const drive = await driveResp.json();
-  const vision = await visionResp.json();
-  const voice = await voiceResp.json();
-
+  const results = await loadAll();
   const messages = [];
-  if (drive.error) messages.push(`Drive: ${drive.error}`);
-  if (vision.error) messages.push(`Vision: ${vision.error}`);
-  if (voice.error) messages.push(`Voice: ${voice.error}`);
+  if (results[0].error) messages.push(`Drive: ${results[0].error}`);
+  if (results[1].error) messages.push(`Vision: ${results[1].error}`);
+  if (results[2].error) messages.push(`Voice: ${results[2].error}`);
   error.textContent = messages.join('\n');
 
-  renderConfigFields(drive, vision, voice);
+  renderConfigFields();
 }
 
 async function applyConfig(event) {
@@ -129,11 +97,11 @@ async function applyConfig(event) {
   });
 
   const messages = [];
-  const visionResult = await postConfig('/config/vision', visionValues);
+  const visionResult = await configStore.vision.apply(visionValues);
   if (!visionResult.ok) messages.push(`Vision: ${visionResult.error}`);
-  const voiceResult = await postConfig('/config/voice', voiceValues);
+  const voiceResult = await configStore.voice.apply(voiceValues);
   if (!voiceResult.ok) messages.push(`Voice: ${voiceResult.error}`);
-  const driveResult = await postConfig('/config/drive', driveValues);
+  const driveResult = await configStore.drive.apply(driveValues);
   if (!driveResult.ok) messages.push(`Drive: ${driveResult.error}`);
 
   if (messages.length) {

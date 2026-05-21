@@ -333,6 +333,7 @@ async def handle_scribe_events(
     gate_threshold_rms = policy.barge_in_min_rms
     gate_last_reason = "assistant_not_speaking"
     barge_in_event_count = 0
+    barge_in_hearing_reported = False
     levels = audio_levels if audio_levels is not None else {"mic_rms": 0, "playback_rms": 0, "playback_at": 0.0}
     recent_assistant_text = ""
     recent_assistant_echo_until = 0.0
@@ -377,6 +378,13 @@ async def handle_scribe_events(
             barge_in_last_event=f"{source}: {reason}",
         )
 
+    def publish_barge_in_hearing(source: str) -> None:
+        nonlocal barge_in_hearing_reported
+        if barge_in_hearing_reported:
+            return
+        barge_in_hearing_reported = True
+        publish_barge_in_event(source, "hearing")
+
     async def cancel_active_turn(reason: str) -> None:
         nonlocal active_turn
         turn = active_turn
@@ -412,8 +420,9 @@ async def handle_scribe_events(
         status(status="listening", assistant_speaking=False, last_assistant_text=assistant_text)
 
     async def start_turn(prompt: str, speculative: bool) -> None:
-        nonlocal active_turn, next_turn_id
+        nonlocal active_turn, next_turn_id, barge_in_hearing_reported
         await cancel_active_turn("new_turn")
+        barge_in_hearing_reported = False
         next_turn_id += 1
         playback_event = asyncio.Event()
         speaking_event = asyncio.Event()
@@ -473,6 +482,7 @@ async def handle_scribe_events(
         status(status="hearing", partial_transcript=text)
         if active_turn and active_turn.is_active() and active_turn.is_speaking():
             active_turn.mark_speech_started(now)
+            publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
             playback_rms = effective_playback_rms(levels, now)
             should_barge_in, gate_last_reason = policy.barge_in_decision(
@@ -532,6 +542,7 @@ async def handle_scribe_events(
             and not policy.transcript_matches(text, active_turn.prompt)
         ):
             active_turn.mark_speech_started(now)
+            publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
             playback_rms = effective_playback_rms(levels, now)
             should_barge_in, gate_last_reason = policy.barge_in_decision(
@@ -560,13 +571,13 @@ async def handle_scribe_events(
             publish_barge_in_event("commit", gate_last_reason)
             await cancel_active_turn("barge_in_commit")
             if should_start_from_commit:
-                status(status="thinking", last_committed_transcript=text)
+                status(status="thinking", partial_transcript=None, last_committed_transcript=text)
                 await start_turn(text, speculative=False)
             else:
-                status(status="listening", last_committed_transcript=text)
+                status(status="listening", partial_transcript=None, last_committed_transcript=text)
             return
 
-        status(status="thinking", last_committed_transcript=text)
+        status(status="thinking", partial_transcript=None, last_committed_transcript=text)
 
         if active_turn and active_turn.is_active():
             if policy.transcript_matches(text, active_turn.prompt):

@@ -280,7 +280,7 @@
     updateBargeInEvent(displayVoice);
     setVoiceValue('barge_in_gate', formatBargeInGate(displayVoice), formatBargeInGateClass(displayVoice));
     setVoiceValue('barge_in_reason', displayVoice.barge_in_last_reason || '--', displayVoice.barge_in_last_reason ? 'warn' : 'muted');
-    const transcript = displayVoice.last_committed_transcript || displayVoice.partial_transcript || '--';
+    const transcript = displayVoice.partial_transcript || displayVoice.last_committed_transcript || '--';
     setVoiceValue('transcript', transcript, transcript === '--' ? 'muted' : '');
     setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
     updateVoiceToggleButton();
@@ -421,6 +421,11 @@
     } else if (count > lastBargeInEventCount) {
       lastBargeInEventCount = count;
       bargeInFlashUntil = Date.now() + 5000;
+    }
+
+    if (voice.assistant_speaking && voice.partial_transcript) {
+      setVoiceValue('barge_in_event', 'HEARING STT', 'ok');
+      return;
     }
 
     const event = voice.barge_in_last_event || '';

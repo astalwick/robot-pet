@@ -521,6 +521,13 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertTrue(
                 any(
                     status.get("barge_in_event_count") == 1
+                    and status.get("barge_in_last_event") == "stt: hearing"
+                    for status in statuses
+                )
+            )
+            self.assertTrue(
+                any(
+                    status.get("barge_in_event_count") == 2
                     and status.get("barge_in_last_event") == "commit: explicit_interrupt"
                     for status in statuses
                 )

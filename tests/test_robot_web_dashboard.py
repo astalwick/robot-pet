@@ -288,9 +288,11 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("fetch('/redeploy/status')", self.dashboard_js)
         self.assertIn("redeployArmedUntil = Date.now() + 10000", self.dashboard_js)
 
-    def test_redeploy_status_poll_does_not_clear_arm_while_request_in_flight(self):
-        self.assertIn("redeployRequestInFlight", self.dashboard_js)
-        self.assertIn("} else if (!redeployRequestInFlight) {", self.dashboard_js)
+    def test_redeploy_clicks_queue_work_without_blocking(self):
+        self.assertIn("redeployWork = redeployWork.then", self.dashboard_js)
+        self.assertNotIn("redeployRequestInFlight", self.dashboard_js)
+        self.assertNotIn("if (redeployRequestInFlight) return", self.dashboard_js)
+        self.assertIn("button.disabled = redeployRunning", self.dashboard_js)
 
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
@@ -342,9 +344,14 @@ class DashboardJsTest(unittest.TestCase):
         self.assertNotIn("'Listening'", self.dashboard_js)
         self.assertNotIn("'Voice Error'", self.dashboard_js)
 
-    def test_voice_toggle_allows_clicks_while_save_queued(self):
-        self.assertIn("voiceSaveInFlight", self.dashboard_js)
-        self.assertIn("voiceSaveAgain", self.dashboard_js)
+    def test_voice_toggle_uses_want_state_not_merged_toggle(self):
+        self.assertIn("voiceWantEnabled", self.dashboard_js)
+        self.assertIn("voiceTelemetryEnabled", self.dashboard_js)
+        self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.dashboard_js)
+        self.assertIn("voiceUiPending", self.dashboard_js)
+        self.assertIn("voicePersistWork = voicePersistWork.then", self.dashboard_js)
+        self.assertNotIn("voiceTargetEnabled", self.dashboard_js)
+        self.assertNotIn("voiceEffectiveEnabled", self.dashboard_js)
         self.assertNotIn("if (voiceTogglePending) return", self.dashboard_js)
 
     def test_button_binding_tolerates_missing_elements(self):

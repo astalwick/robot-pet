@@ -18,14 +18,15 @@
   let maxAbsSpeedQpps = 1;
   let redeployArmedUntil = 0;
   let redeployRunning = false;
-  let redeployRequestInFlight = false;
+  let redeployWork = Promise.resolve();
   let logsPaused = false;
   let cameraRetry = null;
   let latestVoice = null;
   let voiceRowsReady = false;
-  let voiceTargetEnabled = null;
-  let voiceSaveInFlight = false;
-  let voiceSaveAgain = false;
+  let voiceWantEnabled = false;
+  let voiceTelemetryEnabled = false;
+  let voiceHydrated = false;
+  let voicePersistWork = Promise.resolve();
   const voicePendingPatch = {};
   const voiceGainSaveTimers = {};
 
@@ -152,6 +153,11 @@
     const voiceSource = sources.voice || {};
     const voice = snapshot.voice || {};
     latestVoice = voice;
+    voiceTelemetryEnabled = !!voice.enabled;
+    if (!voiceHydrated) {
+      voiceWantEnabled = voiceTelemetryEnabled;
+      voiceHydrated = true;
+    }
     clearAppliedVoicePatch(voice);
     const stale = voiceSource.stale !== false;
     const displayVoice = { ...voice, ...voicePendingPatch };
@@ -172,21 +178,14 @@
     updateVoiceToggleButton();
   }
 
-  function voiceEffectiveEnabled() {
-    if (voiceTargetEnabled !== null) return voiceTargetEnabled;
-    return !!(latestVoice && latestVoice.enabled);
-  }
-
-  function voiceToggleInTransition() {
-    if (voiceSaveInFlight) return true;
-    if (voiceTargetEnabled === null || !latestVoice) return false;
-    return latestVoice.enabled !== voiceTargetEnabled;
+  function voiceUiPending() {
+    return voiceWantEnabled !== voiceTelemetryEnabled;
   }
 
   function voiceCardStatus(voice, stale, lastError) {
     if (stale) return { text: 'STALE', cls: 'err' };
-    if (voiceToggleInTransition()) {
-      return { text: voiceEffectiveEnabled() ? 'STARTING' : 'STOPPING', cls: 'warn' };
+    if (voiceUiPending()) {
+      return { text: voiceWantEnabled ? 'STARTING' : 'STOPPING', cls: 'warn' };
     }
     const status = voice.status || 'unknown';
     return { text: status.toUpperCase(), cls: voiceStatusClass(status, lastError) };
@@ -196,12 +195,11 @@
     const button = document.getElementById('voice-toggle-button');
     if (!button) return;
     const label = button.querySelector('.voice-toggle-label');
-    const targetOn = voiceEffectiveEnabled();
     let text;
-    if (voiceToggleInTransition()) {
-      text = targetOn ? 'Starting' : 'Stopping';
+    if (voiceUiPending()) {
+      text = voiceWantEnabled ? 'Starting' : 'Stopping';
     } else {
-      text = targetOn ? 'Voice On' : 'Voice Off';
+      text = voiceWantEnabled ? 'Voice On' : 'Voice Off';
     }
     button.classList.remove('ok', 'warn', 'err', 'muted');
     if (text === 'Voice On') button.classList.add('ok');
@@ -280,9 +278,6 @@
         delete voicePendingPatch[key];
       }
     });
-    if (voiceTargetEnabled !== null && voice.enabled === voiceTargetEnabled && !voiceSaveInFlight) {
-      voiceTargetEnabled = null;
-    }
   }
 
   function voiceStatusClass(status, lastError) {
@@ -551,64 +546,62 @@
     ]);
   }
 
-  async function onRedeploy() {
-    if (redeployRequestInFlight) return;
-    const endpoint = Date.now() <= redeployArmedUntil ? '/redeploy/run' : '/redeploy/arm';
-    const previous = {
-      redeployArmedUntil,
-      redeployRunning,
-    };
-    if (endpoint === '/redeploy/arm') {
+  function onRedeploy() {
+    if (redeployRunning) return;
+    if (Date.now() > redeployArmedUntil) {
       redeployArmedUntil = Date.now() + 10000;
-    } else {
-      redeployRunning = true;
-      redeployArmedUntil = 0;
-    }
-    updateRedeployButton();
-    redeployRequestInFlight = true;
-    try {
-      const response = await fetch(endpoint, { method: 'POST' });
-      const status = await response.json();
-      applyRedeployStatus(status);
-    } catch (err) {
-      redeployArmedUntil = previous.redeployArmedUntil;
-      redeployRunning = previous.redeployRunning;
       updateRedeployButton();
-      appendLog(`redeploy request failed: ${err}`);
-    } finally {
-      redeployRequestInFlight = false;
+      redeployWork = redeployWork.then(postRedeployArm).catch((err) => {
+        redeployArmedUntil = 0;
+        updateRedeployButton();
+        appendLog(`redeploy arm failed: ${err}`);
+      });
+      return;
     }
+    redeployArmedUntil = 0;
+    redeployRunning = true;
+    updateRedeployButton();
+    redeployWork = redeployWork.then(postRedeployRun).catch((err) => {
+      redeployRunning = false;
+      updateRedeployButton();
+      appendLog(`redeploy run failed: ${err}`);
+    });
+  }
+
+  async function postRedeployArm() {
+    const response = await fetch('/redeploy/arm', { method: 'POST' });
+    applyRedeployStatus(await response.json());
+  }
+
+  async function postRedeployRun() {
+    const response = await fetch('/redeploy/run', { method: 'POST' });
+    applyRedeployStatus(await response.json());
   }
 
   function onVoiceToggle() {
-    voiceTargetEnabled = !voiceEffectiveEnabled();
+    voiceWantEnabled = !voiceWantEnabled;
     updateVoiceToggleButton();
-    void saveVoiceTarget();
+    queueVoicePersist();
   }
 
-  async function saveVoiceTarget() {
-    if (voiceSaveInFlight) {
-      voiceSaveAgain = true;
+  function queueVoicePersist() {
+    voicePersistWork = voicePersistWork.then(persistVoiceWant).catch((err) => {
+      appendLog(`voice config save failed: ${err}`);
+      voiceWantEnabled = voiceTelemetryEnabled;
+      updateVoiceToggleButton();
+    });
+  }
+
+  async function persistVoiceWant() {
+    const want = voiceWantEnabled;
+    const result = await updateVoiceConfig({ enabled: want });
+    if (!result.ok) {
+      appendLog(`voice config update failed: ${result.error}`);
+      voiceWantEnabled = voiceTelemetryEnabled;
+      updateVoiceToggleButton();
       return;
     }
-    voiceSaveInFlight = true;
-    updateVoiceToggleButton();
-    try {
-      do {
-        voiceSaveAgain = false;
-        if (voiceTargetEnabled === null) break;
-        const target = voiceTargetEnabled;
-        const result = await updateVoiceConfig({ enabled: target });
-        if (!result.ok) {
-          appendLog(`voice config update failed: ${result.error}`);
-          voiceTargetEnabled = !!(latestVoice && latestVoice.enabled);
-          break;
-        }
-      } while (voiceSaveAgain);
-    } finally {
-      voiceSaveInFlight = false;
-      updateVoiceToggleButton();
-    }
+    if (voiceWantEnabled !== want) await persistVoiceWant();
   }
 
   function onVoiceGainInput(event) {
@@ -671,11 +664,6 @@
   function applyRedeployStatus(status) {
     const wasRunning = redeployRunning;
     redeployRunning = status.running === true;
-    if (status.armed) {
-      redeployArmedUntil = Date.now() + (status.armed_seconds_remaining * 1000);
-    } else if (!redeployRequestInFlight) {
-      redeployArmedUntil = 0;
-    }
     if (wasRunning && !redeployRunning) refreshCameraStream();
     updateRedeployButton();
   }
@@ -683,7 +671,7 @@
   function updateRedeployButton() {
     const button = document.getElementById('redeploy-button');
     if (!button) return;
-    button.disabled = redeployRunning || redeployRequestInFlight;
+    button.disabled = redeployRunning;
     if (redeployRunning) {
       button.textContent = 'Redeploying...';
       button.classList.remove('armed');

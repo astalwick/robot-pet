@@ -321,6 +321,7 @@ class DashboardJsTest(unittest.TestCase):
         self.config_js = self._module("config.js")
         self.config_store_js = self._module("config-store.js")
         self.dom_js = self._module("dom.js")
+        self.logs_js = self._module("logs.js")
         self.main_js = self._module("main.js")
         self.dashboard_html = (static_dir / "index.html").read_text()
         self.dashboard_css = (static_dir / "dashboard.css").read_text()
@@ -488,6 +489,18 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("max-height: calc(100vh - 2rem)", self.dashboard_css)
         self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto auto", self.dashboard_css)
         self.assertIn("overflow-y: auto", self.dashboard_css)
+
+    def test_logs_follow_bottom_only_when_at_bottom(self):
+        self.assertIn("let followBottom = true", self.logs_js)
+        self.assertIn("function logsAtBottom(output)", self.logs_js)
+        self.assertIn("if (followBottom) {", self.logs_js)
+        self.assertIn("output.scrollTop = output.scrollHeight", self.logs_js)
+
+    def test_logs_scroll_listener_updates_follow_bottom(self):
+        self.assertIn("export function bindLogScroll(bindOn)", self.logs_js)
+        self.assertIn("bindOn('logs-output', 'scroll'", self.logs_js)
+        self.assertIn("followBottom = logsAtBottom(output)", self.logs_js)
+        self.assertIn("bindLogScroll(on)", self.main_js)
 
 
 if __name__ == "__main__":

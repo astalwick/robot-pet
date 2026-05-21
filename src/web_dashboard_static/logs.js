@@ -1,12 +1,19 @@
 import { on } from './dom.js';
 
 let logsPaused = false;
+let followBottom = true;
+
+function logsAtBottom(output) {
+  return output.scrollHeight - output.scrollTop - output.clientHeight <= 4;
+}
 
 export function appendLog(line) {
   if (logsPaused) return;
   const output = document.getElementById('logs-output');
   output.textContent += `${line}\n`;
-  output.scrollTop = output.scrollHeight;
+  if (followBottom) {
+    output.scrollTop = output.scrollHeight;
+  }
 }
 
 export function connectLogs() {
@@ -22,6 +29,13 @@ export function connectLogs() {
   });
   events.addEventListener('error', () => {
     appendLog('log stream disconnected');
+  });
+}
+
+export function bindLogScroll(bindOn) {
+  bindOn('logs-output', 'scroll', () => {
+    const output = document.getElementById('logs-output');
+    if (output) followBottom = logsAtBottom(output);
   });
 }
 

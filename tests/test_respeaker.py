@@ -145,6 +145,46 @@ class ReSpeakerTest(unittest.TestCase):
         finally:
             del sys.modules["sounddevice"]
 
+    def test_stale_end_playback_does_not_stop_new_session(self):
+        class FakeOutputStream:
+            writes: list[bytes] = []
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def write(self, audio: bytes) -> None:
+                FakeOutputStream.writes.append(audio)
+
+        class FakeSoundDevice:
+            RawOutputStream = FakeOutputStream
+
+            @staticmethod
+            def query_devices():
+                return []
+
+        async def run():
+            FakeOutputStream.writes = []
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            old_id = await audio.begin_playback()
+            await audio.begin_playback()
+            await audio.end_playback(old_id)
+            await audio.write_output(b"still playing")
+            await audio.end_playback()
+
+            self.assertEqual(FakeOutputStream.writes, [b"still playing"])
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
     def test_begin_playback_waits_for_in_flight_end(self):
         class FakeOutputStream:
             opened = 0

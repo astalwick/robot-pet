@@ -83,6 +83,8 @@ class ReSpeakerAudio:
         self.input_gain = input_gain
         self.output_gain = output_gain
         self._playback_lock = asyncio.Lock()
+        self._playback_id = 0
+        self._active_playback_id: int | None = None
         self._playback_queue: asyncio.Queue[bytes | object] | None = None
         self._playback_task: asyncio.Task[None] | None = None
 
@@ -118,19 +120,25 @@ class ReSpeakerAudio:
                 mono = extract_mono_channel(interleaved, self.capture_channels, self.capture_channel_index)
                 yield apply_pcm16_gain(mono, self.input_gain)
 
-    async def begin_playback(self) -> None:
+    async def begin_playback(self) -> int:
         async with self._playback_lock:
             await self._finish_playback()
+            self._playback_id += 1
+            playback_id = self._playback_id
+            self._active_playback_id = playback_id
             self._playback_queue = asyncio.Queue(maxsize=PLAYBACK_QUEUE_MAXSIZE)
             self._playback_task = asyncio.create_task(self._run_playback())
+            return playback_id
 
     async def write_output(self, audio: bytes) -> None:
         if self._playback_queue is None:
             raise ReSpeakerError("playback not started; call begin_playback() first")
         await self._playback_queue.put(audio)
 
-    async def end_playback(self) -> None:
+    async def end_playback(self, playback_id: int | None = None) -> None:
         async with self._playback_lock:
+            if playback_id is not None and playback_id != self._active_playback_id:
+                return
             await self._finish_playback()
 
     async def _finish_playback(self) -> None:
@@ -142,6 +150,7 @@ class ReSpeakerAudio:
         finally:
             self._playback_queue = None
             self._playback_task = None
+            self._active_playback_id = None
 
     async def _run_playback(self) -> None:
         import sounddevice as sd

@@ -1,3 +1,5 @@
+const SAVE_DEBOUNCE_MS = 350;
+
 async function postConfig(name, body) {
   const response = await fetch(`/config/${name}`, {
     method: 'POST',
@@ -16,6 +18,12 @@ async function postConfig(name, body) {
   return { ok: true, payload };
 }
 
+function valuesEqual(a, b) {
+  if (typeof a === 'boolean' || typeof b === 'boolean') return a === b;
+  if (typeof a === 'string' || typeof b === 'string') return a === b;
+  return Number(a) === Number(b);
+}
+
 function createSection(name) {
   const section = {
     name,
@@ -23,6 +31,7 @@ function createSection(name) {
     fields: [],
     local: {},
     saveWork: Promise.resolve(),
+    debounceTimer: null,
 
     get(key) {
       if (key in section.local) return section.local[key];
@@ -36,9 +45,15 @@ function createSection(name) {
     ingestServer(partial) {
       if (!partial) return;
       for (const key of Object.keys(partial)) {
-        if (!(key in section.local)) {
-          section.server[key] = partial[key];
+        const incoming = partial[key];
+        if (key in section.local) {
+          if (valuesEqual(incoming, section.local[key])) {
+            section.server[key] = incoming;
+            delete section.local[key];
+          }
+          continue;
         }
+        section.server[key] = incoming;
       }
     },
 
@@ -51,8 +66,18 @@ function createSection(name) {
       return { error: payload.error, ok: response.ok };
     },
 
-    patch(partial) {
+    set(partial) {
       Object.assign(section.local, partial);
+      clearTimeout(section.debounceTimer);
+      section.debounceTimer = setTimeout(() => {
+        section.debounceTimer = null;
+        section.queueSave();
+      }, SAVE_DEBOUNCE_MS);
+    },
+
+    flush() {
+      clearTimeout(section.debounceTimer);
+      section.debounceTimer = null;
       return section.queueSave();
     },
 
@@ -75,22 +100,33 @@ function createSection(name) {
     },
 
     async runSave() {
-      while (Object.keys(section.local).length > 0) {
+      while (true) {
+        const dirtyKeys = Object.keys(section.local).filter(
+          (key) => !valuesEqual(section.local[key], section.server[key]),
+        );
+        if (dirtyKeys.length === 0) break;
+
+        const submitted = {};
+        for (const key of dirtyKeys) submitted[key] = section.local[key];
+
         const body = { ...section.server, ...section.local };
         const result = await postConfig(name, body);
         if (!result.ok) {
+          for (const key of Object.keys(submitted)) {
+            if (key in section.local && valuesEqual(section.local[key], submitted[key])) {
+              delete section.local[key];
+            }
+          }
           return result;
         }
-        const savedKeys = Object.keys(section.local);
         if (result.payload && result.payload.values) {
           section.server = result.payload.values;
         } else {
-          for (const key of savedKeys) {
-            section.server[key] = section.local[key];
+          for (const key of Object.keys(submitted)) {
+            if (key in section.local && valuesEqual(section.local[key], submitted[key])) {
+              section.server[key] = section.local[key];
+            }
           }
-        }
-        for (const key of savedKeys) {
-          delete section.local[key];
         }
       }
       return { ok: true };

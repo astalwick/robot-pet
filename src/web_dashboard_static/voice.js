@@ -5,7 +5,6 @@ import { configStore } from './config-store.js';
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
 const GAIN_KEYS = ['input_gain', 'output_gain'];
-const gainSaveTimers = {};
 
 let latestVoice = null;
 let voiceRowsReady = false;
@@ -100,10 +99,11 @@ function setVoiceValue(key, value, cls = '') {
   element.className = `value${activity} ${cls}`.trim();
 }
 
-function updateGainControl(key, value) {
-  const gain = Number(value == null ? 1.0 : value);
+function updateGainControl(key) {
+  const raw = configStore.voice.get(key);
+  const gain = Number(raw == null ? 1.0 : raw);
   const input = document.querySelector(`input[data-voice-key="${key}"]`);
-  if (input && document.activeElement !== input) input.value = gain.toFixed(1);
+  if (input) input.value = gain.toFixed(1);
   setVoiceValue(key, gain.toFixed(1));
 }
 
@@ -207,8 +207,8 @@ export function renderVoice(snapshot, sources) {
   setVoiceValue('input', voice.input_device || '--');
   setVoiceValue('output', voice.output_device || '--');
   setVoiceValue('channel', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--');
-  updateGainControl('input_gain', configStore.voice.get('input_gain'));
-  updateGainControl('output_gain', configStore.voice.get('output_gain'));
+  updateGainControl('input_gain');
+  updateGainControl('output_gain');
   updateBargeInEvent(voice);
   setVoiceValue('barge_in_gate', formatBargeInGate(voice), formatBargeInGateClass(voice));
   setVoiceValue('barge_in_reason', voice.barge_in_last_reason || '--', voice.barge_in_last_reason ? 'warn' : 'muted');
@@ -226,7 +226,8 @@ async function handleSaveError(result) {
 function onVoiceToggle() {
   voiceWantEnabled = !voiceWantEnabled;
   updateVoiceToggleButton();
-  configStore.voice.patch({ enabled: voiceWantEnabled }).then((result) => {
+  configStore.voice.set({ enabled: voiceWantEnabled });
+  configStore.voice.flush().then((result) => {
     handleSaveError(result);
     if (result && !result.ok) {
       voiceWantEnabled = voiceTelemetryEnabled;
@@ -235,29 +236,19 @@ function onVoiceToggle() {
   });
 }
 
-function queueGainSave(key, value) {
-  updateGainControl(key, value);
-  clearTimeout(gainSaveTimers[key]);
-  gainSaveTimers[key] = setTimeout(() => {
-    configStore.voice.patch({ [key]: value }).then(handleSaveError);
-  }, 350);
-}
-
 function onVoiceGainInput(event) {
   const input = event.target;
   if (!input.dataset.voiceKey) return;
   if (!GAIN_KEYS.includes(input.dataset.voiceKey)) return;
-  queueGainSave(input.dataset.voiceKey, Number(input.value));
+  configStore.voice.set({ [input.dataset.voiceKey]: Number(input.value) });
 }
 
 function onVoiceGainCommit(event) {
   const input = event.target;
   if (!input.dataset.voiceKey) return;
   if (!GAIN_KEYS.includes(input.dataset.voiceKey)) return;
-  clearTimeout(gainSaveTimers[input.dataset.voiceKey]);
-  const value = Number(input.value);
-  updateGainControl(input.dataset.voiceKey, value);
-  configStore.voice.patch({ [input.dataset.voiceKey]: value }).then(handleSaveError);
+  configStore.voice.set({ [input.dataset.voiceKey]: Number(input.value) });
+  configStore.voice.flush().then(handleSaveError);
 }
 
 export function bindVoiceHandlers(bindOn) {

@@ -420,7 +420,8 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("voiceTelemetryEnabled", self.voice_js)
         self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.voice_js)
         self.assertIn("voiceUiPending", self.voice_js)
-        self.assertIn("configStore.voice.patch({ enabled: voiceWantEnabled })", self.voice_js)
+        self.assertIn("configStore.voice.set({ enabled: voiceWantEnabled })", self.voice_js)
+        self.assertIn("configStore.voice.flush()", self.voice_js)
         self.assertNotIn("voicePersistWork", self.voice_js)
         self.assertNotIn("fetchVoiceValues", self.voice_js)
 
@@ -454,15 +455,27 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("gainControlRow('mic gain', 'input_gain'", self.voice_js)
         self.assertIn("gainControlRow('speaker', 'output_gain'", self.voice_js)
         self.assertIn("onVoiceGainCommit", self.voice_js)
-        self.assertIn("configStore.voice.patch", self.voice_js)
+        self.assertIn("configStore.voice.set", self.voice_js)
+        self.assertIn("configStore.voice.flush()", self.voice_js)
         self.assertIn("configStore.voice.get", self.voice_js)
         self.assertIn("data-voice-key", self.voice_js)
+        self.assertNotIn("queueGainSave", self.voice_js)
+        self.assertNotIn("gainSaveTimers", self.voice_js)
 
     def test_config_store_owns_save_queue(self):
         self.assertIn("saveWork", self.config_store_js)
-        self.assertIn("patch(partial)", self.config_store_js)
+        self.assertIn("set(partial)", self.config_store_js)
+        self.assertIn("flush()", self.config_store_js)
+        self.assertIn("debounceTimer", self.config_store_js)
         self.assertIn("runSave", self.config_store_js)
         self.assertIn("export const configStore", self.config_store_js)
+        self.assertNotIn("patch(partial)", self.config_store_js)
+
+    def test_config_store_pending_local_and_ingest(self):
+        self.assertIn("Object.assign(section.local, partial)", self.config_store_js)
+        self.assertIn("valuesEqual(incoming, section.local[key])", self.config_store_js)
+        self.assertIn("const submitted = {}", self.config_store_js)
+        self.assertIn("dirtyKeys", self.config_store_js)
 
     def test_config_renderer_supports_text_fields_without_number_coercion(self):
         self.assertIn("field.type === 'text'", self.config_js)

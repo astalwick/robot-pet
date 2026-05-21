@@ -77,6 +77,9 @@
   bindActions();
   connectTelemetry();
   connectLogs();
+  syncRedeployFromServer();
+  setInterval(syncRedeployFromServer, 5000);
+  console.log('[dashboard] ready — action handlers bound once at load; they are never removed');
 
   function setupCameraStream() {
     const camera = document.getElementById('camera-stream');
@@ -103,6 +106,19 @@
     voiceDbg('bind', 'attaching click handlers');
     on('voice-toggle-button', 'click', onVoiceToggle);
     on('redeploy-button', 'click', onRedeploy);
+    const actions = document.getElementById('actions');
+    if (actions) {
+      actions.addEventListener('pointerdown', (event) => {
+        const button = event.target.closest('button');
+        if (!button || !actions.contains(button)) return;
+        console.log('[dashboard pointer]', {
+          id: button.id,
+          disabled: button.disabled,
+          text: button.textContent,
+          redeploy: redeploySnapshot(),
+        });
+      }, true);
+    }
     on('config-button', 'click', openConfig);
     on('config-cancel', 'click', closeConfig);
     on('config-modal', 'click', (event) => {
@@ -124,7 +140,12 @@
 
   function on(id, eventName, handler) {
     const element = document.getElementById(id);
-    if (element) element.addEventListener(eventName, handler);
+    if (element) {
+      element.addEventListener(eventName, handler);
+      console.log('[dashboard bind]', id, eventName, element);
+    } else {
+      console.error('[dashboard bind] MISSING ELEMENT', id, eventName);
+    }
   }
 
   function connectTelemetry() {
@@ -746,20 +767,25 @@
     }
   }
 
-  async function refreshRedeployStatus() {
-    if (!redeployRunning && Date.now() > redeployArmedUntil) return;
+  async function syncRedeployFromServer() {
     try {
       const response = await fetch('/redeploy/status');
       if (!response.ok) return;
-      applyRedeployStatus(await response.json(), 'poll');
+      applyRedeployStatus(await response.json(), 'sync');
     } catch (err) {
-      redeployDbg('poll error', String(err));
+      redeployDbg('sync error', String(err));
     }
+  }
+
+  async function refreshRedeployStatus() {
+    if (!redeployRunning && Date.now() > redeployArmedUntil) return;
+    await syncRedeployFromServer();
   }
 
   function applyRedeployStatus(status, source) {
     const before = redeploySnapshot();
     const wasRunning = redeployRunning;
+    // Only trust server for "running". Arm timer is owned by the UI clicks.
     redeployRunning = status.running === true;
     redeployDbg('apply status', { source, status, before, after: redeploySnapshot() });
     if (wasRunning && !redeployRunning) refreshCameraStream();
@@ -769,7 +795,9 @@
   function updateRedeployButton() {
     const button = document.getElementById('redeploy-button');
     if (!button) return;
-    button.disabled = redeployRunning;
+    // Never disable — disabled buttons do not fire click events (looks like "unbound").
+    button.disabled = false;
+    button.classList.toggle('is-busy', redeployRunning);
     if (redeployRunning) {
       button.textContent = 'Redeploying...';
       button.classList.remove('armed');

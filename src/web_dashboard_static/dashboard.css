@@ -313,6 +313,11 @@ button:disabled {
   border-color: #163040;
 }
 
+button.is-busy {
+  cursor: wait;
+  color: var(--text-dim);
+}
+
 #logs-toolbar {
   margin-bottom: 0.5rem;
 }

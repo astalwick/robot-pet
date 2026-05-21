@@ -292,7 +292,9 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("redeployWork = redeployWork.then", self.dashboard_js)
         self.assertNotIn("redeployRequestInFlight", self.dashboard_js)
         self.assertNotIn("if (redeployRequestInFlight) return", self.dashboard_js)
-        self.assertIn("button.disabled = redeployRunning", self.dashboard_js)
+        self.assertIn("button.disabled = false", self.dashboard_js)
+        self.assertIn("syncRedeployFromServer", self.dashboard_js)
+        self.assertIn("[dashboard pointer]", self.dashboard_js)
 
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)

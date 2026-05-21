@@ -194,7 +194,7 @@ python -m unittest discover tests
 
 # Set ReSpeaker PCM volume and persist via alsa-restore.service on next boot
 echo "[12/13] Setting speaker volume..."
-amixer -c 0 sset 'PCM' 90% >/dev/null
+amixer -c 0 sset 'PCM' 100% >/dev/null
 sudo alsactl store
 
 # Install and enable systemd services

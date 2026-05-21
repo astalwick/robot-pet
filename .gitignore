@@ -47,7 +47,5 @@ Thumbs.db
 # --- Project-specific ---
 artifacts/
 data/
-scripts/diagnostics/respeaker-flex-python-control/*
-!scripts/diagnostics/respeaker-flex-python-control/README.md
 *.img
 *.iso

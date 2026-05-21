@@ -23,9 +23,9 @@
   let cameraRetry = null;
   let latestVoice = null;
   let voiceRowsReady = false;
-  let voiceRequestedEnabled = null;
-  let voiceTogglePending = false;
-  let voiceToggleTimeout = null;
+  let voiceTargetEnabled = null;
+  let voiceSaveInFlight = false;
+  let voiceSaveAgain = false;
   const voicePendingPatch = {};
   const voiceGainSaveTimers = {};
 
@@ -155,12 +155,11 @@
     clearAppliedVoicePatch(voice);
     const stale = voiceSource.stale !== false;
     const displayVoice = { ...voice, ...voicePendingPatch };
-    if (voiceRequestedEnabled !== null) displayVoice.enabled = voiceRequestedEnabled;
-    const status = voiceRequestedEnabled === true ? 'starting' : (voiceRequestedEnabled === false ? 'stopping' : (stale ? 'stale' : (voice.status || 'unknown')));
-    const lastError = voiceRequestedEnabled === null ? voice.last_error : null;
+    const lastError = voice.last_error;
+    const cardStatus = voiceCardStatus(voice, stale, lastError);
 
     ensureVoiceRows();
-    setVoiceValue('status', status.toUpperCase(), voiceStatusClass(status, lastError));
+    setVoiceValue('status', cardStatus.text, cardStatus.cls);
     setVoiceValue('listen', displayVoice.enabled ? 'enabled' : 'disabled', displayVoice.enabled ? 'ok' : 'muted');
     setVoiceValue('input', displayVoice.input_device || '--');
     setVoiceValue('output', displayVoice.output_device || '--');
@@ -170,46 +169,52 @@
     const transcript = displayVoice.last_committed_transcript || displayVoice.partial_transcript || '--';
     setVoiceValue('transcript', transcript, transcript === '--' ? 'muted' : '');
     setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
-    updateVoiceToggleButton(displayVoice, status, stale, lastError);
+    updateVoiceToggleButton();
   }
 
-  function updateVoiceToggleButton(voice, status, stale, lastError) {
-    const button = document.getElementById('voice-toggle-button');
-    const label = button.querySelector('.voice-toggle-label');
-    button.classList.remove('ok', 'warn', 'err', 'muted');
-    button.disabled = voiceTogglePending;
-    if (voiceTogglePending && voiceRequestedEnabled === true) {
-      label.textContent = 'Starting';
-      button.classList.add('warn');
-    } else if (voiceTogglePending && voiceRequestedEnabled === false) {
-      label.textContent = 'Stopping';
-      button.classList.add('warn');
-    } else if (lastError || status === 'error') {
-      label.textContent = 'Voice Error';
-      button.classList.add('err');
-    } else if (status === 'stopping') {
-      label.textContent = 'Stopping';
-      button.classList.add('warn');
-    } else if (status === 'starting') {
-      label.textContent = 'Starting';
-      button.classList.add('warn');
-    } else if (voice.enabled && !stale) {
-      label.textContent = status === 'speaking' ? 'Speaking' : 'Listening';
-      button.classList.add('ok');
-    } else if (voice.enabled) {
-      label.textContent = 'Voice On';
-      button.classList.add('warn');
-    } else {
-      label.textContent = 'Voice Off';
-      button.classList.add('muted');
+  function voiceEffectiveEnabled() {
+    if (voiceTargetEnabled !== null) return voiceTargetEnabled;
+    return !!(latestVoice && latestVoice.enabled);
+  }
+
+  function voiceToggleInTransition() {
+    if (voiceSaveInFlight) return true;
+    if (voiceTargetEnabled === null || !latestVoice) return false;
+    return latestVoice.enabled !== voiceTargetEnabled;
+  }
+
+  function voiceCardStatus(voice, stale, lastError) {
+    if (stale) return { text: 'STALE', cls: 'err' };
+    if (voiceToggleInTransition()) {
+      return { text: voiceEffectiveEnabled() ? 'STARTING' : 'STOPPING', cls: 'warn' };
     }
-    button.setAttribute('aria-label', label.textContent);
+    const status = voice.status || 'unknown';
+    return { text: status.toUpperCase(), cls: voiceStatusClass(status, lastError) };
+  }
+
+  function updateVoiceToggleButton() {
+    const button = document.getElementById('voice-toggle-button');
+    if (!button) return;
+    const label = button.querySelector('.voice-toggle-label');
+    const targetOn = voiceEffectiveEnabled();
+    let text;
+    if (voiceToggleInTransition()) {
+      text = targetOn ? 'Starting' : 'Stopping';
+    } else {
+      text = targetOn ? 'Voice On' : 'Voice Off';
+    }
+    button.classList.remove('ok', 'warn', 'err', 'muted');
+    if (text === 'Voice On') button.classList.add('ok');
+    else if (text === 'Voice Off') button.classList.add('muted');
+    else button.classList.add('warn');
+    label.textContent = text;
+    button.setAttribute('aria-label', text);
   }
 
   function ensureVoiceRows() {
     if (voiceRowsReady) return;
     document.getElementById('voice-rows').innerHTML = [
-      voiceValueRow('status'),
+      voiceActivityRow(),
       voiceValueRow('listen'),
       voiceValueRow('input'),
       voiceValueRow('output'),
@@ -220,6 +225,16 @@
       voiceValueRow('error'),
     ].join('');
     voiceRowsReady = true;
+  }
+
+  function voiceActivityRow() {
+    return `
+      <div class="row voice-activity-row">
+        <span class="label">activity</span>
+        <span class="bar-cell"></span>
+        <span class="value muted voice-activity" data-voice-value="status">--</span>
+      </div>
+    `;
   }
 
   function voiceValueRow(key) {
@@ -248,7 +263,8 @@
     const element = document.querySelector(`[data-voice-value="${key}"]`);
     if (!element) return;
     element.textContent = value;
-    element.className = `value ${cls}`;
+    const activity = key === 'status' ? ' voice-activity' : '';
+    element.className = `value${activity} ${cls}`.trim();
   }
 
   function updateGainControl(key, value) {
@@ -264,8 +280,8 @@
         delete voicePendingPatch[key];
       }
     });
-    if (voiceRequestedEnabled !== null && voice.enabled === voiceRequestedEnabled) {
-      clearVoiceTogglePending();
+    if (voiceTargetEnabled !== null && voice.enabled === voiceTargetEnabled && !voiceSaveInFlight) {
+      voiceTargetEnabled = null;
     }
   }
 
@@ -564,31 +580,34 @@
     }
   }
 
-  function clearVoiceTogglePending() {
-    clearTimeout(voiceToggleTimeout);
-    voiceToggleTimeout = null;
-    voiceRequestedEnabled = null;
-    voiceTogglePending = false;
+  function onVoiceToggle() {
+    voiceTargetEnabled = !voiceEffectiveEnabled();
+    updateVoiceToggleButton();
+    void saveVoiceTarget();
   }
 
-  async function onVoiceToggle() {
-    if (voiceTogglePending) return;
-    const currentEnabled = voiceRequestedEnabled !== null ? voiceRequestedEnabled : !!(latestVoice && latestVoice.enabled);
-    voiceRequestedEnabled = !currentEnabled;
-    voiceTogglePending = true;
-    updateVoiceToggleButton({ ...(latestVoice || {}), enabled: voiceRequestedEnabled }, voiceRequestedEnabled ? 'starting' : 'stopping', false, null);
-    clearTimeout(voiceToggleTimeout);
-    voiceToggleTimeout = setTimeout(() => {
-      if (!voiceTogglePending) return;
-      appendLog('voice toggle timed out waiting for telemetry');
-      clearVoiceTogglePending();
-      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
-    }, 10000);
-    const result = await updateVoiceConfig({ enabled: voiceRequestedEnabled });
-    if (!result.ok) {
-      appendLog(`voice config update failed: ${result.error}`);
-      clearVoiceTogglePending();
-      updateVoiceToggleButton(latestVoice || {}, latestVoice ? latestVoice.status : 'unknown', false, latestVoice ? latestVoice.last_error : null);
+  async function saveVoiceTarget() {
+    if (voiceSaveInFlight) {
+      voiceSaveAgain = true;
+      return;
+    }
+    voiceSaveInFlight = true;
+    updateVoiceToggleButton();
+    try {
+      do {
+        voiceSaveAgain = false;
+        if (voiceTargetEnabled === null) break;
+        const target = voiceTargetEnabled;
+        const result = await updateVoiceConfig({ enabled: target });
+        if (!result.ok) {
+          appendLog(`voice config update failed: ${result.error}`);
+          voiceTargetEnabled = !!(latestVoice && latestVoice.enabled);
+          break;
+        }
+      } while (voiceSaveAgain);
+    } finally {
+      voiceSaveInFlight = false;
+      updateVoiceToggleButton();
     }
   }
 

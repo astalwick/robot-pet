@@ -333,13 +333,30 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("updateVoiceToggleButton", self.dashboard_js)
         self.assertIn(".record-dot", self.dashboard_css)
 
-    def test_voice_toggle_disables_button_while_pending(self):
-        self.assertIn("button.disabled = voiceTogglePending", self.dashboard_js)
-        self.assertIn("voice toggle timed out waiting for telemetry", self.dashboard_js)
+    def test_voice_toggle_button_has_only_four_labels(self):
+        self.assertIn("'Voice Off'", self.dashboard_js)
+        self.assertIn("'Voice On'", self.dashboard_js)
+        self.assertIn("'Starting'", self.dashboard_js)
+        self.assertIn("'Stopping'", self.dashboard_js)
+        self.assertNotIn("'Speaking'", self.dashboard_js)
+        self.assertNotIn("'Listening'", self.dashboard_js)
+        self.assertNotIn("'Voice Error'", self.dashboard_js)
+
+    def test_voice_toggle_allows_clicks_while_save_queued(self):
+        self.assertIn("voiceSaveInFlight", self.dashboard_js)
+        self.assertIn("voiceSaveAgain", self.dashboard_js)
+        self.assertNotIn("if (voiceTogglePending) return", self.dashboard_js)
 
     def test_button_binding_tolerates_missing_elements(self):
         self.assertIn("function on(id, eventName, handler)", self.dashboard_js)
         self.assertIn("if (element) element.addEventListener", self.dashboard_js)
+
+    def test_voice_card_shows_activity_status_prominently(self):
+        self.assertIn("voiceCardStatus", self.dashboard_js)
+        self.assertIn("voiceActivityRow", self.dashboard_js)
+        self.assertIn("voice-activity-row", self.dashboard_js)
+        self.assertIn(".voice-activity-row .voice-activity", self.dashboard_css)
+        self.assertIn("voiceStatusClass(status, lastError)", self.dashboard_js)
 
     def test_voice_card_has_gain_controls(self):
         self.assertIn("gainControlRow('mic gain', 'input_gain'", self.dashboard_js)

@@ -178,6 +178,12 @@ main {
 .value.muted { color: var(--text-dim); }
 .value.strong { color: #ffffff; font-weight: 600; }
 
+.voice-activity-row .voice-activity {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
 .bar {
   display: block;
   height: 0.5rem;

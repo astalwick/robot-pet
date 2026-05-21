@@ -207,6 +207,8 @@ def voice_update(
     barge_in_playback_rms: int | None = None,
     barge_in_gate_open: bool | None = None,
     barge_in_last_reason: str | None = None,
+    barge_in_event_count: int | None = None,
+    barge_in_last_event: str | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -246,6 +248,10 @@ def voice_update(
         payload["barge_in_gate_open"] = barge_in_gate_open
     if barge_in_last_reason is not None:
         payload["barge_in_last_reason"] = barge_in_last_reason
+    if barge_in_event_count is not None:
+        payload["barge_in_event_count"] = barge_in_event_count
+    if barge_in_last_event is not None:
+        payload["barge_in_last_event"] = barge_in_last_event
     return payload
 
 

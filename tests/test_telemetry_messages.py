@@ -149,6 +149,8 @@ class TelemetryMessagesTest(unittest.TestCase):
             last_committed_transcript="what is your name",
             last_assistant_text="I am Bloop.",
             last_error=None,
+            barge_in_event_count=2,
+            barge_in_last_event="commit: explicit_interrupt",
             now=2000.0,
         )
 
@@ -169,6 +171,8 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["last_committed_transcript"], "what is your name")
         self.assertEqual(message["last_assistant_text"], "I am Bloop.")
         self.assertIsNone(message["last_error"])
+        self.assertEqual(message["barge_in_event_count"], 2)
+        self.assertEqual(message["barge_in_last_event"], "commit: explicit_interrupt")
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False)

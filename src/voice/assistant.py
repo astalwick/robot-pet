@@ -332,6 +332,7 @@ async def handle_scribe_events(
     gate_open = False
     gate_threshold_rms = policy.barge_in_min_rms
     gate_last_reason = "assistant_not_speaking"
+    barge_in_event_count = 0
     levels = audio_levels if audio_levels is not None else {"mic_rms": 0, "playback_rms": 0, "playback_at": 0.0}
     recent_assistant_text = ""
     recent_assistant_echo_until = 0.0
@@ -366,6 +367,14 @@ async def handle_scribe_events(
                 gate_open,
                 gate_last_reason,
             )
+        )
+
+    def publish_barge_in_event(source: str, reason: str) -> None:
+        nonlocal barge_in_event_count
+        barge_in_event_count += 1
+        status(
+            barge_in_event_count=barge_in_event_count,
+            barge_in_last_event=f"{source}: {reason}",
         )
 
     async def cancel_active_turn(reason: str) -> None:
@@ -487,6 +496,7 @@ async def handle_scribe_events(
                 )
             )
             if should_barge_in:
+                publish_barge_in_event("partial", gate_last_reason)
                 await cancel_active_turn("barge_in")
                 await cancel_task(debounce_task)
                 debounce_task = asyncio.create_task(start_after_stable_partial(text))
@@ -547,6 +557,7 @@ async def handle_scribe_events(
             if not should_barge_in:
                 return
 
+            publish_barge_in_event("commit", gate_last_reason)
             await cancel_active_turn("barge_in_commit")
             if should_start_from_commit:
                 status(status="thinking", last_committed_transcript=text)

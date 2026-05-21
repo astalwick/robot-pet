@@ -421,6 +421,7 @@ class AssistantStreamingTest(unittest.TestCase):
         async def run():
             started_inputs = []
             cancelled = []
+            statuses = []
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
 
@@ -452,6 +453,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
                     stop_event=stop_event,
                     assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
                 )
             )
 
@@ -474,6 +476,7 @@ class AssistantStreamingTest(unittest.TestCase):
         async def run():
             started_inputs = []
             cancelled = []
+            statuses = []
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
 
@@ -503,6 +506,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
                     stop_event=stop_event,
                     assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
                 )
             )
 
@@ -514,6 +518,13 @@ class AssistantStreamingTest(unittest.TestCase):
 
             self.assertEqual(len(started_inputs), 1)
             self.assertEqual(cancelled, ["Tell me something"])
+            self.assertTrue(
+                any(
+                    status.get("barge_in_event_count") == 1
+                    and status.get("barge_in_last_event") == "commit: explicit_interrupt"
+                    for status in statuses
+                )
+            )
 
             stop_event.set()
             handler_task.cancel()

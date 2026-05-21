@@ -46,6 +46,8 @@ class RobotVoiceService:
             "barge_in_playback_rms": None,
             "barge_in_gate_open": None,
             "barge_in_last_reason": None,
+            "barge_in_event_count": None,
+            "barge_in_last_event": None,
         }
         self.last_logged_error: str | None = None
 
@@ -169,6 +171,8 @@ class RobotVoiceService:
                 barge_in_playback_rms=optional_int(self.status["barge_in_playback_rms"]),
                 barge_in_gate_open=optional_bool(self.status["barge_in_gate_open"]),
                 barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
+                barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
+                barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
             ),
         )
 

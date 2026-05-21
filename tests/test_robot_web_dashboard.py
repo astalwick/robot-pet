@@ -342,6 +342,8 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("barge_in_min_rms", self.dashboard_js)
         self.assertIn("barge_in_sustain_ms", self.dashboard_js)
         self.assertIn("barge_in_playback_leakage_ratio", self.dashboard_js)
+        self.assertIn("barge_in_event", self.dashboard_js)
+        self.assertIn("JUST NOW", self.dashboard_js)
         self.assertIn("barge_in_gate", self.dashboard_js)
         self.assertIn("barge_in_last_reason", self.dashboard_js)
 

@@ -34,6 +34,8 @@
   let lastRedeployButtonLabel = '';
   let lastVoiceDbgKey = '';
   let lastVoiceButtonLabel = '';
+  let lastBargeInEventCount = null;
+  let bargeInFlashUntil = 0;
   let redeployDisarmTimer = null;
 
   function voiceDbg(step, detail) {
@@ -275,6 +277,7 @@
     updateVoiceSlider('barge_in_min_rms', displayVoice.barge_in_min_rms, 700);
     updateVoiceSlider('barge_in_sustain_ms', displayVoice.barge_in_sustain_ms, 350);
     updateVoiceSlider('barge_in_playback_leakage_ratio', displayVoice.barge_in_playback_leakage_ratio, 1.8);
+    updateBargeInEvent(displayVoice);
     setVoiceValue('barge_in_gate', formatBargeInGate(displayVoice), formatBargeInGateClass(displayVoice));
     setVoiceValue('barge_in_reason', displayVoice.barge_in_last_reason || '--', displayVoice.barge_in_last_reason ? 'warn' : 'muted');
     const transcript = displayVoice.last_committed_transcript || displayVoice.partial_transcript || '--';
@@ -333,8 +336,9 @@
       voiceSliderRow('barge min rms', 'barge_in_min_rms', 100, 5000, 50, 700),
       voiceSliderRow('barge sustain ms', 'barge_in_sustain_ms', 0, 1500, 50, 350),
       voiceSliderRow('playback ratio', 'barge_in_playback_leakage_ratio', 0.5, 5, 0.1, 1.8),
-      voiceValueRow('barge_in_gate'),
-      voiceValueRow('barge_in_reason'),
+      voiceValueRow('barge_in_event', 'barge-in'),
+      voiceValueRow('barge_in_gate', 'interrupt gate'),
+      voiceValueRow('barge_in_reason', 'gate status'),
       voiceValueRow('transcript'),
       voiceValueRow('error'),
     ].join('');
@@ -351,10 +355,10 @@
     `;
   }
 
-  function voiceValueRow(key) {
+  function voiceValueRow(key, label = key) {
     return `
       <div class="row">
-        <span class="label">${escapeHtml(key)}</span>
+        <span class="label">${escapeHtml(label)}</span>
         <span class="bar-cell"></span>
         <span class="value muted" data-voice-value="${key}">--</span>
       </div>
@@ -408,6 +412,25 @@
   function formatBargeInGateClass(voice) {
     if (voice.barge_in_gate_open == null) return 'muted';
     return voice.barge_in_gate_open ? 'ok' : 'warn';
+  }
+
+  function updateBargeInEvent(voice) {
+    const count = Number(voice.barge_in_event_count || 0);
+    if (lastBargeInEventCount == null) {
+      lastBargeInEventCount = count;
+    } else if (count > lastBargeInEventCount) {
+      lastBargeInEventCount = count;
+      bargeInFlashUntil = Date.now() + 5000;
+    }
+
+    const event = voice.barge_in_last_event || '';
+    if (Date.now() < bargeInFlashUntil && event) {
+      setVoiceValue('barge_in_event', `JUST NOW: ${event}`, 'err');
+    } else if (event) {
+      setVoiceValue('barge_in_event', `last: ${event}`, 'muted');
+    } else {
+      setVoiceValue('barge_in_event', 'none', 'muted');
+    }
   }
 
   function setVoiceValue(key, value, cls = '') {

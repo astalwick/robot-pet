@@ -54,6 +54,148 @@ class ReSpeakerTest(unittest.TestCase):
 
         self.assertEqual(writes, [b"abc"])
 
+    def test_playback_reuses_one_output_stream(self):
+        class FakeOutputStream:
+            opened = 0
+            writes: list[bytes] = []
+
+            def __init__(self, **_kwargs):
+                FakeOutputStream.opened += 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def write(self, audio: bytes) -> None:
+                FakeOutputStream.writes.append(audio)
+
+        class FakeSoundDevice:
+            RawOutputStream = FakeOutputStream
+
+        async def run():
+            FakeOutputStream.opened = 0
+            FakeOutputStream.writes = []
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.begin_playback()
+            await audio.write_output(b"abc")
+            await audio.write_output(b"def")
+            await audio.end_playback()
+
+            self.assertEqual(FakeOutputStream.opened, 1)
+            self.assertEqual(FakeOutputStream.writes, [b"abc", b"def"])
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
+    def test_write_output_without_begin_fails(self):
+        audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+
+        with self.assertRaisesRegex(ReSpeakerError, "playback not started"):
+            asyncio.run(audio.write_output(b"abc"))
+
+    def test_playback_recovers_after_stream_open_failure(self):
+        class FailOutputStream:
+            def __init__(self, **_kwargs):
+                raise OSError("output unavailable")
+
+        class GoodOutputStream:
+            writes: list[bytes] = []
+
+            def __init__(self, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def write(self, audio: bytes) -> None:
+                GoodOutputStream.writes.append(audio)
+
+        class FakeSoundDevice:
+            RawOutputStream = FailOutputStream
+
+            @staticmethod
+            def query_devices():
+                return []
+
+        async def run():
+            GoodOutputStream.writes = []
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.begin_playback()
+            with self.assertRaises(ReSpeakerError):
+                await audio.end_playback()
+
+            FakeSoundDevice.RawOutputStream = GoodOutputStream
+            await audio.begin_playback()
+            await audio.write_output(b"ok")
+            await audio.end_playback()
+
+            self.assertEqual(GoodOutputStream.writes, [b"ok"])
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
+    def test_begin_playback_waits_for_in_flight_end(self):
+        class FakeOutputStream:
+            opened = 0
+            writes: list[bytes] = []
+
+            def __init__(self, **_kwargs):
+                FakeOutputStream.opened += 1
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def write(self, audio: bytes) -> None:
+                FakeOutputStream.writes.append(audio)
+
+        class FakeSoundDevice:
+            RawOutputStream = FakeOutputStream
+
+            @staticmethod
+            def query_devices():
+                return []
+
+        async def run():
+            FakeOutputStream.opened = 0
+            FakeOutputStream.writes = []
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            ending = asyncio.Event()
+
+            async def end_first_session():
+                ending.set()
+                await audio.end_playback()
+
+            await audio.begin_playback()
+            end_task = asyncio.create_task(end_first_session())
+            await ending.wait()
+            await audio.begin_playback()
+            await audio.write_output(b"next")
+            await end_task
+            await audio.end_playback()
+
+            self.assertEqual(FakeOutputStream.opened, 2)
+            self.assertEqual(FakeOutputStream.writes, [b"next"])
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
     def test_device_formatter_lists_matching_direction(self):
         class FakeSoundDevice:
             @staticmethod

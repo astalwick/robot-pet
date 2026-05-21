@@ -133,15 +133,19 @@ class VoiceSession:
             self.audio_levels["playback_rms"] = playback_rms_with_gain(rms, self.config.output_gain)
             self.audio_levels["playback_at"] = loop.time()
 
-        await speak_with_eleven_flash(
-            text_chunks,
-            elevenlabs_api_key,
-            voice_id,
-            playback_event,
-            speaking_event,
-            audio_writer=self.audio.write_output,
-            on_playback_rms=on_playback_rms,
-        )
+        try:
+            await self.audio.begin_playback()
+            await speak_with_eleven_flash(
+                text_chunks,
+                elevenlabs_api_key,
+                voice_id,
+                playback_event,
+                speaking_event,
+                audio_writer=self.audio.write_output,
+                on_playback_rms=on_playback_rms,
+            )
+        finally:
+            await self.audio.end_playback()
 
     async def _status_while_speaking(self, speaking_event: asyncio.Event) -> None:
         while not self.stop_event.is_set():

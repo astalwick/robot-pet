@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 
 MIC_BLOCKSIZE = 3200
 OUTPUT_WRITE_CHUNK_MS = 50
+PLAYBACK_QUEUE_MAXSIZE = 50
+_PLAYBACK_STOP = object()
 
 
 class ReSpeakerError(RuntimeError):
@@ -80,6 +82,9 @@ class ReSpeakerAudio:
         self.output_channels = output_channels
         self.input_gain = input_gain
         self.output_gain = output_gain
+        self._playback_lock = asyncio.Lock()
+        self._playback_queue: asyncio.Queue[bytes | object] | None = None
+        self._playback_task: asyncio.Task[None] | None = None
 
     async def microphone_chunks(self, stop_event: asyncio.Event) -> AsyncIterator[bytes]:
         import sounddevice as sd
@@ -113,7 +118,32 @@ class ReSpeakerAudio:
                 mono = extract_mono_channel(interleaved, self.capture_channels, self.capture_channel_index)
                 yield apply_pcm16_gain(mono, self.input_gain)
 
+    async def begin_playback(self) -> None:
+        async with self._playback_lock:
+            await self._finish_playback()
+            self._playback_queue = asyncio.Queue(maxsize=PLAYBACK_QUEUE_MAXSIZE)
+            self._playback_task = asyncio.create_task(self._run_playback())
+
     async def write_output(self, audio: bytes) -> None:
+        if self._playback_queue is None:
+            raise ReSpeakerError("playback not started; call begin_playback() first")
+        await self._playback_queue.put(audio)
+
+    async def end_playback(self) -> None:
+        async with self._playback_lock:
+            await self._finish_playback()
+
+    async def _finish_playback(self) -> None:
+        if self._playback_task is None or self._playback_queue is None:
+            return
+        try:
+            await self._playback_queue.put(_PLAYBACK_STOP)
+            await self._playback_task
+        finally:
+            self._playback_queue = None
+            self._playback_task = None
+
+    async def _run_playback(self) -> None:
         import sounddevice as sd
 
         chunk_bytes = self.sample_rate * self.output_channels * 2 * OUTPUT_WRITE_CHUNK_MS // 1000
@@ -128,7 +158,11 @@ class ReSpeakerAudio:
         except Exception as exc:
             raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
 
-        with stream as output:
-            audio = apply_pcm16_gain(audio, self.output_gain)
-            for index in range(0, len(audio), chunk_bytes):
-                await asyncio.to_thread(output.write, audio[index : index + chunk_bytes])
+        with stream:
+            while self._playback_queue is not None:
+                audio = await self._playback_queue.get()
+                if audio is _PLAYBACK_STOP:
+                    return
+                audio = apply_pcm16_gain(audio, self.output_gain)
+                for index in range(0, len(audio), chunk_bytes):
+                    await asyncio.to_thread(stream.write, audio[index : index + chunk_bytes])

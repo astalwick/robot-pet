@@ -34,6 +34,7 @@
   let lastRedeployButtonLabel = '';
   let lastVoiceDbgKey = '';
   let lastVoiceButtonLabel = '';
+  let redeployDisarmTimer = null;
 
   function voiceDbg(step, detail) {
     console.log('[dashboard voice]', step, detail || '');
@@ -71,7 +72,6 @@
 
   const sessionStart = Date.now();
   setInterval(updateSession, 1000);
-  setInterval(updateRedeployButton, 250);
   setInterval(refreshRedeployStatus, 1000);
   updateSession();
   bindActions();
@@ -105,7 +105,9 @@
   function bindActions() {
     voiceDbg('bind', 'attaching click handlers');
     document.addEventListener('pointerdown', onDocumentPointerDown, true);
-    document.addEventListener('click', onDocumentClick, true);
+    document.addEventListener('click', onDocumentClickLog, true);
+    on('voice-toggle-button', 'click', onVoiceToggle);
+    on('redeploy-button', 'click', onRedeploy);
     on('config-button', 'click', openConfig);
     on('config-cancel', 'click', closeConfig);
     on('config-modal', 'click', (event) => {
@@ -134,6 +136,7 @@
   function onDocumentPointerDown(event) {
     const button = actionButtonFromEvent(event);
     if (!button) return;
+    if (event.button != null && event.button !== 0) return;
     console.log('[dashboard pointer]', {
       id: button.id,
       disabled: button.disabled,
@@ -145,7 +148,7 @@
     });
   }
 
-  function onDocumentClick(event) {
+  function onDocumentClickLog(event) {
     const button = actionButtonFromEvent(event);
     if (!button) return;
     console.log('[dashboard click]', {
@@ -154,13 +157,6 @@
       text: button.textContent,
       target: event.target.id || event.target.className || event.target.tagName,
     });
-    if (button.id === 'voice-toggle-button') {
-      event.preventDefault();
-      onVoiceToggle();
-    } else if (button.id === 'redeploy-button') {
-      event.preventDefault();
-      onRedeploy();
-    }
   }
 
   function elementLabel(element) {
@@ -304,12 +300,13 @@
     } else {
       text = voiceWantEnabled ? 'Voice On' : 'Voice Off';
     }
-    button.classList.remove('ok', 'warn', 'err', 'muted');
-    if (text === 'Voice On') button.classList.add('ok');
-    else if (text === 'Voice Off') button.classList.add('muted');
-    else button.classList.add('warn');
-    label.textContent = text;
-    button.setAttribute('aria-label', text);
+    let cls = 'warn';
+    if (text === 'Voice On') cls = 'ok';
+    else if (text === 'Voice Off') cls = 'muted';
+    const className = `voice-toggle ${cls}`;
+    if (button.className !== className) button.className = className;
+    if (label.textContent !== text) label.textContent = text;
+    if (button.getAttribute('aria-label') !== text) button.setAttribute('aria-label', text);
     if (text !== lastVoiceButtonLabel) {
       lastVoiceButtonLabel = text;
       voiceDbg('button', { label: text, disabled: button.disabled, ...voiceSnapshot() });
@@ -662,11 +659,13 @@
     if (Date.now() > redeployArmedUntil) {
       redeployArmedUntil = Date.now() + 10000;
       redeployDbg('click -> arm (local)', { after: redeploySnapshot() });
+      scheduleRedeployDisarm();
       updateRedeployButton();
       const job = ++redeployWorkSerial;
       redeployWork = redeployWork.then(() => postRedeployArm(job)).catch((err) => {
         redeployDbg('arm chain error', { job, err: String(err), ...redeploySnapshot() });
         redeployArmedUntil = 0;
+        scheduleRedeployDisarm();
         updateRedeployButton();
         appendLog(`redeploy arm failed: ${err}`);
       });
@@ -675,6 +674,7 @@
     }
     redeployArmedUntil = 0;
     redeployRunning = true;
+    scheduleRedeployDisarm();
     redeployDbg('click -> run (local)', { after: redeploySnapshot() });
     updateRedeployButton();
     const job = ++redeployWorkSerial;
@@ -827,29 +827,39 @@
     updateRedeployButton();
   }
 
+  function scheduleRedeployDisarm() {
+    clearTimeout(redeployDisarmTimer);
+    redeployDisarmTimer = null;
+    const delay = redeployArmedUntil - Date.now();
+    if (delay > 0) {
+      redeployDisarmTimer = setTimeout(() => {
+        redeployDisarmTimer = null;
+        updateRedeployButton();
+      }, delay + 10);
+    }
+  }
+
   function updateRedeployButton() {
     const button = document.getElementById('redeploy-button');
     if (!button) return;
-    // Never disable — disabled buttons do not fire click events (looks like "unbound").
-    button.disabled = false;
-    button.classList.toggle('is-busy', redeployRunning);
+    if (button.disabled) button.disabled = false;
+    let text = 'Redeploy';
+    let className = '';
     if (redeployRunning) {
-      button.textContent = 'Redeploying...';
-      button.classList.remove('armed');
-      return;
+      text = 'Redeploying...';
+      className = 'is-busy';
+    } else if (Date.now() <= redeployArmedUntil) {
+      text = 'Redeploy Armed';
+      className = 'armed';
     }
-    if (Date.now() <= redeployArmedUntil) {
-      button.textContent = 'Redeploy Armed';
-      button.classList.add('armed');
-    } else {
-      button.textContent = 'Redeploy';
-      button.classList.remove('armed');
-    }
-    const text = button.textContent;
-    if (text !== lastRedeployButtonLabel) {
-      lastRedeployButtonLabel = text;
+    if (button.textContent !== text) button.textContent = text;
+    if (button.className !== className) button.className = className;
+    const stateLabel = `${text}|${className}`;
+    if (stateLabel !== lastRedeployButtonLabel) {
+      lastRedeployButtonLabel = stateLabel;
       redeployDbg('button', {
         text,
+        className,
         disabled: button.disabled,
         ...redeploySnapshot(),
       });

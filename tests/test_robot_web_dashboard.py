@@ -361,6 +361,19 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("if (element) {", self.dashboard_js)
         self.assertIn("element.addEventListener", self.dashboard_js)
 
+    def test_action_buttons_use_stable_click_handlers(self):
+        self.assertIn("document.addEventListener('pointerdown', onDocumentPointerDown, true)", self.dashboard_js)
+        self.assertIn("on('voice-toggle-button', 'click', onVoiceToggle)", self.dashboard_js)
+        self.assertIn("on('redeploy-button', 'click', onRedeploy)", self.dashboard_js)
+        self.assertNotIn("runActionButton", self.dashboard_js)
+        self.assertNotIn("setInterval(updateRedeployButton", self.dashboard_js)
+
+    def test_action_buttons_are_not_rewritten_when_state_is_unchanged(self):
+        self.assertIn("if (button.className !== className) button.className = className", self.dashboard_js)
+        self.assertIn("if (label.textContent !== text) label.textContent = text", self.dashboard_js)
+        self.assertIn("if (button.textContent !== text) button.textContent = text", self.dashboard_js)
+        self.assertIn("scheduleRedeployDisarm", self.dashboard_js)
+
     def test_voice_card_shows_activity_status_prominently(self):
         self.assertIn("voiceCardStatus", self.dashboard_js)
         self.assertIn("voiceActivityRow", self.dashboard_js)

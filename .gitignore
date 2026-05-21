@@ -47,5 +47,7 @@ Thumbs.db
 # --- Project-specific ---
 artifacts/
 data/
+scripts/diagnostics/respeaker-xvf-rpi64/*
+!scripts/diagnostics/respeaker-xvf-rpi64/README.md
 *.img
 *.iso

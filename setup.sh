@@ -10,20 +10,20 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/13] Installing base packages..."
+echo "[1/14] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev
 
 # Add user to dialout group for serial port access (idempotent)
-echo "[2/13] Adding $USER to dialout group..."
+echo "[2/14] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
-echo "[3/13] Adding $USER to input and audio groups..."
+echo "[3/14] Adding $USER to input and audio groups..."
 sudo usermod -a -G input "$USER"
 sudo usermod -a -G audio "$USER"
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
-echo "[4/13] Configuring UART for RoboClaw..."
+echo "[4/14] Configuring UART for RoboClaw..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
     echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
@@ -39,12 +39,12 @@ else
 fi
 
 # Create log directory (idempotent)
-echo "[5/13] Creating log directory at $LOG_DIR..."
+echo "[5/14] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[6/13] Installing login welcome message..."
+echo "[6/14] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -103,7 +103,7 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Configure interactive Bash sessions to start in robot-pet with the venv active.
-echo "[7/13] Configuring Bash login directory, venv, and dashboard autostart..."
+echo "[7/14] Configuring Bash login directory, venv, and dashboard autostart..."
 BASHRC="$HOME/.bashrc"
 BASH_LOGIN_START="# >>> robot-pet login setup >>>"
 BASH_LOGIN_END="# <<< robot-pet login setup <<<"
@@ -128,7 +128,7 @@ fi
 BASH_LOGIN
 
 # Install redeploy permissions for the dashboard action.
-echo "[8/13] Installing redeploy permissions..."
+echo "[8/14] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 INSTALL_PATH="$(command -v install)"
@@ -168,7 +168,7 @@ rm "$SUDOERS_TMP"
 # Set up Python venv (idempotent - only creates if missing or misconfigured).
 # --system-site-packages lets the venv import apt-installed Pi libraries
 # (picamera2, libcamera) that aren't reliably pip-installable.
-echo "[9/13] Setting up Python venv at $VENV_PATH..."
+echo "[9/14] Setting up Python venv at $VENV_PATH..."
 NEEDS_VENV_RECREATE=0
 if [[ -d "$VENV_PATH" ]]; then
   if ! grep -q "^include-system-site-packages = true" "$VENV_PATH/pyvenv.cfg" 2>/dev/null; then
@@ -184,21 +184,40 @@ if [[ "$NEEDS_VENV_RECREATE" == "1" ]]; then
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[10/13] Installing Python packages..."
+echo "[10/14] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 python -m pip install -e "$REPO_DIR"
 
-echo "[11/13] Running tests..."
+echo "[11/14] Running tests..."
 python -m unittest discover tests
 
+# ReSpeaker XVF3800 host tools (Pi 64-bit binaries from upstream repo)
+echo "[12/14] Installing ReSpeaker xvf_host (rpi_64bit)..."
+XVF_DIR="$REPO_DIR/scripts/diagnostics/respeaker-xvf-rpi64"
+if [[ "$(uname -m)" != "aarch64" ]]; then
+    echo "    Skipping (not aarch64; run setup on the Pi)"
+elif [[ -x "$XVF_DIR/xvf_host" ]]; then
+    echo "    Already installed at $XVF_DIR"
+else
+    xvf_tmp="$(mktemp -d)"
+    curl -fsSL -o "$xvf_tmp/respeaker.tar.gz" \
+        "https://codeload.github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/tar.gz/master"
+    mkdir -p "$XVF_DIR"
+    tar -xzf "$xvf_tmp/respeaker.tar.gz" -C "$XVF_DIR" --strip-components=3 \
+        reSpeaker_XVF3800_USB_4MIC_ARRAY-master/host_control/rpi_64bit
+    rm -rf "$xvf_tmp"
+    chmod +x "$XVF_DIR/xvf_host" "$XVF_DIR/xvf_i2c_dfu"
+    echo "    Installed to $XVF_DIR"
+fi
+
 # Set ReSpeaker PCM volume and persist via alsa-restore.service on next boot
-echo "[12/13] Setting speaker volume..."
+echo "[13/14] Setting speaker volume..."
 amixer -c 0 sset 'PCM' 90% >/dev/null
 sudo alsactl store
 
 # Install and enable systemd services
-echo "[13/13] Installing systemd services..."
+echo "[14/14] Installing systemd services..."
 for service_file in "$REPO_DIR/systemd/"*.service; do
   sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
 done

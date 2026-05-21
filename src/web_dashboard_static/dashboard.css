@@ -31,6 +31,8 @@ body {
 }
 
 #hud {
+  position: relative;
+  z-index: 10;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   padding: 0.75rem 1rem;
@@ -246,6 +248,11 @@ main {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+}
+
+#actions {
+  position: relative;
+  z-index: 11;
 }
 
 button {

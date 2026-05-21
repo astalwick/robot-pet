@@ -358,7 +358,8 @@ class DashboardJsTest(unittest.TestCase):
 
     def test_button_binding_tolerates_missing_elements(self):
         self.assertIn("function on(id, eventName, handler)", self.dashboard_js)
-        self.assertIn("if (element) element.addEventListener", self.dashboard_js)
+        self.assertIn("if (element) {", self.dashboard_js)
+        self.assertIn("element.addEventListener", self.dashboard_js)
 
     def test_voice_card_shows_activity_status_prominently(self):
         self.assertIn("voiceCardStatus", self.dashboard_js)

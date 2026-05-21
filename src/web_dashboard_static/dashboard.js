@@ -104,21 +104,8 @@
 
   function bindActions() {
     voiceDbg('bind', 'attaching click handlers');
-    on('voice-toggle-button', 'click', onVoiceToggle);
-    on('redeploy-button', 'click', onRedeploy);
-    const actions = document.getElementById('actions');
-    if (actions) {
-      actions.addEventListener('pointerdown', (event) => {
-        const button = event.target.closest('button');
-        if (!button || !actions.contains(button)) return;
-        console.log('[dashboard pointer]', {
-          id: button.id,
-          disabled: button.disabled,
-          text: button.textContent,
-          redeploy: redeploySnapshot(),
-        });
-      }, true);
-    }
+    document.addEventListener('pointerdown', onDocumentPointerDown, true);
+    document.addEventListener('click', onDocumentClick, true);
     on('config-button', 'click', openConfig);
     on('config-cancel', 'click', closeConfig);
     on('config-modal', 'click', (event) => {
@@ -136,6 +123,54 @@
     });
     on('voice-rows', 'input', onVoiceGainInput);
     on('voice-rows', 'change', onVoiceGainCommit);
+  }
+
+  function actionButtonFromEvent(event) {
+    const button = event.target.closest('#voice-toggle-button, #redeploy-button, #config-button');
+    if (!button) return null;
+    return document.getElementById('actions').contains(button) ? button : null;
+  }
+
+  function onDocumentPointerDown(event) {
+    const button = actionButtonFromEvent(event);
+    if (!button) return;
+    console.log('[dashboard pointer]', {
+      id: button.id,
+      disabled: button.disabled,
+      text: button.textContent,
+      target: event.target.id || event.target.className || event.target.tagName,
+      elementFromPoint: elementLabel(document.elementFromPoint(event.clientX, event.clientY)),
+      redeploy: redeploySnapshot(),
+      voice: voiceSnapshot(),
+    });
+  }
+
+  function onDocumentClick(event) {
+    const button = actionButtonFromEvent(event);
+    if (!button) return;
+    console.log('[dashboard click]', {
+      id: button.id,
+      disabled: button.disabled,
+      text: button.textContent,
+      target: event.target.id || event.target.className || event.target.tagName,
+    });
+    if (button.id === 'voice-toggle-button') {
+      event.preventDefault();
+      onVoiceToggle();
+    } else if (button.id === 'redeploy-button') {
+      event.preventDefault();
+      onRedeploy();
+    }
+  }
+
+  function elementLabel(element) {
+    if (!element) return null;
+    return {
+      tag: element.tagName,
+      id: element.id || '',
+      className: element.className || '',
+      text: element.textContent ? element.textContent.trim().slice(0, 40) : '',
+    };
   }
 
   function on(id, eventName, handler) {

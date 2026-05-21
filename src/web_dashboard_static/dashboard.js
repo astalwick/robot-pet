@@ -271,6 +271,12 @@
     setVoiceValue('channel', displayVoice.capture_channel_index != null ? String(displayVoice.capture_channel_index) : '--');
     updateGainControl('input_gain', displayVoice.input_gain);
     updateGainControl('output_gain', displayVoice.output_gain);
+    updateVoiceToggle('barge_in_enabled', displayVoice.barge_in_enabled, true);
+    updateVoiceSlider('barge_in_min_rms', displayVoice.barge_in_min_rms, 700);
+    updateVoiceSlider('barge_in_sustain_ms', displayVoice.barge_in_sustain_ms, 350);
+    updateVoiceSlider('barge_in_playback_leakage_ratio', displayVoice.barge_in_playback_leakage_ratio, 1.8);
+    setVoiceValue('barge_in_gate', formatBargeInGate(displayVoice), formatBargeInGateClass(displayVoice));
+    setVoiceValue('barge_in_reason', displayVoice.barge_in_last_reason || '--', displayVoice.barge_in_last_reason ? 'warn' : 'muted');
     const transcript = displayVoice.last_committed_transcript || displayVoice.partial_transcript || '--';
     setVoiceValue('transcript', transcript, transcript === '--' ? 'muted' : '');
     setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
@@ -323,6 +329,12 @@
       voiceValueRow('channel'),
       gainControlRow('mic gain', 'input_gain'),
       gainControlRow('speaker', 'output_gain'),
+      voiceToggleRow('barge-in', 'barge_in_enabled'),
+      voiceSliderRow('barge min rms', 'barge_in_min_rms', 100, 5000, 50, 700),
+      voiceSliderRow('barge sustain ms', 'barge_in_sustain_ms', 0, 1500, 50, 350),
+      voiceSliderRow('playback ratio', 'barge_in_playback_leakage_ratio', 0.5, 5, 0.1, 1.8),
+      voiceValueRow('barge_in_gate'),
+      voiceValueRow('barge_in_reason'),
       voiceValueRow('transcript'),
       voiceValueRow('error'),
     ].join('');
@@ -361,6 +373,43 @@
     `;
   }
 
+  function voiceToggleRow(label, key) {
+    return `
+      <div class="row control-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="bar-cell">
+          <input type="checkbox" data-voice-key="${key}" aria-label="${escapeHtml(label)}">
+        </span>
+        <span class="value" data-voice-value="${key}">on</span>
+      </div>
+    `;
+  }
+
+  function voiceSliderRow(label, key, min, max, step, fallback) {
+    return `
+      <div class="row control-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="bar-cell">
+          <input type="range" min="${min}" max="${max}" step="${step}" value="${fallback}" data-voice-key="${key}" aria-label="${escapeHtml(label)}">
+        </span>
+        <span class="value" data-voice-value="${key}">${fallback}</span>
+      </div>
+    `;
+  }
+
+  function formatBargeInGate(voice) {
+    if (voice.barge_in_gate_open == null) return '--';
+    const mic = voice.barge_in_mic_rms != null ? voice.barge_in_mic_rms : '?';
+    const threshold = voice.barge_in_threshold_rms != null ? voice.barge_in_threshold_rms : '?';
+    const open = voice.barge_in_gate_open ? 'open' : 'closed';
+    return `${open} (${mic}/${threshold})`;
+  }
+
+  function formatBargeInGateClass(voice) {
+    if (voice.barge_in_gate_open == null) return 'muted';
+    return voice.barge_in_gate_open ? 'ok' : 'warn';
+  }
+
   function setVoiceValue(key, value, cls = '') {
     const element = document.querySelector(`[data-voice-value="${key}"]`);
     if (!element) return;
@@ -376,12 +425,39 @@
     setVoiceValue(key, gain.toFixed(1));
   }
 
+  function updateVoiceSlider(key, value, fallback) {
+    const numeric = Number(value == null ? fallback : value);
+    const input = document.querySelector(`input[data-voice-key="${key}"]`);
+    const decimals = key === 'barge_in_playback_leakage_ratio' ? 1 : 0;
+    if (input && document.activeElement !== input) input.value = numeric.toFixed(decimals);
+    setVoiceValue(key, numeric.toFixed(decimals));
+  }
+
+  function updateVoiceToggle(key, value, fallback = true) {
+    const enabled = value == null ? fallback : !!value;
+    const input = document.querySelector(`input[data-voice-key="${key}"]`);
+    if (input && document.activeElement !== input) input.checked = enabled;
+    setVoiceValue(key, enabled ? 'on' : 'off', enabled ? 'ok' : 'muted');
+  }
+
   function clearAppliedVoicePatch(voice) {
-    ['input_gain', 'output_gain'].forEach((key) => {
+    const gainKeys = ['input_gain', 'output_gain'];
+    const sliderKeys = ['barge_in_min_rms', 'barge_in_sustain_ms', 'barge_in_playback_leakage_ratio'];
+    gainKeys.forEach((key) => {
       if (voicePendingPatch[key] != null && Number(voice[key]).toFixed(1) === Number(voicePendingPatch[key]).toFixed(1)) {
         delete voicePendingPatch[key];
       }
     });
+    sliderKeys.forEach((key) => {
+      if (voicePendingPatch[key] == null) return;
+      const decimals = key === 'barge_in_playback_leakage_ratio' ? 1 : 0;
+      if (Number(voice[key]).toFixed(decimals) === Number(voicePendingPatch[key]).toFixed(decimals)) {
+        delete voicePendingPatch[key];
+      }
+    });
+    if (voicePendingPatch.barge_in_enabled != null && !!voice.barge_in_enabled === !!voicePendingPatch.barge_in_enabled) {
+      delete voicePendingPatch.barge_in_enabled;
+    }
   }
 
   function voiceStatusClass(status, lastError) {
@@ -748,20 +824,31 @@
     const input = event.target;
     if (!input.dataset.voiceKey) return;
     const key = input.dataset.voiceKey;
+    if (input.type === 'checkbox') {
+      voicePendingPatch[key] = input.checked;
+      updateVoiceToggle(key, input.checked);
+      clearTimeout(voiceGainSaveTimers[key]);
+      voiceGainSaveTimers[key] = setTimeout(() => saveVoiceSetting(key), 350);
+      return;
+    }
     voicePendingPatch[key] = Number(input.value);
-    setVoiceValue(key, Number(input.value).toFixed(1));
+    if (key === 'barge_in_playback_leakage_ratio' || key.startsWith('barge_in_')) {
+      updateVoiceSlider(key, Number(input.value), Number(input.value));
+    } else {
+      setVoiceValue(key, Number(input.value).toFixed(1));
+    }
     clearTimeout(voiceGainSaveTimers[key]);
-    voiceGainSaveTimers[key] = setTimeout(() => saveVoiceGain(key), 350);
+    voiceGainSaveTimers[key] = setTimeout(() => saveVoiceSetting(key), 350);
   }
 
   function onVoiceGainCommit(event) {
     const input = event.target;
     if (!input.dataset.voiceKey) return;
     clearTimeout(voiceGainSaveTimers[input.dataset.voiceKey]);
-    saveVoiceGain(input.dataset.voiceKey);
+    saveVoiceSetting(input.dataset.voiceKey);
   }
 
-  async function saveVoiceGain(key) {
+  async function saveVoiceSetting(key) {
     const value = voicePendingPatch[key];
     if (value == null) return;
     const result = await updateVoiceConfig({ [key]: value });

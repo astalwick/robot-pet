@@ -65,7 +65,7 @@ async def stream_audio_to_scribe(
             async for chunk in audio_chunks:
                 rms = pcm16_rms(chunk)
                 now = loop.time()
-                if rms >= policy.local_speech_rms_threshold and now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
+                if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
                     await scribe_events.put({"type": "audio_activity", "rms": rms})
                     last_activity_log_at = now
 
@@ -101,6 +101,7 @@ async def speak_with_eleven_flash(
     playback_event: asyncio.Event,
     speaking_event: asyncio.Event,
     audio_writer: Callable[[bytes], object] | None = None,
+    on_playback_rms: Callable[[int], None] | None = None,
 ) -> None:
     import websockets
 
@@ -111,6 +112,8 @@ async def speak_with_eleven_flash(
     async def write_audio(audio: bytes) -> None:
         if not speaking_event.is_set():
             speaking_event.set()
+        if on_playback_rms:
+            on_playback_rms(pcm16_rms(audio))
         if audio_writer:
             result = audio_writer(audio)
             if asyncio.iscoroutine(result):

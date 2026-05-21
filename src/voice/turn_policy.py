@@ -3,6 +3,10 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from config.voice import VoiceConfig
 
 
 SPECULATIVE_PARTIAL_DELAY_SECS = 0.35
@@ -24,6 +28,11 @@ class TurnPolicy:
     complete_unpunctuated_speculative_words: int = 6
     min_barge_in_words: int = 3
     min_barge_in_chars: int = 12
+    barge_in_enabled: bool = True
+    barge_in_min_rms: int = 700
+    barge_in_sustain_ms: int = 350
+    barge_in_playback_leakage_ratio: float = 1.8
+    barge_in_explicit_requires_sustain: bool = False
     local_speech_rms_threshold: int = LOCAL_SPEECH_RMS_THRESHOLD
     local_speech_window_secs: float = LOCAL_SPEECH_WINDOW_SECS
     assistant_speech_barge_in_cooldown_secs: float = 0.35
@@ -131,21 +140,34 @@ class TurnPolicy:
 
         return False
 
+    def dynamic_barge_in_threshold_rms(self, playback_rms: int) -> int:
+        return max(
+            self.barge_in_min_rms,
+            int(playback_rms * self.barge_in_playback_leakage_ratio),
+        )
+
+    def mic_above_barge_in_threshold(self, mic_rms: int, playback_rms: int) -> bool:
+        return mic_rms >= self.dynamic_barge_in_threshold_rms(playback_rms)
+
     def should_accept_barge_in(
         self,
         text: str,
         assistant_speaking: bool,
-        local_speech_recent: bool,
+        gate_open: bool,
         assistant_speech_elapsed_secs: float | None = None,
-        local_speech_rms: int | None = None,
+        mic_rms: int | None = None,
+        playback_rms: int = 0,
+        gate_reason: str = "not_sustained",
         assistant_text: str = "",
     ) -> bool:
         should_accept, _reason = self.barge_in_decision(
             text,
             assistant_speaking,
-            local_speech_recent,
+            gate_open,
             assistant_speech_elapsed_secs,
-            local_speech_rms,
+            mic_rms,
+            playback_rms,
+            gate_reason,
             assistant_text,
         )
         return should_accept
@@ -154,24 +176,38 @@ class TurnPolicy:
         self,
         text: str,
         assistant_speaking: bool,
-        local_speech_recent: bool,
+        gate_open: bool,
         assistant_speech_elapsed_secs: float | None = None,
-        local_speech_rms: int | None = None,
+        mic_rms: int | None = None,
+        playback_rms: int = 0,
+        gate_reason: str = "not_sustained",
         assistant_text: str = "",
     ) -> tuple[bool, str]:
-        if not assistant_speaking or not local_speech_recent:
-            return False, "no_local_speech" if assistant_speaking else "assistant_not_speaking"
-        if local_speech_rms is not None and local_speech_rms < self.local_speech_rms_threshold:
-            return False, "low_rms"
+        if not assistant_speaking:
+            return False, "assistant_not_speaking"
+        if not self.barge_in_enabled:
+            return False, "disabled"
+
+        mic_ok = mic_rms is None or self.mic_above_barge_in_threshold(mic_rms, playback_rms)
         if self.has_explicit_interrupt(text):
+            if not mic_ok:
+                return False, "low_rms"
+            if self.barge_in_explicit_requires_sustain and not gate_open:
+                return False, "not_sustained"
             return True, "explicit_interrupt"
+
+        if self.matches_assistant_echo(text, assistant_text):
+            return False, "assistant_echo"
+
+        if not mic_ok:
+            return False, "low_rms"
+        if not gate_open:
+            return False, gate_reason
         if (
             assistant_speech_elapsed_secs is not None
             and assistant_speech_elapsed_secs < self.assistant_speech_barge_in_cooldown_secs
         ):
             return False, "cooldown"
-        if self.matches_assistant_echo(text, assistant_text):
-            return False, "assistant_echo"
         if self.is_barge_in_candidate(text):
             return True, "substantial_partial"
         return False, "too_short"
@@ -185,6 +221,27 @@ class TurnPolicy:
 
 
 DEFAULT_TURN_POLICY = TurnPolicy()
+DEFAULT_EXPLICIT_INTERRUPT_WORDS = frozenset({"stop", "wait", "no", "cancel", "pause"})
+
+
+def parse_explicit_interrupt_words(text: str) -> frozenset[str]:
+    words = {word.strip().lower() for word in text.split(",") if word.strip()}
+    return words or DEFAULT_EXPLICIT_INTERRUPT_WORDS
+
+
+def turn_policy_from_config(config: VoiceConfig) -> TurnPolicy:
+    return TurnPolicy(
+        min_barge_in_words=config.barge_in_min_words,
+        min_barge_in_chars=config.barge_in_min_chars,
+        barge_in_enabled=config.barge_in_enabled,
+        barge_in_min_rms=config.barge_in_min_rms,
+        barge_in_sustain_ms=config.barge_in_sustain_ms,
+        barge_in_playback_leakage_ratio=config.barge_in_playback_leakage_ratio,
+        barge_in_explicit_requires_sustain=config.barge_in_explicit_requires_sustain,
+        assistant_speech_barge_in_cooldown_secs=config.barge_in_cooldown_secs,
+        assistant_echo_similarity=config.assistant_echo_similarity,
+        explicit_interrupt_words=parse_explicit_interrupt_words(config.barge_in_explicit_interrupts),
+    )
 
 
 def normalized_transcript(text: str) -> str:
@@ -209,14 +266,18 @@ def pcm16_rms(chunk: bytes) -> int:
 def should_accept_barge_in(
     text: str,
     assistant_speaking: bool,
-    local_speech_recent: bool,
+    gate_open: bool,
     assistant_speech_elapsed_secs: float | None = None,
-    local_speech_rms: int | None = None,
+    mic_rms: int | None = None,
+    playback_rms: int = 0,
+    gate_reason: str = "not_sustained",
 ) -> bool:
     return DEFAULT_TURN_POLICY.should_accept_barge_in(
         text,
         assistant_speaking,
-        local_speech_recent,
+        gate_open,
         assistant_speech_elapsed_secs,
-        local_speech_rms,
+        mic_rms,
+        playback_rms,
+        gate_reason,
     )

@@ -198,9 +198,18 @@ def voice_update(
     last_committed_transcript: str | None = None,
     last_assistant_text: str | None = None,
     last_error: str | None = None,
+    barge_in_enabled: bool | None = None,
+    barge_in_min_rms: int | None = None,
+    barge_in_sustain_ms: int | None = None,
+    barge_in_playback_leakage_ratio: float | None = None,
+    barge_in_threshold_rms: int | None = None,
+    barge_in_mic_rms: int | None = None,
+    barge_in_playback_rms: int | None = None,
+    barge_in_gate_open: bool | None = None,
+    barge_in_last_reason: str | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "type": "source_update",
         "source": "voice",
         "time": now if now is not None else time.time(),
@@ -219,6 +228,25 @@ def voice_update(
         "last_assistant_text": last_assistant_text,
         "last_error": last_error,
     }
+    if barge_in_enabled is not None:
+        payload["barge_in_enabled"] = barge_in_enabled
+    if barge_in_min_rms is not None:
+        payload["barge_in_min_rms"] = barge_in_min_rms
+    if barge_in_sustain_ms is not None:
+        payload["barge_in_sustain_ms"] = barge_in_sustain_ms
+    if barge_in_playback_leakage_ratio is not None:
+        payload["barge_in_playback_leakage_ratio"] = barge_in_playback_leakage_ratio
+    if barge_in_threshold_rms is not None:
+        payload["barge_in_threshold_rms"] = barge_in_threshold_rms
+    if barge_in_mic_rms is not None:
+        payload["barge_in_mic_rms"] = barge_in_mic_rms
+    if barge_in_playback_rms is not None:
+        payload["barge_in_playback_rms"] = barge_in_playback_rms
+    if barge_in_gate_open is not None:
+        payload["barge_in_gate_open"] = barge_in_gate_open
+    if barge_in_last_reason is not None:
+        payload["barge_in_last_reason"] = barge_in_last_reason
+    return payload
 
 
 def gamepad_teleop_update(

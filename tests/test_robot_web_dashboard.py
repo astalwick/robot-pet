@@ -206,6 +206,10 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("capture_channel_index", keys)
         self.assertIn("input_gain", keys)
         self.assertIn("output_gain", keys)
+        self.assertIn("barge_in_enabled", keys)
+        self.assertIn("barge_in_min_rms", keys)
+        self.assertIn("barge_in_sustain_ms", keys)
+        self.assertIn("barge_in_playback_leakage_ratio", keys)
         types = {field["key"]: field["type"] for field in payload["fields"]}
         self.assertEqual(types["enabled"], "boolean")
         self.assertEqual(types["input_device"], "text")
@@ -214,6 +218,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types["output_gain"], "number")
         self.assertFalse(payload["values"]["enabled"])
         self.assertEqual(payload["values"]["input_device"], "hw:0,0")
+        self.assertTrue(payload["values"]["barge_in_enabled"])
+        self.assertEqual(payload["values"]["barge_in_min_rms"], 700)
 
     async def test_post_config_voice_writes_file_to_disk(self):
         body = {
@@ -330,6 +336,14 @@ class DashboardJsTest(unittest.TestCase):
     def test_dashboard_renders_voice_status_panel(self):
         self.assertIn('id="voice-rows"', self.dashboard_html)
         self.assertIn("renderVoice(snapshot, sources)", self.dashboard_js)
+
+    def test_dashboard_exposes_barge_in_tuning_controls(self):
+        self.assertIn("barge_in_enabled", self.dashboard_js)
+        self.assertIn("barge_in_min_rms", self.dashboard_js)
+        self.assertIn("barge_in_sustain_ms", self.dashboard_js)
+        self.assertIn("barge_in_playback_leakage_ratio", self.dashboard_js)
+        self.assertIn("barge_in_gate", self.dashboard_js)
+        self.assertIn("barge_in_last_reason", self.dashboard_js)
 
     def test_header_has_voice_toggle_button(self):
         self.assertIn('id="voice-toggle-button"', self.dashboard_html)

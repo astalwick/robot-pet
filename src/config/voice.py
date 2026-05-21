@@ -32,6 +32,16 @@ class VoiceConfig:
     output_gain: float = 1.0
     voice_id: str | None = None
     alternate_voice_id: str | None = None
+    barge_in_enabled: bool = True
+    barge_in_min_words: int = 3
+    barge_in_min_chars: int = 12
+    barge_in_cooldown_secs: float = 0.35
+    barge_in_min_rms: int = 700
+    barge_in_sustain_ms: int = 350
+    barge_in_playback_leakage_ratio: float = 1.8
+    barge_in_explicit_interrupts: str = "stop,wait,no,cancel,pause"
+    barge_in_explicit_requires_sustain: bool = False
+    assistant_echo_similarity: float = 0.9
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "VoiceConfig":
@@ -48,6 +58,24 @@ class VoiceConfig:
             output_gain=clamp(float(values.get("output_gain", defaults.output_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
             alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
+            barge_in_enabled=bool(values.get("barge_in_enabled", defaults.barge_in_enabled)),
+            barge_in_min_words=int(values.get("barge_in_min_words", defaults.barge_in_min_words)),
+            barge_in_min_chars=int(values.get("barge_in_min_chars", defaults.barge_in_min_chars)),
+            barge_in_cooldown_secs=float(values.get("barge_in_cooldown_secs", defaults.barge_in_cooldown_secs)),
+            barge_in_min_rms=int(values.get("barge_in_min_rms", defaults.barge_in_min_rms)),
+            barge_in_sustain_ms=int(values.get("barge_in_sustain_ms", defaults.barge_in_sustain_ms)),
+            barge_in_playback_leakage_ratio=float(
+                values.get("barge_in_playback_leakage_ratio", defaults.barge_in_playback_leakage_ratio)
+            ),
+            barge_in_explicit_interrupts=str(
+                values.get("barge_in_explicit_interrupts", defaults.barge_in_explicit_interrupts)
+            ),
+            barge_in_explicit_requires_sustain=bool(
+                values.get("barge_in_explicit_requires_sustain", defaults.barge_in_explicit_requires_sustain)
+            ),
+            assistant_echo_similarity=float(
+                values.get("assistant_echo_similarity", defaults.assistant_echo_similarity)
+            ),
         )
         config.validate()
         return config

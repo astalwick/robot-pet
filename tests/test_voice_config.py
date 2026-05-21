@@ -69,6 +69,20 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).input_gain, 0.0)
         self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).output_gain, 3.0)
 
+    def test_barge_in_defaults_are_present(self):
+        config = VoiceConfig()
+        self.assertTrue(config.barge_in_enabled)
+        self.assertEqual(config.barge_in_min_rms, 700)
+        self.assertEqual(config.barge_in_sustain_ms, 350)
+        self.assertEqual(config.barge_in_playback_leakage_ratio, 1.8)
+
+    def test_explicit_interrupt_words_parse_from_config_string(self):
+        from voice.turn_policy import turn_policy_from_config
+
+        config = VoiceConfig.from_dict({"barge_in_explicit_interrupts": "halt, Stop"})
+        policy = turn_policy_from_config(config)
+        self.assertEqual(policy.explicit_interrupt_words, frozenset({"halt", "stop"}))
+
 
 if __name__ == "__main__":
     unittest.main()

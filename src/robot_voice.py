@@ -40,6 +40,12 @@ class RobotVoiceService:
             "last_committed_transcript": None,
             "last_assistant_text": None,
             "last_error": None,
+            "barge_in_enabled": None,
+            "barge_in_threshold_rms": None,
+            "barge_in_mic_rms": None,
+            "barge_in_playback_rms": None,
+            "barge_in_gate_open": None,
+            "barge_in_last_reason": None,
         }
         self.last_logged_error: str | None = None
 
@@ -150,6 +156,19 @@ class RobotVoiceService:
                 last_committed_transcript=optional_text(self.status["last_committed_transcript"]),
                 last_assistant_text=optional_text(self.status["last_assistant_text"]),
                 last_error=last_error,
+                barge_in_enabled=(
+                    optional_bool(self.status["barge_in_enabled"])
+                    if self.status["barge_in_enabled"] is not None
+                    else config.barge_in_enabled
+                ),
+                barge_in_min_rms=config.barge_in_min_rms,
+                barge_in_sustain_ms=config.barge_in_sustain_ms,
+                barge_in_playback_leakage_ratio=config.barge_in_playback_leakage_ratio,
+                barge_in_threshold_rms=optional_int(self.status["barge_in_threshold_rms"]),
+                barge_in_mic_rms=optional_int(self.status["barge_in_mic_rms"]),
+                barge_in_playback_rms=optional_int(self.status["barge_in_playback_rms"]),
+                barge_in_gate_open=optional_bool(self.status["barge_in_gate_open"]),
+                barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
             ),
         )
 
@@ -162,6 +181,18 @@ def optional_text(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def optional_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def build_parser() -> argparse.ArgumentParser:

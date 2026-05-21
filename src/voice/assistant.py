@@ -16,12 +16,60 @@ OPENAI_MODEL = "gpt-5.4-mini"
 DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a concise voice assistant named Bloop. Keep responses brief. "
-    "Answer naturally in one or two short sentences. Avoid markdown unless the user explicitly asks for it. "
+    "You are a voice assistant named Bloop. Keep responses brief. "
+    "Answer naturally in one or two sentences. Avoid markdown unless the user explicitly asks for it. "
     "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "
     "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices."
 )
 VOICE_SWITCH_TOOL_NAME = "switch_voice"
+PLAYBACK_RMS_STALE_SECS = 0.25
+
+
+def effective_playback_rms(audio_levels: dict[str, float | int], now: float) -> int:
+    playback_at = float(audio_levels.get("playback_at", 0.0))
+    if now - playback_at > PLAYBACK_RMS_STALE_SECS:
+        return 0
+    return int(audio_levels.get("playback_rms", 0))
+
+
+def update_near_end_gate(
+    policy: TurnPolicy,
+    gate_above_since: float | None,
+    now: float,
+    mic_rms: int,
+    playback_rms: int,
+) -> tuple[float | None, bool, int, str]:
+    threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
+    if mic_rms < threshold_rms:
+        return None, False, threshold_rms, "low_rms"
+
+    if gate_above_since is None:
+        gate_above_since = now
+
+    sustained_ms = (now - gate_above_since) * 1000
+    if sustained_ms >= policy.barge_in_sustain_ms:
+        return gate_above_since, True, threshold_rms, "substantial_partial"
+    return gate_above_since, False, threshold_rms, "not_sustained"
+
+
+def barge_in_telemetry(
+    policy: TurnPolicy,
+    mic_rms: int,
+    playback_rms: int,
+    threshold_rms: int,
+    gate_open: bool,
+    last_reason: str,
+) -> dict[str, object]:
+    return {
+        "barge_in_enabled": policy.barge_in_enabled,
+        "barge_in_threshold_rms": threshold_rms,
+        "barge_in_mic_rms": mic_rms,
+        "barge_in_playback_rms": playback_rms,
+        "barge_in_gate_open": gate_open,
+        "barge_in_last_reason": last_reason,
+    }
+
+
 VOICE_SWITCH_TOOL = {
     "type": "function",
     "name": VOICE_SWITCH_TOOL_NAME,
@@ -268,6 +316,7 @@ async def handle_scribe_events(
     voice_state: VoiceState,
     stop_event: asyncio.Event,
     policy: TurnPolicy = DEFAULT_TURN_POLICY,
+    audio_levels: dict[str, float | int] | None = None,
     conversation_history: ConversationHistory | None = None,
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     on_status: Callable[[dict[str, object]], None] | None = None,
@@ -279,12 +328,45 @@ async def handle_scribe_events(
     debounce_task: asyncio.Task[None] | None = None
     last_local_speech_at = 0.0
     last_local_speech_rms = 0
+    gate_above_since: float | None = None
+    gate_open = False
+    gate_threshold_rms = policy.barge_in_min_rms
+    gate_last_reason = "assistant_not_speaking"
+    levels = audio_levels if audio_levels is not None else {"mic_rms": 0, "playback_rms": 0, "playback_at": 0.0}
     recent_assistant_text = ""
     recent_assistant_echo_until = 0.0
 
     def status(**values: object) -> None:
         if on_status:
             on_status(values)
+
+    def publish_barge_in_state(now: float, mic_rms: int | None = None) -> None:
+        nonlocal gate_above_since, gate_open, gate_threshold_rms, gate_last_reason
+        mic = last_local_speech_rms if mic_rms is None else mic_rms
+        playback_rms = effective_playback_rms(levels, now)
+        if active_turn and active_turn.is_active() and active_turn.is_speaking():
+            gate_above_since, gate_open, gate_threshold_rms, gate_last_reason = update_near_end_gate(
+                policy,
+                gate_above_since,
+                now,
+                mic,
+                playback_rms,
+            )
+        else:
+            gate_above_since = None
+            gate_open = False
+            gate_last_reason = "assistant_not_speaking"
+            gate_threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
+        status(
+            **barge_in_telemetry(
+                policy,
+                mic,
+                playback_rms,
+                gate_threshold_rms,
+                gate_open,
+                gate_last_reason,
+            )
+        )
 
     async def cancel_active_turn(reason: str) -> None:
         nonlocal active_turn
@@ -371,9 +453,8 @@ async def handle_scribe_events(
             return
 
     async def handle_partial(text: str) -> None:
-        nonlocal debounce_task
+        nonlocal debounce_task, gate_last_reason
         now = asyncio.get_running_loop().time()
-        local_speech_recent = now - last_local_speech_at <= policy.local_speech_window_secs
         if is_recent_assistant_echo(text, now):
             await cancel_task(debounce_task)
             debounce_task = None
@@ -383,13 +464,27 @@ async def handle_scribe_events(
         status(status="hearing", partial_transcript=text)
         if active_turn and active_turn.is_active() and active_turn.is_speaking():
             active_turn.mark_speech_started(now)
-            should_barge_in, _reason = policy.barge_in_decision(
+            publish_barge_in_state(now)
+            playback_rms = effective_playback_rms(levels, now)
+            should_barge_in, gate_last_reason = policy.barge_in_decision(
                 text,
                 assistant_speaking=True,
-                local_speech_recent=local_speech_recent,
+                gate_open=gate_open,
                 assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
-                local_speech_rms=last_local_speech_rms,
+                mic_rms=last_local_speech_rms,
+                playback_rms=playback_rms,
+                gate_reason=gate_last_reason,
                 assistant_text=active_turn.assistant_streamed_text(),
+            )
+            status(
+                **barge_in_telemetry(
+                    policy,
+                    last_local_speech_rms,
+                    playback_rms,
+                    gate_threshold_rms,
+                    gate_open,
+                    gate_last_reason,
+                )
             )
             if should_barge_in:
                 await cancel_active_turn("barge_in")
@@ -410,15 +505,57 @@ async def handle_scribe_events(
         debounce_task = asyncio.create_task(start_after_stable_partial(text))
 
     async def handle_commit(text: str) -> None:
-        nonlocal debounce_task
+        nonlocal debounce_task, gate_last_reason
         await cancel_task(debounce_task)
         debounce_task = None
-        if is_recent_assistant_echo(text, asyncio.get_running_loop().time()):
+        now = asyncio.get_running_loop().time()
+        if is_recent_assistant_echo(text, now):
             status(status="listening")
             return
 
-        status(status="thinking", last_committed_transcript=text)
         should_start_from_commit, _reason = policy.commit_decision(text)
+
+        if (
+            active_turn
+            and active_turn.is_active()
+            and active_turn.is_speaking()
+            and not policy.transcript_matches(text, active_turn.prompt)
+        ):
+            active_turn.mark_speech_started(now)
+            publish_barge_in_state(now)
+            playback_rms = effective_playback_rms(levels, now)
+            should_barge_in, gate_last_reason = policy.barge_in_decision(
+                text,
+                assistant_speaking=True,
+                gate_open=gate_open,
+                assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
+                mic_rms=last_local_speech_rms,
+                playback_rms=playback_rms,
+                gate_reason=gate_last_reason,
+                assistant_text=active_turn.assistant_streamed_text(),
+            )
+            status(
+                **barge_in_telemetry(
+                    policy,
+                    last_local_speech_rms,
+                    playback_rms,
+                    gate_threshold_rms,
+                    gate_open,
+                    gate_last_reason,
+                )
+            )
+            if not should_barge_in:
+                return
+
+            await cancel_active_turn("barge_in_commit")
+            if should_start_from_commit:
+                status(status="thinking", last_committed_transcript=text)
+                await start_turn(text, speculative=False)
+            else:
+                status(status="listening", last_committed_transcript=text)
+            return
+
+        status(status="thinking", last_committed_transcript=text)
 
         if active_turn and active_turn.is_active():
             if policy.transcript_matches(text, active_turn.prompt):
@@ -458,8 +595,12 @@ async def handle_scribe_events(
             text = str(event.get("text", ""))
 
             if event_type == "audio_activity":
-                last_local_speech_at = asyncio.get_running_loop().time()
+                now = asyncio.get_running_loop().time()
                 last_local_speech_rms = int(event.get("rms", 0))
+                if last_local_speech_rms >= policy.local_speech_rms_threshold:
+                    last_local_speech_at = now
+                levels["mic_rms"] = last_local_speech_rms
+                publish_barge_in_state(now, last_local_speech_rms)
                 continue
 
             if event_type == "partial":

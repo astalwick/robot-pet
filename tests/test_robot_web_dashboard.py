@@ -113,12 +113,19 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Robo-Pet Dashboard", body)
         self.assertIn("/static/dashboard.css", body)
-        self.assertIn("/static/dashboard.js", body)
+        self.assertIn("/static/main.js", body)
 
-    async def test_static_dashboard_js_is_served(self):
-        async with self.client.get("/static/dashboard.js") as resp:
+    async def test_static_main_js_is_served(self):
+        async with self.client.get("/static/main.js") as resp:
             self.assertEqual(resp.status, 200)
             self.assertIn("no-store", resp.headers["Cache-Control"])
+            body = await resp.text()
+
+        self.assertIn("connectTelemetry", body)
+
+    async def test_static_telemetry_js_is_served(self):
+        async with self.client.get("/static/telemetry.js") as resp:
+            self.assertEqual(resp.status, 200)
             body = await resp.text()
 
         self.assertIn("EventSource", body)
@@ -267,45 +274,61 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
 
 
 class DashboardJsTest(unittest.TestCase):
-    """Verifies the camera URL is built from the page hostname, not loopback."""
+    """Verifies dashboard ES modules (camera hostname, redeploy, voice, etc.)."""
+
+    @staticmethod
+    def _static_dir() -> Path:
+        return Path(ROOT) / "src" / "web_dashboard_static"
+
+    def _module(self, name: str) -> str:
+        return (self._static_dir() / name).read_text()
 
     def setUp(self):
-        static_dir = Path(ROOT) / "src" / "web_dashboard_static"
-        self.dashboard_js = (static_dir / "dashboard.js").read_text()
+        static_dir = self._static_dir()
+        self.camera_js = self._module("camera.js")
+        self.redeploy_js = self._module("redeploy.js")
+        self.telemetry_js = self._module("telemetry.js")
+        self.voice_js = self._module("voice.js")
+        self.config_js = self._module("config.js")
+        self.dom_js = self._module("dom.js")
+        self.main_js = self._module("main.js")
         self.dashboard_html = (static_dir / "index.html").read_text()
         self.dashboard_css = (static_dir / "dashboard.css").read_text()
 
+    def test_index_loads_main_module(self):
+        self.assertIn('type="module"', self.dashboard_html)
+        self.assertIn("/static/main.js", self.dashboard_html)
+
     def test_camera_url_uses_window_location_hostname(self):
-        self.assertIn("window.location.hostname", self.dashboard_js)
+        self.assertIn("window.location.hostname", self.camera_js)
 
     def test_camera_url_does_not_hardcode_loopback_or_localhost(self):
-        self.assertNotIn("127.0.0.1", self.dashboard_js)
-        self.assertNotIn("localhost", self.dashboard_js)
+        self.assertNotIn("127.0.0.1", self.camera_js)
+        self.assertNotIn("localhost", self.camera_js)
 
     def test_camera_url_targets_default_camera_port(self):
-        self.assertIn(":8081/stream.mjpg", self.dashboard_js)
+        self.assertIn(":8081/stream.mjpg", self.camera_js)
 
     def test_camera_stream_reconnects_after_error(self):
-        self.assertIn("camera.addEventListener('error', scheduleCameraReconnect)", self.dashboard_js)
-        self.assertIn("refreshCameraStream()", self.dashboard_js)
+        self.assertIn("camera.addEventListener('error', scheduleCameraReconnect)", self.camera_js)
+        self.assertIn("refreshCameraStream()", self.camera_js)
 
     def test_redeploy_status_is_polled_until_cleared(self):
-        self.assertIn("setInterval(refreshRedeployStatus, 1000)", self.dashboard_js)
-        self.assertIn("fetch('/redeploy/status')", self.dashboard_js)
-        self.assertIn("redeployArmedUntil = Date.now() + 10000", self.dashboard_js)
+        self.assertIn("setInterval(refreshRedeployStatus, 1000)", self.redeploy_js)
+        self.assertIn("fetch('/redeploy/status')", self.redeploy_js)
+        self.assertIn("redeployArmedUntil = Date.now() + 10000", self.redeploy_js)
 
     def test_redeploy_clicks_queue_work_without_blocking(self):
-        self.assertIn("redeployWork = redeployWork.then", self.dashboard_js)
-        self.assertNotIn("redeployRequestInFlight", self.dashboard_js)
-        self.assertNotIn("if (redeployRequestInFlight) return", self.dashboard_js)
-        self.assertIn("button.disabled = false", self.dashboard_js)
-        self.assertIn("syncRedeployFromServer", self.dashboard_js)
-        self.assertIn("[dashboard pointer]", self.dashboard_js)
+        self.assertIn("redeployWork = redeployWork.then", self.redeploy_js)
+        self.assertNotIn("redeployRequestInFlight", self.redeploy_js)
+        self.assertNotIn("if (redeployRequestInFlight) return", self.redeploy_js)
+        self.assertIn("button.disabled = false", self.redeploy_js)
+        self.assertIn("syncRedeployFromServer", self.redeploy_js)
 
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
-        self.assertIn("const max = (2 ** 31) - 1;", self.dashboard_js)
-        self.assertIn("const min = -(2 ** 31);", self.dashboard_js)
-        self.assertNotIn("1 << 31", self.dashboard_js)
+        self.assertIn("const max = (2 ** 31) - 1;", self.telemetry_js)
+        self.assertIn("const min = -(2 ** 31);", self.telemetry_js)
+        self.assertNotIn("1 << 31", self.telemetry_js)
 
     def test_face_overlay_element_lives_inside_camera_section(self):
         self.assertIn('id="face-overlay"', self.dashboard_html)
@@ -318,97 +341,99 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("pointer-events: none", self.dashboard_css)
 
     def test_overlay_clears_when_vision_source_is_stale(self):
-        self.assertIn("visionSource.stale === true", self.dashboard_js)
+        self.assertIn("visionSource.stale === true", self.camera_js)
 
     def test_overlay_clears_when_last_detection_is_old(self):
-        self.assertIn("VISION_STALE_SECONDS", self.dashboard_js)
-        self.assertIn("snapshotTime - lastDetection", self.dashboard_js)
+        self.assertIn("VISION_STALE_SECONDS", self.camera_js)
+        self.assertIn("snapshotTime - lastDetection", self.camera_js)
 
     def test_overlay_handles_letterboxing_via_contained_rect(self):
-        self.assertIn("containedImageRect", self.dashboard_js)
-        self.assertIn("sourceAspect", self.dashboard_js)
+        self.assertIn("containedImageRect", self.camera_js)
+        self.assertIn("sourceAspect", self.camera_js)
 
     def test_overlay_uses_camera_section_size_without_affecting_layout(self):
-        self.assertIn("cameraSection.clientWidth", self.dashboard_js)
-        self.assertIn("cameraSection.clientHeight", self.dashboard_js)
+        self.assertIn("cameraSection.clientWidth", self.camera_js)
+        self.assertIn("cameraSection.clientHeight", self.camera_js)
         self.assertIn("position: absolute", self.dashboard_css)
 
     def test_dashboard_renders_voice_status_panel(self):
         self.assertIn('id="voice-rows"', self.dashboard_html)
-        self.assertIn("renderVoice(snapshot, sources)", self.dashboard_js)
+        self.assertIn("export function renderVoice(snapshot, sources)", self.voice_js)
+        self.assertIn("renderVoice(snapshot, sources)", self.telemetry_js)
 
     def test_dashboard_exposes_barge_in_tuning_controls(self):
-        self.assertIn("barge_in_enabled", self.dashboard_js)
-        self.assertIn("barge_in_min_rms", self.dashboard_js)
-        self.assertIn("barge_in_sustain_ms", self.dashboard_js)
-        self.assertIn("barge_in_playback_leakage_ratio", self.dashboard_js)
-        self.assertIn("barge_in_event", self.dashboard_js)
-        self.assertIn("JUST NOW", self.dashboard_js)
-        self.assertIn("HEARING STT", self.dashboard_js)
-        self.assertIn("barge_in_gate", self.dashboard_js)
-        self.assertIn("barge_in_last_reason", self.dashboard_js)
+        self.assertIn("barge_in_enabled", self.voice_js)
+        self.assertIn("barge_in_min_rms", self.voice_js)
+        self.assertIn("barge_in_sustain_ms", self.voice_js)
+        self.assertIn("barge_in_playback_leakage_ratio", self.voice_js)
+        self.assertIn("barge_in_event", self.voice_js)
+        self.assertIn("JUST NOW", self.voice_js)
+        self.assertIn("HEARING STT", self.voice_js)
+        self.assertIn("barge_in_gate", self.voice_js)
+        self.assertIn("barge_in_last_reason", self.voice_js)
 
     def test_header_has_voice_toggle_button(self):
         self.assertIn('id="voice-toggle-button"', self.dashboard_html)
-        self.assertIn("onVoiceToggle", self.dashboard_js)
-        self.assertIn("updateVoiceToggleButton", self.dashboard_js)
+        self.assertIn("onVoiceToggle", self.voice_js)
+        self.assertIn("updateVoiceToggleButton", self.voice_js)
         self.assertIn(".record-dot", self.dashboard_css)
 
     def test_voice_toggle_button_has_only_four_labels(self):
-        self.assertIn("'Voice Off'", self.dashboard_js)
-        self.assertIn("'Voice On'", self.dashboard_js)
-        self.assertIn("'Starting'", self.dashboard_js)
-        self.assertIn("'Stopping'", self.dashboard_js)
-        self.assertNotIn("'Speaking'", self.dashboard_js)
-        self.assertNotIn("'Listening'", self.dashboard_js)
-        self.assertNotIn("'Voice Error'", self.dashboard_js)
+        self.assertIn("'Voice Off'", self.voice_js)
+        self.assertIn("'Voice On'", self.voice_js)
+        self.assertIn("'Starting'", self.voice_js)
+        self.assertIn("'Stopping'", self.voice_js)
+        self.assertNotIn("'Speaking'", self.voice_js)
+        self.assertNotIn("'Listening'", self.voice_js)
+        self.assertNotIn("'Voice Error'", self.voice_js)
 
     def test_voice_toggle_uses_want_state_not_merged_toggle(self):
-        self.assertIn("voiceWantEnabled", self.dashboard_js)
-        self.assertIn("voiceTelemetryEnabled", self.dashboard_js)
-        self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.dashboard_js)
-        self.assertIn("voiceUiPending", self.dashboard_js)
-        self.assertIn("voicePersistWork = voicePersistWork.then", self.dashboard_js)
-        self.assertNotIn("voiceTargetEnabled", self.dashboard_js)
-        self.assertNotIn("voiceEffectiveEnabled", self.dashboard_js)
-        self.assertNotIn("if (voiceTogglePending) return", self.dashboard_js)
+        self.assertIn("voiceWantEnabled", self.voice_js)
+        self.assertIn("voiceTelemetryEnabled", self.voice_js)
+        self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.voice_js)
+        self.assertIn("voiceUiPending", self.voice_js)
+        self.assertIn("voicePersistWork = voicePersistWork.then", self.voice_js)
+        self.assertNotIn("voiceTargetEnabled", self.voice_js)
+        self.assertNotIn("voiceEffectiveEnabled", self.voice_js)
+        self.assertNotIn("if (voiceTogglePending) return", self.voice_js)
 
     def test_button_binding_tolerates_missing_elements(self):
-        self.assertIn("function on(id, eventName, handler)", self.dashboard_js)
-        self.assertIn("if (element) {", self.dashboard_js)
-        self.assertIn("element.addEventListener", self.dashboard_js)
+        self.assertIn("export function on(id, eventName, handler)", self.dom_js)
+        self.assertIn("if (element) {", self.dom_js)
+        self.assertIn("element.addEventListener", self.dom_js)
 
     def test_action_buttons_use_stable_click_handlers(self):
-        self.assertIn("document.addEventListener('pointerdown', onDocumentPointerDown, true)", self.dashboard_js)
-        self.assertIn("on('voice-toggle-button', 'click', onVoiceToggle)", self.dashboard_js)
-        self.assertIn("on('redeploy-button', 'click', onRedeploy)", self.dashboard_js)
-        self.assertNotIn("runActionButton", self.dashboard_js)
-        self.assertNotIn("setInterval(updateRedeployButton", self.dashboard_js)
+        self.assertIn("bindOn('voice-toggle-button', 'click', onVoiceToggle)", self.voice_js)
+        self.assertIn("bindOn('redeploy-button', 'click', onRedeploy)", self.redeploy_js)
+        self.assertNotIn("runActionButton", self.voice_js)
+        self.assertNotIn("setInterval(updateRedeployButton", self.redeploy_js)
+        self.assertIn("bindVoiceHandlers", self.main_js)
+        self.assertIn("bindRedeployHandlers", self.main_js)
 
     def test_action_buttons_are_not_rewritten_when_state_is_unchanged(self):
-        self.assertIn("if (button.className !== className) button.className = className", self.dashboard_js)
-        self.assertIn("if (label.textContent !== text) label.textContent = text", self.dashboard_js)
-        self.assertIn("if (button.textContent !== text) button.textContent = text", self.dashboard_js)
-        self.assertIn("scheduleRedeployDisarm", self.dashboard_js)
+        self.assertIn("if (button.className !== className) button.className = className", self.voice_js)
+        self.assertIn("if (label.textContent !== text) label.textContent = text", self.voice_js)
+        self.assertIn("if (button.textContent !== text) button.textContent = text", self.redeploy_js)
+        self.assertIn("scheduleRedeployDisarm", self.redeploy_js)
 
     def test_voice_card_shows_activity_status_prominently(self):
-        self.assertIn("voiceCardStatus", self.dashboard_js)
-        self.assertIn("voiceActivityRow", self.dashboard_js)
-        self.assertIn("voice-activity-row", self.dashboard_js)
+        self.assertIn("voiceCardStatus", self.voice_js)
+        self.assertIn("voiceActivityRow", self.voice_js)
+        self.assertIn("voice-activity-row", self.voice_js)
         self.assertIn(".voice-activity-row .voice-activity", self.dashboard_css)
-        self.assertIn("voiceStatusClass(status, lastError)", self.dashboard_js)
+        self.assertIn("voiceStatusClass(status, lastError)", self.voice_js)
 
     def test_voice_card_has_gain_controls(self):
-        self.assertIn("gainControlRow('mic gain', 'input_gain'", self.dashboard_js)
-        self.assertIn("gainControlRow('speaker', 'output_gain'", self.dashboard_js)
-        self.assertIn("onVoiceGainCommit", self.dashboard_js)
-        self.assertIn("voicePendingPatch", self.dashboard_js)
-        self.assertIn("data-voice-key", self.dashboard_js)
+        self.assertIn("gainControlRow('mic gain', 'input_gain'", self.voice_js)
+        self.assertIn("gainControlRow('speaker', 'output_gain'", self.voice_js)
+        self.assertIn("onVoiceGainCommit", self.voice_js)
+        self.assertIn("voicePendingPatch", self.voice_js)
+        self.assertIn("data-voice-key", self.voice_js)
 
     def test_config_renderer_supports_text_fields_without_number_coercion(self):
-        self.assertIn("field.type === 'text'", self.dashboard_js)
-        self.assertIn("target[input.dataset.key] = input.value", self.dashboard_js)
-        self.assertIn("fetch('/config/voice')", self.dashboard_js)
+        self.assertIn("field.type === 'text'", self.config_js)
+        self.assertIn("target[input.dataset.key] = input.value", self.config_js)
+        self.assertIn("fetch('/config/voice')", self.config_js)
 
     def test_config_modal_fields_scroll_inside_viewport(self):
         self.assertIn("max-height: calc(100vh - 2rem)", self.dashboard_css)

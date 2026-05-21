@@ -34,7 +34,7 @@ src/
 ├── robot_web_dashboard.py # systemd service - browser operator dashboard (read-only)
 ├── robot_dashboard.py    # foreground SSH Textual dashboard
 ├── gamepad_teleop.py     # systemd service - boot-ready gamepad teleop (temporary)
-└── web_dashboard_static/ # plain HTML/CSS/JS for the browser dashboard (no build step)
+└── web_dashboard_static/ # plain HTML/CSS/ES modules for the browser dashboard (entry main.js, no build step)
 
 systemd/
 └── *.service             # Unit files for each service

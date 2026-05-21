@@ -33,6 +33,7 @@ log = setup_logging("gamepad-teleop")
 SLOW_TELEMETRY_WARNING_SECONDS = 0.025
 COMMAND_LOOP_STALL_SECONDS = 0.25
 COMMAND_LOOP_STALL_LOG_INTERVAL_SECONDS = 5.0
+STATUS_PUBLISH_INTERVAL = 0.5
 
 
 def parse_address(value: str) -> int:
@@ -125,7 +126,7 @@ class GamepadTeleopRunner:
                 return controller
 
             log.info("waiting for controller")
-            self.sleep(self.config.retry_interval)
+            self._sleep_with_status_updates(self.config.retry_interval)
 
         return None
 
@@ -137,7 +138,7 @@ class GamepadTeleopRunner:
                 motor = self.motor_factory()
             except Exception as exc:
                 log.warning("waiting for RoboClaw: %s", exc)
-                self.sleep(self.config.retry_interval)
+                self._sleep_with_status_updates(self.config.retry_interval)
                 continue
 
             if self._set_wheel_speeds(motor, 0, 0):
@@ -146,9 +147,20 @@ class GamepadTeleopRunner:
 
             log.warning("initial zero-speed command was not acknowledged")
             motor.cleanup()
-            self.sleep(self.config.retry_interval)
+            self._sleep_with_status_updates(self.config.retry_interval)
 
         return None
+
+    def _sleep_with_status_updates(self, duration: float, controller_reader_alive: bool | None = None):
+        deadline = self.clock() + duration
+        next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
+        while self.clock() < deadline and not self.stop_requested:
+            if self.clock() >= next_publish_at:
+                self._publish_status_update(controller_reader_alive=controller_reader_alive)
+                next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
+            remaining = min(next_publish_at, deadline) - self.clock()
+            if remaining > 0:
+                self.sleep(remaining)
 
     def _run_connected(self, controller, motor):
         disconnected = threading.Event()

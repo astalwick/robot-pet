@@ -626,15 +626,20 @@ class RobotDashboard(App):
             self.active_drive_tuning = DriveTuning.from_dict(drive_tuning)
             if not self.drive_tuning_dirty:
                 self.drive_tuning = self.active_drive_tuning
-        if not gamepad_live:
-            controller = {}
-            wheels = {}
-            battery = {"status": "stale"}
-            link_loop = {"status": "stale"}
-            drive_status_payload = {"state": "stale"}
 
         hud = self.query_one("#hud-header", Static)
-        hud.update(self._hud_banner(snapshot, sources, gamepad_status, system_status, controller, wheels, battery))
+        hud.update(
+            self._hud_banner(
+                snapshot,
+                sources,
+                gamepad_status,
+                system_status,
+                controller,
+                wheels,
+                battery,
+                drive_status_payload,
+            )
+        )
 
         self._render_pi(snapshot.get("pi") or {})
         self._render_battery(battery)
@@ -674,10 +679,19 @@ class RobotDashboard(App):
         controller: dict[str, Any],
         wheels: dict[str, Any],
         battery: dict[str, Any],
+        drive_status_payload: dict[str, Any],
     ) -> Text:
         now = time.time()
         pi = snapshot.get("pi") or {}
-        drive_status, drive_notes = self._drive_status(gamepad_status, system_status, controller, wheels, battery, pi)
+        drive_status, drive_notes = self._drive_status(
+            gamepad_status,
+            system_status,
+            controller,
+            wheels,
+            battery,
+            pi,
+            drive_status_payload,
+        )
 
         # Status color and glyph
         if drive_status == "ready":
@@ -728,12 +742,20 @@ class RobotDashboard(App):
         wheels: dict[str, Any],
         battery: dict[str, Any],
         pi: dict[str, Any],
+        drive_status_payload: dict[str, Any],
     ) -> tuple[str, list[str]]:
         notes: list[str] = []
         battery_status = battery.get("status", "unknown")
         throttled = pi.get("throttled_flags")
         controller_connected = controller.get("connected", False)
         wheels_read_ok = wheels.get("read_ok", False)
+        drive_state = drive_status_payload.get("state")
+
+        if drive_state in {"waiting_for_controller", "waiting_for_roboclaw"}:
+            label = drive_state.replace("_", " ")
+            if gamepad_status != "live":
+                notes.append("drive telemetry stale")
+            return label, notes
 
         if gamepad_status != "live":
             notes.append("drive telemetry stale")

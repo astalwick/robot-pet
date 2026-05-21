@@ -474,6 +474,29 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertFalse(published[-1]["drive_status"]["motor_command_ok"])
         self.assertEqual(published[-1]["drive_status"]["consecutive_motor_command_failures"], 1)
 
+    def test_sleep_with_status_updates_publishes_during_retry_sleep(self):
+        published = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(seconds):
+            nonlocal current_time
+            current_time += seconds
+
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+        )
+
+        runner._sleep_with_status_updates(1.0)
+
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["drive_status"]["state"], "stopped")
+
 
 if __name__ == "__main__":
     unittest.main()

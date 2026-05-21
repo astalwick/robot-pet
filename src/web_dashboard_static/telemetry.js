@@ -49,11 +49,11 @@ function render(snapshot) {
 
   recordHistory(snapshot, gamepadLive);
 
-  const controller = gamepadLive ? (snapshot.controller || {}) : {};
-  const wheels = gamepadLive ? (snapshot.wheels || {}) : {};
-  const battery = gamepadLive ? (snapshot.motor_battery || {}) : { status: 'stale' };
-  const linkLoop = gamepadLive ? (snapshot.link_loop || {}) : { status: 'stale' };
-  const driveStatusPayload = gamepadLive ? (snapshot.drive_status || {}) : { state: 'stale' };
+  const controller = snapshot.controller || {};
+  const wheels = snapshot.wheels || {};
+  const battery = snapshot.motor_battery || {};
+  const linkLoop = snapshot.link_loop || {};
+  const driveStatusPayload = snapshot.drive_status || {};
   const pi = snapshot.pi || {};
 
   renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
@@ -109,9 +109,11 @@ function driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi,
   const throttled = pi.throttled_flags;
   const state = driveStatusPayload.state;
 
+  if (state === 'waiting_for_controller' || state === 'waiting_for_roboclaw') {
+    return { label: state.replaceAll('_', ' '), cls: 'warn' };
+  }
   if (gamepadStale) return { label: 'hold', cls: 'err' };
   if (state === 'motor_command_failed' || state === 'controller_lost') return { label: 'hold', cls: 'err' };
-  if (state === 'waiting_for_controller' || state === 'waiting_for_roboclaw') return { label: state.replaceAll('_', ' '), cls: 'warn' };
   if (batteryStatus === 'critical' || batteryStatus === 'unknown') return { label: 'hold', cls: 'err' };
   if (!controller.connected) return { label: 'hold', cls: 'err' };
 

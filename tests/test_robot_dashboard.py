@@ -102,9 +102,26 @@ class RobotDashboardTest(unittest.TestCase):
             {"read_ok": True},
             {"status": "ok"},
             {"throttled_flags": "0x0"},
+            {},
         )
 
         self.assertEqual(status, "hold")
+        self.assertEqual(notes, ["drive telemetry stale"])
+
+    def test_waiting_drive_state_shown_when_telemetry_is_stale(self):
+        dashboard = RobotDashboard("/tmp/missing.sock")
+
+        status, notes = dashboard._drive_status(
+            "stale",
+            "live",
+            {"connected": False},
+            {"read_ok": False},
+            {"status": "unknown"},
+            {"throttled_flags": "0x0"},
+            {"state": "waiting_for_controller"},
+        )
+
+        self.assertEqual(status, "waiting for controller")
         self.assertEqual(notes, ["drive telemetry stale"])
 
 

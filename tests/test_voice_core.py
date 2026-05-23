@@ -114,6 +114,28 @@ class TurnPolicyTest(unittest.TestCase):
         above_since, gate_open, threshold, reason = update_near_end_gate(policy, above_since, 0.4, 900, 0)
         self.assertTrue(gate_open)
 
+    def test_scribe_upload_gate_holds_open_after_last_above_threshold(self):
+        from voice.elevenlabs_io import MIC_SCRIBE_GATE_HOLD_SECS, update_scribe_upload_gate
+
+        gate_open, last_above = update_scribe_upload_gate(0.0, 150, None)
+        self.assertTrue(gate_open)
+        self.assertEqual(last_above, 0.0)
+
+        gate_open, last_above = update_scribe_upload_gate(0.1, 50, last_above)
+        self.assertTrue(gate_open)
+        self.assertEqual(last_above, 0.0)
+
+        gate_open, last_above = update_scribe_upload_gate(0.0 + MIC_SCRIBE_GATE_HOLD_SECS + 0.01, 50, last_above)
+        self.assertFalse(gate_open)
+        self.assertIsNone(last_above)
+
+    def test_scribe_upload_gate_stays_closed_below_threshold(self):
+        from voice.elevenlabs_io import update_scribe_upload_gate
+
+        gate_open, last_above = update_scribe_upload_gate(0.0, 50, None)
+        self.assertFalse(gate_open)
+        self.assertIsNone(last_above)
+
     def test_note_mic_chunk_tracks_peak(self):
         levels: dict[str, float | int] = {"mic_peak": 0, "mic_last": 0}
         note_mic_chunk(levels, 120)

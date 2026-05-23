@@ -22,6 +22,20 @@ SCRIBE_MIN_SPEECH_DURATION_MS = 200
 SCRIBE_MIN_SILENCE_DURATION_MS = 300
 LOCAL_SPEECH_LOG_INTERVAL_SECS = 0.35
 MIC_SCRIBE_SEND_RMS_MIN = 100
+MIC_SCRIBE_GATE_HOLD_SECS = 0.35
+
+
+def update_scribe_upload_gate(
+    now: float,
+    rms: int,
+    last_above_at: float | None,
+) -> tuple[bool, float | None]:
+    if rms > MIC_SCRIBE_SEND_RMS_MIN:
+        return True, now
+    if last_above_at is not None and (now - last_above_at) < MIC_SCRIBE_GATE_HOLD_SECS:
+        return True, last_above_at
+    return False, None
+
 
 def ssl_context() -> ssl.SSLContext:
     try:
@@ -63,18 +77,21 @@ async def stream_audio_to_scribe(
 
         async def send_audio() -> None:
             last_activity_log_at = 0.0
+            last_above_at: float | None = None
             loop = asyncio.get_running_loop()
 
             async for chunk in audio_chunks:
                 rms = pcm16_rms(chunk)
+                now = loop.time()
+                gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
                 if audio_levels is not None:
                     note_mic_chunk(audio_levels, rms)
-                now = loop.time()
+                    audio_levels["scribe_gate_open"] = 1 if gate_open else 0
                 if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
                     await scribe_events.put({"type": "audio_activity", "rms": rms})
                     last_activity_log_at = now
 
-                upload = chunk if rms > MIC_SCRIBE_SEND_RMS_MIN else b"\x00" * len(chunk)
+                upload = chunk if gate_open else b"\x00" * len(chunk)
                 await ws.send(
                     json.dumps(
                         {

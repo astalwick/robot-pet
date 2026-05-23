@@ -1,10 +1,20 @@
 # Body Phase 1 — Audio / Video Body
 
+## Status
+
+Complete.
+
 ## Goal
 
 Add the physical audio/video hardware needed for conversation and early perception experiments while keeping the robot manually driven.
 
 This phase is about installing and proving the microphone, speaker, and camera as hardware devices. It does not prove the cloud conversation loop; that belongs to Personality Phase 1.
+
+## What Exists
+
+- Seeed ReSpeaker Flex XVF3800 for 6-channel capture and playback through the same USB path.
+- Pi Camera Module 3 Wide via `robot-camera.service`.
+- Gamepad teleop and RoboClaw motion unchanged alongside audio/video services.
 
 ## Entry Criteria
 
@@ -22,11 +32,14 @@ This phase is done when:
 - The audio/video hardware can coexist with the existing gamepad and RoboClaw setup.
 - Any wake-word capability from the microphone hardware is understood enough to decide whether to use it.
 
+## Key Decisions
+
+- Use the ReSpeaker Flex for mic and speaker; route assistant playback through the ReSpeaker output path for echo cancellation.
+- Use openWakeWord on the Pi for wake word in Personality Phase 1. Do not adopt a smart-home stack or ReSpeaker firmware wake features for v1.
+- Use the Pi Camera Module 3 Wide as the onboard camera.
+
 ## Default Direction
 
-- Use the ordered ReSpeaker Flex if it exposes wake/listen capabilities at a low driver or device-software level.
-- Avoid adopting a large smart-home stack just to get wake word.
-- Use the Pi Camera Module 3 Wide as the onboard camera.
 - Keep movement manual during this body phase.
 
 ## Cross-Track Dependencies

@@ -24,8 +24,9 @@ These are opinionated defaults, not permanent commitments. Change them when real
 | Track | Phase | Status | Meaning |
 |---|---:|---|---|
 | Body / autonomy | [Phase 0](body-phase-0.md) | Complete | Reliable gamepad-driven base robot |
-| Body / autonomy | [Phase 1](body-phase-1.md) | Next / near-term | Audio/video hardware installed on the moving platform |
-| Personality / agency | [Phase 1](personality-phase-1.md) | Next / near-term | Hear and speak via STT -> cloud LLM -> TTS |
+| Body / autonomy | [Phase 1](body-phase-1.md) | Complete | Audio/video hardware installed on the moving platform |
+| Body / autonomy | [Phase 2](body-phase-2.md) | Next / near-term | Local safety sensing |
+| Personality / agency | [Phase 1](personality-phase-1.md) | In progress | Hear and speak via STT -> cloud LLM -> TTS; wake word still open |
 
 ## Body / Autonomy Track
 

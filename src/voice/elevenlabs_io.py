@@ -21,6 +21,7 @@ SCRIBE_VAD_THRESHOLD = 0.6
 SCRIBE_MIN_SPEECH_DURATION_MS = 200
 SCRIBE_MIN_SILENCE_DURATION_MS = 300
 LOCAL_SPEECH_LOG_INTERVAL_SECS = 0.35
+MIC_SCRIBE_SEND_RMS_MIN = 100
 
 def ssl_context() -> ssl.SSLContext:
     try:
@@ -73,11 +74,12 @@ async def stream_audio_to_scribe(
                     await scribe_events.put({"type": "audio_activity", "rms": rms})
                     last_activity_log_at = now
 
+                upload = chunk if rms > MIC_SCRIBE_SEND_RMS_MIN else b"\x00" * len(chunk)
                 await ws.send(
                     json.dumps(
                         {
                             "message_type": "input_audio_chunk",
-                            "audio_base_64": base64.b64encode(chunk).decode("ascii"),
+                            "audio_base_64": base64.b64encode(upload).decode("ascii"),
                             "commit": False,
                             "sample_rate": sample_rate,
                         }

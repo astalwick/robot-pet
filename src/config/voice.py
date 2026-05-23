@@ -22,8 +22,8 @@ class VoiceConfigError(ValueError):
 @dataclass(frozen=True)
 class VoiceConfig:
     enabled: bool = False
-    input_device: str = "hw:0,0"
-    output_device: str = "plughw:0,0"
+    input_device: str = "XVF3800"
+    output_device: str = "XVF3800"
     sample_rate: int = 16000
     capture_channels: int = 6
     capture_channel_index: int = 1

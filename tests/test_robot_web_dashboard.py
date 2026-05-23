@@ -224,7 +224,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types["input_gain"], "number")
         self.assertEqual(types["output_gain"], "number")
         self.assertFalse(payload["values"]["enabled"])
-        self.assertEqual(payload["values"]["input_device"], "hw:0,0")
+        self.assertEqual(payload["values"]["input_device"], "XVF3800")
         self.assertTrue(payload["values"]["barge_in_enabled"])
         self.assertEqual(payload["values"]["barge_in_min_rms"], 700)
 

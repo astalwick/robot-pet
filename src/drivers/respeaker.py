@@ -2,13 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import array
+import threading
 from collections.abc import AsyncIterator
 
 
 MIC_BLOCKSIZE = 3200
-OUTPUT_WRITE_CHUNK_MS = 50
+OUTPUT_BLOCKSIZE = 1600
 PLAYBACK_QUEUE_MAXSIZE = 50
 _PLAYBACK_STOP = object()
+
+
+class PlaybackPcmBuffer:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending = bytearray()
+
+    def extend(self, audio: bytes) -> None:
+        with self._lock:
+            self._pending.extend(audio)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._pending.clear()
+
+    def fill(self, outdata) -> None:
+        need = len(outdata)
+        with self._lock:
+            available = len(self._pending)
+            if available >= need:
+                outdata[:need] = self._pending[:need]
+                del self._pending[:need]
+            else:
+                if available:
+                    outdata[:available] = self._pending[:available]
+                if available < need:
+                    outdata[available:] = b"\x00" * (need - available)
+                self._pending.clear()
 
 
 class ReSpeakerError(RuntimeError):
@@ -155,23 +184,38 @@ class ReSpeakerAudio:
     async def _run_playback(self) -> None:
         import sounddevice as sd
 
-        chunk_bytes = self.sample_rate * self.output_channels * 2 * OUTPUT_WRITE_CHUNK_MS // 1000
-        try:
-            stream = sd.RawOutputStream(
-                device=sounddevice_selector(self.output_device),
-                samplerate=self.sample_rate,
-                channels=self.output_channels,
-                dtype="int16",
-                blocksize=0,
-            )
-        except Exception as exc:
-            raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
+        buffer = PlaybackPcmBuffer()
+        restart = threading.Event()
 
-        with stream:
-            while self._playback_queue is not None:
-                audio = await self._playback_queue.get()
-                if audio is _PLAYBACK_STOP:
-                    return
-                audio = apply_pcm16_gain(audio, self.output_gain)
-                for index in range(0, len(audio), chunk_bytes):
-                    await asyncio.to_thread(stream.write, audio[index : index + chunk_bytes])
+        def callback(outdata, frames, _time, status) -> None:
+            if status:
+                restart.set()
+            buffer.fill(outdata)
+
+        while self._playback_queue is not None:
+            restart.clear()
+            try:
+                stream = sd.RawOutputStream(
+                    device=sounddevice_selector(self.output_device),
+                    samplerate=self.sample_rate,
+                    channels=self.output_channels,
+                    dtype="int16",
+                    blocksize=OUTPUT_BLOCKSIZE,
+                    latency="high",
+                    callback=callback,
+                )
+            except Exception as exc:
+                raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
+
+            with stream:
+                while self._playback_queue is not None and not restart.is_set():
+                    try:
+                        audio = await asyncio.wait_for(self._playback_queue.get(), timeout=0.05)
+                    except TimeoutError:
+                        continue
+                    if audio is _PLAYBACK_STOP:
+                        return
+                    buffer.extend(apply_pcm16_gain(audio, self.output_gain))
+                    pump = getattr(stream, "pump", None)
+                    if pump is not None:
+                        pump(buffer)

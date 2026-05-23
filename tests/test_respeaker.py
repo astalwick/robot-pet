@@ -8,6 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from drivers.respeaker import (
+    PlaybackPcmBuffer,
     ReSpeakerAudio,
     ReSpeakerError,
     apply_pcm16_gain,
@@ -54,13 +55,26 @@ class ReSpeakerTest(unittest.TestCase):
 
         self.assertEqual(writes, [b"abc"])
 
+    def test_playback_buffer_fills_and_drains(self):
+        buffer = PlaybackPcmBuffer()
+        buffer.extend(b"abcd")
+        outdata = bytearray(8)
+        buffer.fill(outdata)
+        self.assertEqual(bytes(outdata), b"abcd\x00\x00\x00\x00")
+        buffer.extend(b"ef")
+        outdata = bytearray(4)
+        buffer.fill(outdata)
+        self.assertEqual(bytes(outdata), b"ef\x00\x00")
+
     def test_playback_reuses_one_output_stream(self):
         class FakeOutputStream:
             opened = 0
             writes: list[bytes] = []
 
-            def __init__(self, **_kwargs):
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
                 FakeOutputStream.opened += 1
+                self._callback = callback
+                self._blocksize = blocksize
 
             def __enter__(self):
                 return self
@@ -68,8 +82,12 @@ class ReSpeakerTest(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
-            def write(self, audio: bytes) -> None:
-                FakeOutputStream.writes.append(audio)
+            def pump(self, buffer):
+                if not self._callback:
+                    return
+                outdata = bytearray(self._blocksize * 2)
+                self._callback(outdata, self._blocksize, None, None)
+                FakeOutputStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
             RawOutputStream = FakeOutputStream
@@ -85,7 +103,9 @@ class ReSpeakerTest(unittest.TestCase):
             await audio.end_playback()
 
             self.assertEqual(FakeOutputStream.opened, 1)
-            self.assertEqual(FakeOutputStream.writes, [b"abc", b"def"])
+            played = b"".join(FakeOutputStream.writes)
+            self.assertIn(b"abc", played)
+            self.assertIn(b"def", played)
 
         try:
             asyncio.run(run())
@@ -106,8 +126,9 @@ class ReSpeakerTest(unittest.TestCase):
         class GoodOutputStream:
             writes: list[bytes] = []
 
-            def __init__(self, **_kwargs):
-                pass
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
+                self._callback = callback
+                self._blocksize = blocksize
 
             def __enter__(self):
                 return self
@@ -115,8 +136,12 @@ class ReSpeakerTest(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
-            def write(self, audio: bytes) -> None:
-                GoodOutputStream.writes.append(audio)
+            def pump(self, buffer):
+                if not self._callback:
+                    return
+                outdata = bytearray(self._blocksize * 2)
+                self._callback(outdata, self._blocksize, None, None)
+                GoodOutputStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
             RawOutputStream = FailOutputStream
@@ -138,7 +163,7 @@ class ReSpeakerTest(unittest.TestCase):
             await audio.write_output(b"ok")
             await audio.end_playback()
 
-            self.assertEqual(GoodOutputStream.writes, [b"ok"])
+            self.assertIn(b"ok", b"".join(GoodOutputStream.writes))
 
         try:
             asyncio.run(run())
@@ -149,8 +174,9 @@ class ReSpeakerTest(unittest.TestCase):
         class FakeOutputStream:
             writes: list[bytes] = []
 
-            def __init__(self, **_kwargs):
-                pass
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
+                self._callback = callback
+                self._blocksize = blocksize
 
             def __enter__(self):
                 return self
@@ -158,8 +184,12 @@ class ReSpeakerTest(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
-            def write(self, audio: bytes) -> None:
-                FakeOutputStream.writes.append(audio)
+            def pump(self, buffer):
+                if not self._callback:
+                    return
+                outdata = bytearray(self._blocksize * 2)
+                self._callback(outdata, self._blocksize, None, None)
+                FakeOutputStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
             RawOutputStream = FakeOutputStream
@@ -178,7 +208,57 @@ class ReSpeakerTest(unittest.TestCase):
             await audio.write_output(b"still playing")
             await audio.end_playback()
 
-            self.assertEqual(FakeOutputStream.writes, [b"still playing"])
+            self.assertIn(b"still playing", b"".join(FakeOutputStream.writes))
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
+    def test_playback_reopens_stream_after_xrun(self):
+        class FakeOutputStream:
+            opened = 0
+            writes: list[bytes] = []
+            callback_calls = 0
+
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
+                FakeOutputStream.opened += 1
+                self._callback = callback
+                self._blocksize = blocksize
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def pump(self, buffer):
+                if not self._callback:
+                    return
+                outdata = bytearray(self._blocksize * 2)
+                FakeOutputStream.callback_calls += 1
+                status = object() if FakeOutputStream.callback_calls == 1 else None
+                self._callback(outdata, self._blocksize, None, status)
+                FakeOutputStream.writes.append(bytes(outdata))
+
+        class FakeSoundDevice:
+            RawOutputStream = FakeOutputStream
+
+        async def run():
+            FakeOutputStream.opened = 0
+            FakeOutputStream.writes = []
+            FakeOutputStream.callback_calls = 0
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.begin_playback()
+            await audio.write_output(b"hello")
+            await audio.write_output(b"world")
+            await audio.end_playback()
+
+            self.assertEqual(FakeOutputStream.opened, 2)
+            played = b"".join(FakeOutputStream.writes)
+            self.assertIn(b"hello", played)
+            self.assertIn(b"world", played)
 
         try:
             asyncio.run(run())
@@ -190,8 +270,10 @@ class ReSpeakerTest(unittest.TestCase):
             opened = 0
             writes: list[bytes] = []
 
-            def __init__(self, **_kwargs):
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
                 FakeOutputStream.opened += 1
+                self._callback = callback
+                self._blocksize = blocksize
 
             def __enter__(self):
                 return self
@@ -199,8 +281,12 @@ class ReSpeakerTest(unittest.TestCase):
             def __exit__(self, *_args):
                 return False
 
-            def write(self, audio: bytes) -> None:
-                FakeOutputStream.writes.append(audio)
+            def pump(self, buffer):
+                if not self._callback:
+                    return
+                outdata = bytearray(self._blocksize * 2)
+                self._callback(outdata, self._blocksize, None, None)
+                FakeOutputStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
             RawOutputStream = FakeOutputStream
@@ -229,7 +315,7 @@ class ReSpeakerTest(unittest.TestCase):
             await audio.end_playback()
 
             self.assertEqual(FakeOutputStream.opened, 2)
-            self.assertEqual(FakeOutputStream.writes, [b"next"])
+            self.assertIn(b"next", b"".join(FakeOutputStream.writes))
 
         try:
             asyncio.run(run())

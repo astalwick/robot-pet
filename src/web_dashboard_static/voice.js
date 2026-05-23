@@ -102,9 +102,6 @@ function updateGainControl(key) {
 }
 
 function updateVoiceToggleButton() {
-  const button = document.getElementById('voice-toggle-button');
-  if (!button) return;
-  const label = button.querySelector('.voice-toggle-label');
   let text;
   if (voiceUiPending()) {
     text = voiceWantEnabled ? 'Starting' : 'Stopping';
@@ -115,12 +112,17 @@ function updateVoiceToggleButton() {
   if (text === 'Voice On') cls = 'ok';
   else if (text === 'Voice Off') cls = 'muted';
   const className = `voice-toggle ${cls}`;
-  if (button.className !== className) button.className = className;
-  if (label.textContent !== text) label.textContent = text;
-  if (button.getAttribute('aria-label') !== text) button.setAttribute('aria-label', text);
+  for (const button of document.querySelectorAll('.voice-toggle')) {
+    const label = button.querySelector('.voice-toggle-label');
+    const timeline = button.classList.contains('voice-timeline-toggle');
+    const nextClassName = timeline ? `${className} voice-timeline-toggle` : className;
+    if (button.className !== nextClassName) button.className = nextClassName;
+    if (label && label.textContent !== text) label.textContent = text;
+    if (button.getAttribute('aria-label') !== text) button.setAttribute('aria-label', text);
+  }
   if (text !== lastVoiceButtonLabel) {
     lastVoiceButtonLabel = text;
-    voiceDbg('button', { label: text, disabled: button.disabled });
+    voiceDbg('button', { label: text });
   }
 }
 
@@ -205,6 +207,7 @@ function onVoiceGainCommit(event) {
 
 export function bindVoiceHandlers(bindOn) {
   bindOn('voice-toggle-button', 'click', onVoiceToggle);
+  bindOn('voice-timeline-toggle-button', 'click', onVoiceToggle);
   bindOn('voice-rows', 'input', onVoiceGainInput);
   bindOn('voice-rows', 'change', onVoiceGainCommit);
 }

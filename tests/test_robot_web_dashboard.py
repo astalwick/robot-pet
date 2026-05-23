@@ -407,6 +407,12 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("updateVoiceToggleButton", self.voice_js)
         self.assertIn(".record-dot", self.dashboard_css)
 
+    def test_maximized_voice_timeline_has_voice_toggle(self):
+        self.assertIn('id="voice-timeline-toggle-button"', self.dashboard_html)
+        self.assertIn("voice-timeline-toggle", self.dashboard_html)
+        self.assertIn("#voice-timeline-section.maximized .voice-timeline-toggle", self.dashboard_css)
+        self.assertIn("bindOn('voice-timeline-toggle-button', 'click', onVoiceToggle)", self.voice_js)
+
     def test_voice_toggle_button_has_only_four_labels(self):
         self.assertIn("'Voice Off'", self.voice_js)
         self.assertIn("'Voice On'", self.voice_js)
@@ -440,8 +446,9 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("bindRedeployHandlers", self.main_js)
 
     def test_action_buttons_are_not_rewritten_when_state_is_unchanged(self):
-        self.assertIn("if (button.className !== className) button.className = className", self.voice_js)
-        self.assertIn("if (label.textContent !== text) label.textContent = text", self.voice_js)
+        self.assertIn("querySelectorAll('.voice-toggle')", self.voice_js)
+        self.assertIn("if (button.className !== nextClassName) button.className = nextClassName", self.voice_js)
+        self.assertIn("if (label && label.textContent !== text) label.textContent = text", self.voice_js)
         self.assertIn("if (button.textContent !== text) button.textContent = text", self.redeploy_js)
         self.assertIn("scheduleRedeployDisarm", self.redeploy_js)
 

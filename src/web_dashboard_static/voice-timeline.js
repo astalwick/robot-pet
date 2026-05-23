@@ -17,9 +17,10 @@ const COLORS = {
 };
 
 const PHASE_ROWS = [
-  { name: 'hearing',  color: '#facc15' },
-  { name: 'thinking', color: '#7dd3fc' },
-  { name: 'speaking', color: '#c084fc' },
+  { name: 'user_speech', color: '#4ade80', label: 'user' },
+  { name: 'hearing',     color: '#facc15', label: 'hearing' },
+  { name: 'thinking',    color: '#7dd3fc', label: 'thinking' },
+  { name: 'speaking',    color: '#c084fc', label: 'speaking' },
 ];
 
 const ASSISTANT_COLOR = '#c084fc';
@@ -36,19 +37,19 @@ const EVENT_STYLES = {
 };
 
 const LANE_RATIOS_NORMAL = {
-  audio: 0.35,
-  state: 0.16,
+  audio: 0.32,
+  state: 0.22,
   gate:  0.06,
-  events: 0.26,
-  transcript: 0.17,
+  events: 0.24,
+  transcript: 0.16,
 };
 
 const LANE_RATIOS_MAXIMIZED = {
-  audio: 0.25,
-  state: 0.12,
+  audio: 0.24,
+  state: 0.16,
   gate:  0.05,
-  events: 0.18,
-  transcript: 0.40,
+  events: 0.17,
+  transcript: 0.38,
 };
 
 let canvas = null;
@@ -311,7 +312,7 @@ function drawStateLane(ref, rect) {
     ctx.font = '9px "JetBrains Mono", monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(row.name, 4, y + rowH / 2);
+    ctx.fillText(row.label, 4, y + rowH / 2);
   }
 }
 

@@ -78,16 +78,12 @@ class VoiceSession:
         self.status_callback({"status": "starting", "assistant_speaking": False, "last_error": None})
 
         async def assistant_runner(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
-            monitor = asyncio.create_task(self._status_while_speaking(speaking_event, turn_id))
-            try:
-                return await run_assistant_turn(
-                    turn_id, openai_input, playback_event, speaking_event, *args,
-                    **kwargs, tts_speaker=self._speak,
-                )
-            finally:
-                monitor.cancel()
-                with suppress(asyncio.CancelledError):
-                    await monitor
+            async def turn_speaker(text_chunks, api_key, voice_id, playback_event, speaking_event):
+                await self._speak(text_chunks, api_key, voice_id, playback_event, speaking_event, turn_id)
+            return await run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event, *args,
+                **kwargs, tts_speaker=turn_speaker,
+            )
 
         self.tasks = [
             asyncio.create_task(
@@ -134,13 +130,23 @@ class VoiceSession:
         for task in done:
             task.result()
 
-    async def _speak(self, text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event):
+    async def _speak(self, text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event, turn_id):
         from voice.elevenlabs_io import speak_with_eleven_flash
 
+        speaking_started = False
+
         def on_playback_rms(rms: int) -> None:
+            nonlocal speaking_started
             loop = asyncio.get_running_loop()
             self.audio_levels["playback_rms"] = playback_rms_with_gain(rms, self.config.output_gain)
             self.audio_levels["playback_at"] = loop.time()
+            if not speaking_started:
+                speaking_started = True
+                now = time.monotonic()
+                self.status_callback({"status": "speaking", "assistant_speaking": True})
+                if self.event_callback:
+                    self.event_callback({"type": "phase", "t": now, "name": "speaking", "on": True})
+                    self.event_callback({"type": "assistant_start", "t": now, "turn_id": turn_id})
 
         playback_id = await self.audio.begin_playback()
         try:
@@ -155,19 +161,7 @@ class VoiceSession:
             )
         finally:
             await self.audio.end_playback(playback_id)
-
-    async def _status_while_speaking(self, speaking_event: asyncio.Event, turn_id: int) -> None:
-        while not self.stop_event.is_set():
-            await asyncio.sleep(0.05)
-            if speaking_event.is_set():
-                self.status_callback({"status": "speaking", "assistant_speaking": True})
-                if self.event_callback:
-                    now = time.monotonic()
-                    self.event_callback({"type": "phase", "t": now, "name": "speaking", "on": True})
-                    self.event_callback({"type": "assistant_start", "t": now, "turn_id": turn_id})
-                while speaking_event.is_set() and not self.stop_event.is_set():
-                    await asyncio.sleep(0.05)
+            if speaking_started:
                 self.status_callback({"status": "listening", "assistant_speaking": False})
                 if self.event_callback:
                     self.event_callback({"type": "phase", "t": time.monotonic(), "name": "speaking", "on": False})
-                return

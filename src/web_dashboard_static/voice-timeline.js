@@ -214,24 +214,64 @@ function drawTimeAxis(ref, y) {
   }
 }
 
-function drawAudioLane(ref, rect) {
-  drawLaneBackground(rect, 'AUDIO');
-  if (levels.length < 2) return;
+const MIC_AUDIO_SPLIT = 0.38;
+const MIC_SCALE_FLOOR = 300;
+const OUT_SCALE_FLOOR = 500;
 
-  let maxObserved = 500;
+function drawAudioLane(ref, rect) {
+  if (levels.length < 2) {
+    drawLaneBackground(rect, 'AUDIO');
+    return;
+  }
+
+  const gap = 1;
+  const micH = Math.max(22, Math.floor((rect.h - gap) * MIC_AUDIO_SPLIT));
+  const micRect = { y: rect.y, h: micH };
+  const outRect = { y: rect.y + micH + gap, h: rect.h - micH - gap };
+
+  drawLaneBackground(micRect, 'MIC');
+  drawLaneBackground(outRect, 'OUT');
+
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, outRect.y - 0.5);
+  ctx.lineTo(viewW, outRect.y - 0.5);
+  ctx.stroke();
+
+  drawMicAudioLane(ref, micRect);
+  drawOutAudioLane(ref, outRect);
+}
+
+function seriesScaleMax(samples, idx, floor) {
+  let maxObserved = floor;
+  for (const sample of samples) {
+    if (sample[idx] > maxObserved) maxObserved = sample[idx];
+  }
+  return maxObserved * 1.15;
+}
+
+function drawMicAudioLane(ref, rect) {
+  const max = seriesScaleMax(levels, 1, MIC_SCALE_FLOOR);
+  drawAudioGrid(rect, max);
+  drawSeries(levels, rect, ref, max, 1, COLORS.mic, false);
+  ctx.fillStyle = COLORS.textDim;
+  ctx.font = '9px "JetBrains Mono", monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`max ${Math.round(max)}`, 4, rect.y + 2);
+}
+
+function drawOutAudioLane(ref, rect) {
+  let maxObserved = OUT_SCALE_FLOOR;
   for (const sample of levels) {
-    if (sample[1] > maxObserved) maxObserved = sample[1];
     if (sample[2] > maxObserved) maxObserved = sample[2];
     if (sample[3] > maxObserved) maxObserved = sample[3];
   }
   const max = maxObserved * 1.15;
-
   drawAudioGrid(rect, max);
-
   drawSeries(levels, rect, ref, max, 2, COLORS.playback, true);
-  drawSeries(levels, rect, ref, max, 1, COLORS.mic, false);
   drawSeries(levels, rect, ref, max, 3, COLORS.threshold, false, true);
-
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '9px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';

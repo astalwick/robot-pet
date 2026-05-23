@@ -147,6 +147,17 @@ main {
   margin-bottom: 0.5rem;
 }
 
+#voice-timeline-toolbar > .legend { flex: 1; }
+#voice-timeline-toolbar > button { margin-left: 0.4rem; }
+
+#voice-timeline-section.maximized {
+  position: fixed;
+  inset: 1rem;
+  z-index: 100;
+  margin: 0;
+  box-shadow: 0 0 0 1px var(--border), 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
 #voice-timeline-toolbar .legend {
   display: inline-flex;
   align-items: center;

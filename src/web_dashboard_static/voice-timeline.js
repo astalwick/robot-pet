@@ -39,7 +39,7 @@ const EVENT_STYLES = {
   state:               { color: '#6a8a9a', glyph: '│', label: 'state' },
 };
 
-const LANE_RATIOS = {
+const LANE_RATIOS_NORMAL = {
   audio: 0.40,
   state: 0.10,
   gate:  0.07,
@@ -47,12 +47,23 @@ const LANE_RATIOS = {
   transcript: 0.15,
 };
 
+const LANE_RATIOS_MAXIMIZED = {
+  audio: 0.28,
+  state: 0.06,
+  gate:  0.05,
+  events: 0.20,
+  transcript: 0.41,
+};
+
 let canvas = null;
 let ctx = null;
 let wrap = null;
 let hoverEl = null;
 let pauseButton = null;
+let maximizeButton = null;
+let section = null;
 let paused = false;
+let maximized = false;
 let dpr = 1;
 let viewW = 0;
 let viewH = 0;
@@ -71,6 +82,8 @@ export function initVoiceTimeline() {
   wrap = document.getElementById('voice-timeline-canvas-wrap');
   hoverEl = document.getElementById('voice-timeline-hover');
   pauseButton = document.getElementById('voice-timeline-pause');
+  maximizeButton = document.getElementById('voice-timeline-maximize');
+  section = document.getElementById('voice-timeline-section');
   if (!canvas || !wrap) return;
   ctx = canvas.getContext('2d');
 
@@ -81,12 +94,14 @@ export function initVoiceTimeline() {
   canvas.addEventListener('mousemove', onHover);
   canvas.addEventListener('mouseleave', () => { hoverX = null; hoverEl.classList.add('hidden'); });
   if (pauseButton) pauseButton.addEventListener('click', onPause);
+  if (maximizeButton) maximizeButton.addEventListener('click', onMaximize);
 
   scheduleFrame();
 }
 
 export function updateVoiceTimeline(timeline) {
   if (!timeline) return;
+  if (paused) return;
   serverRef = Number(timeline.ref) || 0;
   browserRefAt = performance.now() / 1000;
   horizon = Number(timeline.horizon_secs) || HORIZON_DEFAULT;
@@ -105,6 +120,13 @@ function onPause() {
     pauseButton.classList.remove('armed', 'timeline-paused');
     pauseButton.textContent = 'Pause';
   }
+}
+
+function onMaximize() {
+  maximized = !maximized;
+  if (section) section.classList.toggle('maximized', maximized);
+  maximizeButton.textContent = maximized ? 'Minimize' : 'Maximize';
+  resize();
 }
 
 function effectiveRef() {
@@ -140,17 +162,18 @@ function timeToX(t, ref) {
 }
 
 function laneRects() {
-  const total = LANE_RATIOS.audio + LANE_RATIOS.state + LANE_RATIOS.gate + LANE_RATIOS.events + LANE_RATIOS.transcript;
+  const ratios = maximized ? LANE_RATIOS_MAXIMIZED : LANE_RATIOS_NORMAL;
+  const total = ratios.audio + ratios.state + ratios.gate + ratios.events + ratios.transcript;
   const usable = viewH - 18;
   const scale = usable / total;
   let y = 4;
   const make = (h) => { const r = { y, h: h * scale }; y += r.h + 2; return r; };
   return {
-    audio: make(LANE_RATIOS.audio),
-    state: make(LANE_RATIOS.state),
-    gate: make(LANE_RATIOS.gate),
-    events: make(LANE_RATIOS.events),
-    transcript: make(LANE_RATIOS.transcript),
+    audio: make(ratios.audio),
+    state: make(ratios.state),
+    gate: make(ratios.gate),
+    events: make(ratios.events),
+    transcript: make(ratios.transcript),
     axisY: viewH - 14,
   };
 }
@@ -355,34 +378,34 @@ function drawTranscriptLane(ref, rect) {
   const cutoff = ref - horizon;
   const visible = events.filter((e) => (e.type === 'commit' || e.type === 'partial') && e.t >= cutoff && e.text);
   if (!visible.length) return;
-  ctx.font = '10px "JetBrains Mono", monospace';
+  visible.sort((a, b) => a.t - b.t);
+  ctx.font = '11px "JetBrains Mono", monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
 
-  let lastY = rect.y + rect.h / 2;
-  let lastEndX = -Infinity;
-  let row = 0;
+  const rowH = 18;
+  const rowCount = Math.max(2, Math.floor((rect.h - 8) / rowH));
+  const maxChars = maximized ? 120 : 40;
+  const rowEnds = new Array(rowCount).fill(-Infinity);
+
   for (const event of visible) {
     const x = timeToX(event.t, ref);
-    const text = (event.type === 'commit' ? '"' : '…') + String(event.text).slice(0, 40) + (event.type === 'commit' ? '"' : '');
+    const text = (event.type === 'commit' ? '"' : '…') + String(event.text).slice(0, maxChars) + (event.type === 'commit' ? '"' : '');
     const width = ctx.measureText(text).width + 10;
-    if (x < lastEndX) {
-      row = (row + 1) % 2;
-    } else {
-      row = 0;
-    }
-    lastY = rect.y + 4 + row * ((rect.h - 8) / 2) + ((rect.h - 8) / 4);
-    lastEndX = x + width;
 
+    let rowIdx = 0;
+    while (rowIdx < rowCount - 1 && rowEnds[rowIdx] > x) rowIdx++;
+    rowEnds[rowIdx] = x + width;
+
+    const y = rect.y + 4 + rowIdx * rowH + rowH / 2;
+    const boxY = y - 8;
     ctx.fillStyle = event.type === 'commit' ? withAlpha(COLORS.accent, 0.18) : withAlpha(COLORS.textDim, 0.18);
-    const boxX = x;
-    const boxY = lastY - 7;
-    ctx.fillRect(boxX, boxY, width, 14);
+    ctx.fillRect(x, boxY, width, 16);
     ctx.strokeStyle = event.type === 'commit' ? COLORS.accent : COLORS.textDim;
     ctx.lineWidth = 1;
-    ctx.strokeRect(boxX + 0.5, boxY + 0.5, width - 1, 13);
+    ctx.strokeRect(x + 0.5, boxY + 0.5, width - 1, 15);
     ctx.fillStyle = event.type === 'commit' ? COLORS.text : COLORS.textDim;
-    ctx.fillText(text, boxX + 4, lastY);
+    ctx.fillText(text, x + 4, y);
   }
 }
 

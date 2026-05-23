@@ -13,8 +13,6 @@ let voiceTelemetryEnabled = false;
 let voiceHydrated = false;
 let lastVoiceDbgKey = '';
 let lastVoiceButtonLabel = '';
-let lastBargeInEventCount = null;
-let bargeInFlashUntil = 0;
 
 function voiceDbg(step, detail) {
   if (DEBUG) console.log('[dashboard voice]', step, detail || '');
@@ -82,10 +80,6 @@ function ensureVoiceRows() {
     voiceValueRow('channel'),
     gainControlRow('mic gain', 'input_gain'),
     gainControlRow('speaker', 'output_gain'),
-    voiceValueRow('barge_in_event', 'barge-in'),
-    voiceValueRow('barge_in_gate', 'interrupt gate'),
-    voiceValueRow('barge_in_reason', 'gate status'),
-    voiceValueRow('transcript'),
     voiceValueRow('error'),
   ].join('');
   voiceRowsReady = true;
@@ -105,43 +99,6 @@ function updateGainControl(key) {
   const input = document.querySelector(`input[data-voice-key="${key}"]`);
   if (input) input.value = gain.toFixed(1);
   setVoiceValue(key, gain.toFixed(1));
-}
-
-function formatBargeInGate(voice) {
-  if (voice.barge_in_gate_open == null) return '--';
-  const mic = voice.barge_in_mic_rms != null ? voice.barge_in_mic_rms : '?';
-  const threshold = voice.barge_in_threshold_rms != null ? voice.barge_in_threshold_rms : '?';
-  const open = voice.barge_in_gate_open ? 'open' : 'closed';
-  return `${open} (${mic}/${threshold})`;
-}
-
-function formatBargeInGateClass(voice) {
-  if (voice.barge_in_gate_open == null) return 'muted';
-  return voice.barge_in_gate_open ? 'ok' : 'warn';
-}
-
-function updateBargeInEvent(voice) {
-  const count = Number(voice.barge_in_event_count || 0);
-  if (lastBargeInEventCount == null) {
-    lastBargeInEventCount = count;
-  } else if (count > lastBargeInEventCount) {
-    lastBargeInEventCount = count;
-    bargeInFlashUntil = Date.now() + 5000;
-  }
-
-  if (voice.assistant_speaking && voice.partial_transcript) {
-    setVoiceValue('barge_in_event', 'HEARING STT', 'ok');
-    return;
-  }
-
-  const event = voice.barge_in_last_event || '';
-  if (Date.now() < bargeInFlashUntil && event) {
-    setVoiceValue('barge_in_event', `JUST NOW: ${event}`, 'err');
-  } else if (event) {
-    setVoiceValue('barge_in_event', `last: ${event}`, 'muted');
-  } else {
-    setVoiceValue('barge_in_event', 'none', 'muted');
-  }
 }
 
 function updateVoiceToggleButton() {
@@ -209,11 +166,6 @@ export function renderVoice(snapshot, sources) {
   setVoiceValue('channel', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--');
   updateGainControl('input_gain');
   updateGainControl('output_gain');
-  updateBargeInEvent(voice);
-  setVoiceValue('barge_in_gate', formatBargeInGate(voice), formatBargeInGateClass(voice));
-  setVoiceValue('barge_in_reason', voice.barge_in_last_reason || '--', voice.barge_in_last_reason ? 'warn' : 'muted');
-  const transcript = voice.partial_transcript || voice.last_committed_transcript || '--';
-  setVoiceValue('transcript', transcript, transcript === '--' ? 'muted' : '');
   setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
   updateVoiceToggleButton();
 }

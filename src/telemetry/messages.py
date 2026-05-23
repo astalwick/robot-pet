@@ -209,6 +209,7 @@ def voice_update(
     barge_in_last_reason: str | None = None,
     barge_in_event_count: int | None = None,
     barge_in_last_event: str | None = None,
+    timeline: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -252,6 +253,8 @@ def voice_update(
         payload["barge_in_event_count"] = barge_in_event_count
     if barge_in_last_event is not None:
         payload["barge_in_last_event"] = barge_in_last_event
+    if timeline is not None:
+        payload["timeline"] = timeline
     return payload
 
 

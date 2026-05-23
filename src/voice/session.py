@@ -36,11 +36,13 @@ class VoiceSession:
         status_callback: StatusCallback,
         audio: ReSpeakerAudio | None = None,
         scribe_streamer: Callable[..., Any] = stream_audio_to_scribe,
+        event_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
         self.openai_client = openai_client
         self.status_callback = status_callback
+        self.event_callback = event_callback
         self.audio = audio or ReSpeakerAudio(
             input_device=config.input_device,
             output_device=config.output_device,
@@ -67,6 +69,8 @@ class VoiceSession:
             "mic_rms": 0,
             "playback_rms": 0,
             "playback_at": 0.0,
+            "threshold_rms": 0,
+            "gate_open": 0,
         }
 
     async def start(self) -> None:
@@ -103,6 +107,7 @@ class VoiceSession:
                     conversation_history=self.history,
                     system_prompt=DEFAULT_SYSTEM_PROMPT,
                     on_status=self.status_callback,
+                    on_event=self.event_callback,
                     assistant_runner=assistant_runner,
                 )
             ),

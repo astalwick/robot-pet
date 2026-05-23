@@ -9,7 +9,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from robot_voice import RobotVoiceService
+from robot_voice import RobotVoiceService, TimelineBuffer
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -64,6 +64,39 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             service.publish(service_config(), status="error", last_error="bad output")
 
         self.assertEqual(log.error.call_count, 2)
+
+
+class TimelineBufferTest(unittest.TestCase):
+    def test_partial_flood_does_not_evict_signal_events(self):
+        buffer = TimelineBuffer()
+        buffer.add_event({"type": "barge_in_fired", "t": 1.0, "reason": "user_spoke"})
+        for index in range(2000):
+            buffer.add_event({"type": "partial", "t": 1.5 + index * 0.001, "text": "..."})
+
+        snapshot = buffer.snapshot(now=2.0)
+        kinds = [event["type"] for event in snapshot["events"]]
+        self.assertIn("barge_in_fired", kinds)
+
+    def test_trim_drops_events_older_than_horizon(self):
+        buffer = TimelineBuffer()
+        buffer.add_event({"type": "barge_in_fired", "t": 0.0})
+        buffer.add_event({"type": "state", "t": 0.0, "state": "listening"})
+        buffer.add_event({"type": "partial", "t": 0.0, "text": "old"})
+        buffer.add_event({"type": "barge_in_fired", "t": 100.0})
+
+        buffer.trim(now=120.0)
+        kinds = [event["type"] for event in buffer.snapshot(now=120.0)["events"]]
+        self.assertEqual(kinds, ["barge_in_fired"])
+
+    def test_snapshot_events_are_time_ordered(self):
+        buffer = TimelineBuffer()
+        buffer.add_event({"type": "state", "t": 1.0, "state": "listening"})
+        buffer.add_event({"type": "partial", "t": 0.5, "text": "a"})
+        buffer.add_event({"type": "barge_in_fired", "t": 2.0})
+        buffer.add_event({"type": "partial", "t": 1.5, "text": "b"})
+
+        times = [event["t"] for event in buffer.snapshot(now=3.0)["events"]]
+        self.assertEqual(times, sorted(times))
 
 
 def service_config():

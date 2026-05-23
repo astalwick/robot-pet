@@ -7,6 +7,9 @@ import argparse
 import asyncio
 import os
 import signal
+import time
+from collections import deque
+from contextlib import suppress
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
 from lib.log import setup_logging
@@ -17,8 +20,55 @@ from voice.session import VoiceSession
 
 
 DEFAULT_POLL_SECONDS = 1.0
+TIMELINE_HORIZON_SECS = 30.0
+TIMELINE_SAMPLE_HZ = 20.0
+TIMELINE_MAX_SIGNAL_EVENTS = 100
+TIMELINE_MAX_STATE_EVENTS = 200
+TIMELINE_MAX_PARTIAL_EVENTS = 400
+PLAYBACK_RMS_STALE_SECS = 0.25
 
 log = setup_logging("robot-voice")
+
+
+class TimelineBuffer:
+    def __init__(self) -> None:
+        self.levels: deque[tuple[float, int, int, int, int]] = deque(maxlen=int(TIMELINE_HORIZON_SECS * TIMELINE_SAMPLE_HZ) + 10)
+        # Separate deques so high-frequency partials/state can't evict rare signal events.
+        self.signal_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_SIGNAL_EVENTS)
+        self.state_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_STATE_EVENTS)
+        self.partial_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_PARTIAL_EVENTS)
+
+    def add_sample(self, t: float, mic: int, playback: int, threshold: int, gate_open: int) -> None:
+        self.levels.append((t, mic, playback, threshold, gate_open))
+
+    def add_event(self, event: dict[str, object]) -> None:
+        kind = event.get("type")
+        if kind == "state":
+            self.state_events.append(event)
+        elif kind == "partial":
+            self.partial_events.append(event)
+        else:
+            self.signal_events.append(event)
+
+    def trim(self, now: float) -> None:
+        cutoff = now - TIMELINE_HORIZON_SECS
+        while self.levels and self.levels[0][0] < cutoff:
+            self.levels.popleft()
+        for bucket in (self.signal_events, self.state_events, self.partial_events):
+            while bucket and float(bucket[0].get("t", 0.0)) < cutoff:
+                bucket.popleft()
+
+    def snapshot(self, now: float) -> dict[str, object]:
+        merged = sorted(
+            (*self.signal_events, *self.state_events, *self.partial_events),
+            key=lambda e: float(e.get("t", 0.0)),
+        )
+        return {
+            "ref": now,
+            "horizon_secs": TIMELINE_HORIZON_SECS,
+            "levels": [list(sample) for sample in self.levels],
+            "events": merged,
+        }
 
 
 class RobotVoiceService:
@@ -50,6 +100,8 @@ class RobotVoiceService:
             "barge_in_last_event": None,
         }
         self.last_logged_error: str | None = None
+        self.timeline = TimelineBuffer()
+        self._sampler_task: asyncio.Task[None] | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -119,6 +171,7 @@ class RobotVoiceService:
             os.environ["ELEVENLABS_API_KEY"],
             AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"]),
             lambda update: self.publish(config, **update),
+            event_callback=self.timeline.add_event,
         )
         try:
             await self.session.start()
@@ -126,12 +179,39 @@ class RobotVoiceService:
             log.warning("voice session start failed: %s", exc)
             await self.stop_session()
             self.publish(config, status="error", last_error=str(exc))
+            return
+        self._sampler_task = asyncio.create_task(self._sample_timeline())
 
     async def stop_session(self) -> None:
+        if self._sampler_task is not None:
+            self._sampler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._sampler_task
+            self._sampler_task = None
         if self.session is not None:
             await self.session.stop()
             self.session = None
         self.active_config = None
+
+    async def _sample_timeline(self) -> None:
+        interval = 1.0 / TIMELINE_SAMPLE_HZ
+        while True:
+            await asyncio.sleep(interval)
+            session = self.session
+            if session is None:
+                continue
+            levels = session.audio_levels
+            now = time.monotonic()
+            playback_at = float(levels.get("playback_at", 0.0))
+            playback_rms = int(levels.get("playback_rms", 0)) if now - playback_at <= PLAYBACK_RMS_STALE_SECS else 0
+            self.timeline.add_sample(
+                now,
+                int(levels.get("mic_rms", 0)),
+                playback_rms,
+                int(levels.get("threshold_rms", 0)),
+                int(levels.get("gate_open", 0)),
+            )
+            self.timeline.trim(now)
 
     def publish(self, config: VoiceConfig, **updates: object) -> None:
         self.status.update(updates)
@@ -141,6 +221,8 @@ class RobotVoiceService:
             self.last_logged_error = last_error
         elif last_error is None:
             self.last_logged_error = None
+        now = time.monotonic()
+        self.timeline.trim(now)
         publish_message(
             self.telemetry_socket,
             voice_update(
@@ -173,6 +255,7 @@ class RobotVoiceService:
                 barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
                 barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
                 barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
+                timeline=self.timeline.snapshot(now),
             ),
         )
 

@@ -318,6 +318,7 @@ class DashboardJsTest(unittest.TestCase):
         self.redeploy_js = self._module("redeploy.js")
         self.telemetry_js = self._module("telemetry.js")
         self.voice_js = self._module("voice.js")
+        self.voice_timeline_js = self._module("voice-timeline.js")
         self.config_js = self._module("config.js")
         self.config_store_js = self._module("config-store.js")
         self.dom_js = self._module("dom.js")
@@ -395,11 +396,10 @@ class DashboardJsTest(unittest.TestCase):
     def test_dashboard_exposes_barge_in_visibility_not_inline_editors(self):
         self.assertNotIn("voiceToggleRow('barge-in'", self.voice_js)
         self.assertNotIn("barge_in_min_rms", self.voice_js)
-        self.assertIn("barge_in_event", self.voice_js)
-        self.assertIn("JUST NOW", self.voice_js)
-        self.assertIn("HEARING STT", self.voice_js)
-        self.assertIn("barge_in_gate", self.voice_js)
-        self.assertIn("barge_in_last_reason", self.voice_js)
+        self.assertNotIn("barge_in_event", self.voice_js)
+        self.assertIn("barge_in_fired", self.voice_timeline_js)
+        self.assertIn("barge_in_considered", self.voice_timeline_js)
+        self.assertIn("echo_suppressed", self.voice_timeline_js)
 
     def test_header_has_voice_toggle_button(self):
         self.assertIn('id="voice-toggle-button"', self.dashboard_html)

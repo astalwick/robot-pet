@@ -8,7 +8,15 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from voice.assistant import ActiveTurn, VoiceState, VoiceSwitch, handle_scribe_events, stream_openai_words
+from voice.assistant import (
+    ActiveTurn,
+    VoiceState,
+    VoiceSwitch,
+    handle_scribe_events,
+    note_mic_chunk,
+    refresh_barge_in_gate,
+    stream_openai_words,
+)
 from voice.conversation import ConversationHistory
 from config.voice import VoiceConfig
 from voice.turn_policy import TurnPolicy, should_accept_barge_in, should_speculate, transcript_matches, turn_policy_from_config
@@ -105,6 +113,23 @@ class TurnPolicyTest(unittest.TestCase):
         self.assertEqual(threshold, 500)
         above_since, gate_open, threshold, reason = update_near_end_gate(policy, above_since, 0.4, 900, 0)
         self.assertTrue(gate_open)
+
+    def test_note_mic_chunk_tracks_peak(self):
+        levels: dict[str, float | int] = {"mic_peak": 0, "mic_last": 0}
+        note_mic_chunk(levels, 120)
+        note_mic_chunk(levels, 450)
+        note_mic_chunk(levels, 200)
+        self.assertEqual(levels["mic_peak"], 450)
+        self.assertEqual(levels["mic_last"], 200)
+
+    def test_refresh_barge_in_gate_writes_threshold_and_gate(self):
+        policy = TurnPolicy(barge_in_min_rms=500)
+        levels = {"playback_rms": 0, "playback_at": 0.0}
+        _, gate_open, threshold, reason = refresh_barge_in_gate(levels, 0.0, policy, False, 100)
+        self.assertFalse(gate_open)
+        self.assertEqual(threshold, 500)
+        self.assertEqual(reason, "assistant_not_speaking")
+        self.assertEqual(levels["threshold_rms"], 500)
 
     def test_single_loud_spike_does_not_open_gate_without_sustain(self):
         policy = TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=350)

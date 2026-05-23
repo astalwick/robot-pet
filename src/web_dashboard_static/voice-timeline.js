@@ -507,7 +507,7 @@ function onHover(event) {
   const lines = [];
   lines.push(`t  -${(ref - t).toFixed(1)}s`);
   if (sample) {
-    lines.push(`mic       ${sample[1]}`);
+    lines.push(`mic peak  ${sample[1]}`);
     lines.push(`playback  ${sample[2]}`);
     lines.push(`threshold ${sample[3]}`);
     lines.push(`gate      ${sample[4] ? 'open' : 'closed'}`);

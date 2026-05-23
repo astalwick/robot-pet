@@ -9,6 +9,7 @@ from contextlib import suppress
 from urllib.parse import urlencode
 
 from voice.assistant import VoiceSwitch
+from voice.assistant import note_mic_chunk
 from voice.turn_policy import DEFAULT_TURN_POLICY, pcm16_rms
 
 
@@ -35,6 +36,7 @@ async def stream_audio_to_scribe(
     elevenlabs_api_key: str,
     sample_rate: int = SAMPLE_RATE,
     policy=DEFAULT_TURN_POLICY,
+    audio_levels: dict[str, float | int] | None = None,
 ) -> None:
     import websockets
 
@@ -64,6 +66,8 @@ async def stream_audio_to_scribe(
 
             async for chunk in audio_chunks:
                 rms = pcm16_rms(chunk)
+                if audio_levels is not None:
+                    note_mic_chunk(audio_levels, rms)
                 now = loop.time()
                 if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
                     await scribe_events.put({"type": "audio_activity", "rms": rms})

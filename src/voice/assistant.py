@@ -33,6 +33,46 @@ def effective_playback_rms(audio_levels: dict[str, float | int], now: float) -> 
     return int(audio_levels.get("playback_rms", 0))
 
 
+def note_mic_chunk(audio_levels: dict[str, float | int], rms: int) -> None:
+    audio_levels["mic_last"] = rms
+    peak = int(audio_levels.get("mic_peak", 0))
+    if rms > peak:
+        audio_levels["mic_peak"] = rms
+
+
+def refresh_barge_in_gate(
+    audio_levels: dict[str, float | int],
+    now: float,
+    policy: TurnPolicy,
+    assistant_speaking: bool,
+    mic_rms: int,
+) -> tuple[float | None, bool, int, str]:
+    gate_above_since = audio_levels.get("gate_above_since")
+    if gate_above_since is not None and not isinstance(gate_above_since, (int, float)):
+        gate_above_since = None
+    playback_rms = effective_playback_rms(audio_levels, now)
+    if assistant_speaking:
+        gate_above_since, gate_open, threshold_rms, reason = update_near_end_gate(
+            policy,
+            gate_above_since,
+            now,
+            mic_rms,
+            playback_rms,
+        )
+    else:
+        gate_above_since = None
+        gate_open = False
+        reason = "assistant_not_speaking"
+        threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
+    if gate_above_since is None:
+        audio_levels.pop("gate_above_since", None)
+    else:
+        audio_levels["gate_above_since"] = gate_above_since
+    audio_levels["threshold_rms"] = threshold_rms
+    audio_levels["gate_open"] = 1 if gate_open else 0
+    return gate_above_since, gate_open, threshold_rms, reason
+
+
 def update_near_end_gate(
     policy: TurnPolicy,
     gate_above_since: float | None,
@@ -330,13 +370,14 @@ async def handle_scribe_events(
     debounce_task: asyncio.Task[None] | None = None
     last_local_speech_at = 0.0
     last_local_speech_rms = 0
-    gate_above_since: float | None = None
     gate_open = False
     gate_threshold_rms = policy.barge_in_min_rms
     gate_last_reason = "assistant_not_speaking"
     barge_in_event_count = 0
     barge_in_hearing_reported = False
     levels = audio_levels if audio_levels is not None else {"mic_rms": 0, "playback_rms": 0, "playback_at": 0.0}
+    levels.setdefault("mic_peak", 0)
+    levels.setdefault("mic_last", 0)
     recent_assistant_text = ""
     recent_assistant_echo_until = 0.0
     hearing_on = False
@@ -382,24 +423,19 @@ async def handle_scribe_events(
         on_event(event)
 
     def publish_barge_in_state(now: float, mic_rms: int | None = None) -> None:
-        nonlocal gate_above_since, gate_open, gate_threshold_rms, gate_last_reason
+        nonlocal gate_open, gate_threshold_rms, gate_last_reason
         mic = last_local_speech_rms if mic_rms is None else mic_rms
+        assistant_speaking = bool(
+            active_turn and active_turn.is_active() and active_turn.is_speaking()
+        )
+        _, gate_open, gate_threshold_rms, gate_last_reason = refresh_barge_in_gate(
+            levels,
+            now,
+            policy,
+            assistant_speaking,
+            mic,
+        )
         playback_rms = effective_playback_rms(levels, now)
-        if active_turn and active_turn.is_active() and active_turn.is_speaking():
-            gate_above_since, gate_open, gate_threshold_rms, gate_last_reason = update_near_end_gate(
-                policy,
-                gate_above_since,
-                now,
-                mic,
-                playback_rms,
-            )
-        else:
-            gate_above_since = None
-            gate_open = False
-            gate_last_reason = "assistant_not_speaking"
-            gate_threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
-        levels["threshold_rms"] = gate_threshold_rms
-        levels["gate_open"] = 1 if gate_open else 0
         status(
             **barge_in_telemetry(
                 policy,
@@ -692,7 +728,10 @@ async def handle_scribe_events(
 
             if event_type == "audio_activity":
                 now = asyncio.get_running_loop().time()
-                last_local_speech_rms = int(event.get("rms", 0))
+                last_local_speech_rms = max(
+                    int(event.get("rms", 0)),
+                    int(levels.get("mic_peak", 0)),
+                )
                 if last_local_speech_rms >= policy.local_speech_rms_threshold:
                     last_local_speech_at = now
                 if last_local_speech_rms >= policy.user_speech_phase_rms_threshold:

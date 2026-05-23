@@ -68,6 +68,8 @@ class VoiceSession:
         self.policy = turn_policy_from_config(config)
         self.audio_levels: dict[str, float | int] = {
             "mic_rms": 0,
+            "mic_peak": 0,
+            "mic_last": 0,
             "playback_rms": 0,
             "playback_at": 0.0,
             "threshold_rms": 0,
@@ -93,6 +95,7 @@ class VoiceSession:
                     self.elevenlabs_api_key,
                     self.config.sample_rate,
                     policy=self.policy,
+                    audio_levels=self.audio_levels,
                 )
             ),
             asyncio.create_task(

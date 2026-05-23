@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import array
+import logging
 import threading
+import time
 from collections.abc import AsyncIterator
+from contextlib import suppress
 
 
-MIC_BLOCKSIZE = 3200
+MIC_BLOCKSIZE = 1280
 OUTPUT_BLOCKSIZE = 1600
 PLAYBACK_QUEUE_MAXSIZE = 50
+MIC_SUBSCRIBER_QUEUE_SIZE = 50
+WAKE_MIC_QUEUE_SIZE = 10  # Phase A: mic_frames(..., queue_size=WAKE_MIC_QUEUE_SIZE, warn_on_drop=False)
+CAPTURE_RAW_QUEUE_SIZE = 50
 PLAYBACK_DRAIN_PADDING_SECS = 2.0
+OVERFLOW_LOG_INTERVAL_SECS = 5.0
 _PLAYBACK_STOP = object()
+
+log = logging.getLogger(__name__)
 
 
 class PlaybackPcmBuffer:
@@ -88,6 +97,14 @@ def apply_pcm16_gain(audio: bytes, gain: float) -> bytes:
     return samples.tobytes()
 
 
+class _MicSubscriber:
+    __slots__ = ("queue", "warn_on_drop")
+
+    def __init__(self, queue_size: int, warn_on_drop: bool) -> None:
+        self.queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=queue_size)
+        self.warn_on_drop = warn_on_drop
+
+
 class ReSpeakerAudio:
     def __init__(
         self,
@@ -121,40 +138,172 @@ class ReSpeakerAudio:
         self._active_playback_id: int | None = None
         self._playback_queue: asyncio.Queue[bytes | object] | None = None
         self._playback_task: asyncio.Task[None] | None = None
+        self._io_stop_event: asyncio.Event | None = None
+        self._capture_raw_queue: asyncio.Queue[bytes] | None = None
+        self._capture_task: asyncio.Task[None] | None = None
+        self._input_stream = None
+        self._output_stream = None
+        self._output_buffer = PlaybackPcmBuffer()
+        self._subscribers: list[_MicSubscriber] = []
+        self._last_capture_status_log = 0.0
+        self._last_playback_status_log = 0.0
+        self._last_drop_warn = 0.0
+        self._last_raw_drop_log = 0.0
 
-    async def microphone_chunks(self, stop_event: asyncio.Event) -> AsyncIterator[bytes]:
+    async def start_io(self, stop_event: asyncio.Event) -> None:
+        # One input + one output stream for the whole voice session (see robot_voice.py).
+        # begin_playback/end_playback only queue PCM; they do not open/close PortAudio.
+        # Chime (Phase A) and TTS must not overlap — both use _run_playback on this path.
+        if self._capture_task is not None:
+            raise ReSpeakerError("IO already started")
         import sounddevice as sd
 
+        self._io_stop_event = stop_event
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=50)
+        self._capture_raw_queue = asyncio.Queue(maxsize=CAPTURE_RAW_QUEUE_SIZE)
 
-        def enqueue(chunk: bytes) -> None:
-            if not queue.full():
-                queue.put_nowait(chunk)
+        def enqueue_raw(chunk: bytes) -> None:
+            queue = self._capture_raw_queue
+            if queue is None:
+                return
+            if queue.full():
+                now = time.monotonic()
+                if now - self._last_raw_drop_log >= OVERFLOW_LOG_INTERVAL_SECS:
+                    self._last_raw_drop_log = now
+                    log.warning("ReSpeaker raw capture queue full; dropping frame")
+                return
+            queue.put_nowait(chunk)
 
-        def callback(indata, _frames, _time, status):
-            if not status:
-                loop.call_soon_threadsafe(enqueue, bytes(indata))
+        def input_callback(indata, _frames, _time, status) -> None:
+            if status:
+                now = time.monotonic()
+                if now - self._last_capture_status_log >= OVERFLOW_LOG_INTERVAL_SECS:
+                    self._last_capture_status_log = now
+                    log.warning("ReSpeaker capture status: %s", status)
+            loop.call_soon_threadsafe(enqueue_raw, bytes(indata))
 
+        def output_callback(outdata, _frames, _time, status) -> None:
+            if status:
+                now = time.monotonic()
+                if now - self._last_playback_status_log >= OVERFLOW_LOG_INTERVAL_SECS:
+                    self._last_playback_status_log = now
+                    log.warning("ReSpeaker playback status: %s", status)
+            self._output_buffer.fill(outdata)
+
+        input_stream = None
+        output_stream = None
         try:
-            stream = sd.RawInputStream(
+            input_stream = sd.RawInputStream(
                 device=sounddevice_selector(self.input_device),
                 samplerate=self.sample_rate,
                 blocksize=MIC_BLOCKSIZE,
                 channels=self.capture_channels,
                 dtype="int16",
-                callback=callback,
+                callback=input_callback,
             )
+            output_stream = sd.RawOutputStream(
+                device=sounddevice_selector(self.output_device),
+                samplerate=self.sample_rate,
+                channels=self.output_channels,
+                dtype="int16",
+                blocksize=OUTPUT_BLOCKSIZE,
+                latency="high",
+                callback=output_callback,
+            )
+            input_stream.start()
+            output_stream.start()
         except Exception as exc:
-            raise ReSpeakerError(f"{exc}; input devices: {format_sounddevice_devices('input')}") from exc
+            if input_stream is not None:
+                input_stream.stop()
+                input_stream.close()
+            if output_stream is not None:
+                output_stream.stop()
+                output_stream.close()
+            self._capture_raw_queue = None
+            self._io_stop_event = None
+            kind = "output" if input_stream is not None else "input"
+            raise ReSpeakerError(f"{exc}; {kind} devices: {format_sounddevice_devices(kind)}") from exc
 
-        with stream:
+        self._input_stream = input_stream
+        self._output_stream = output_stream
+        self._capture_task = asyncio.create_task(self._capture_loop())
+
+    async def stop_io(self) -> None:
+        if self._capture_task is None:
+            return
+        self._capture_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._capture_task
+        self._capture_task = None
+        self._subscribers.clear()
+        if self._input_stream is not None:
+            self._input_stream.stop()
+            self._input_stream.close()
+            self._input_stream = None
+        if self._output_stream is not None:
+            self._output_stream.stop()
+            self._output_stream.close()
+            self._output_stream = None
+        self._capture_raw_queue = None
+        self._io_stop_event = None
+        async with self._playback_lock:
+            await self._finish_playback()
+        self._output_buffer.clear()
+
+    async def mic_frames(
+        self,
+        stop_event: asyncio.Event | None = None,
+        *,
+        queue_size: int = MIC_SUBSCRIBER_QUEUE_SIZE,
+        warn_on_drop: bool = True,
+    ) -> AsyncIterator[bytes]:
+        if self._capture_task is None:
+            raise ReSpeakerError("IO not started; call start_io() first")
+        subscriber = _MicSubscriber(queue_size, warn_on_drop)
+        self._subscribers.append(subscriber)
+        try:
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                if self._io_stop_event is not None and self._io_stop_event.is_set():
+                    break
+                try:
+                    frame = await asyncio.wait_for(subscriber.queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield frame
+        finally:
+            if subscriber in self._subscribers:
+                self._subscribers.remove(subscriber)
+
+    async def _capture_loop(self) -> None:
+        stop_event = self._io_stop_event
+        raw_queue = self._capture_raw_queue
+        if stop_event is None or raw_queue is None:
+            return
+        try:
             while not stop_event.is_set():
-                interleaved = await queue.get()
+                try:
+                    interleaved = await asyncio.wait_for(raw_queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
                 mono = extract_mono_channel(interleaved, self.capture_channels, self.capture_channel_index)
-                yield apply_pcm16_gain(mono, self.input_gain)
+                frame = apply_pcm16_gain(mono, self.input_gain)
+                for subscriber in list(self._subscribers):
+                    if subscriber.queue.full():
+                        if subscriber.warn_on_drop:
+                            now = time.monotonic()
+                            if now - self._last_drop_warn >= OVERFLOW_LOG_INTERVAL_SECS:
+                                self._last_drop_warn = now
+                                log.warning("mic subscriber queue full; dropping frame")
+                        continue
+                    subscriber.queue.put_nowait(frame)
+        except asyncio.CancelledError:
+            raise
 
     async def begin_playback(self) -> int:
+        if self._output_stream is None:
+            raise ReSpeakerError("IO not started; call start_io() first")
         async with self._playback_lock:
             await self._finish_playback()
             self._playback_id += 1
@@ -186,7 +335,8 @@ class ReSpeakerAudio:
             self._playback_task = None
             self._active_playback_id = None
 
-    async def _drain_playback_buffer(self, buffer: PlaybackPcmBuffer) -> None:
+    async def _drain_playback_buffer(self) -> None:
+        buffer = self._output_buffer
         pending = buffer.pending_bytes()
         if pending == 0:
             return
@@ -195,49 +345,21 @@ class ReSpeakerAudio:
         deadline = asyncio.get_running_loop().time() + timeout
         while buffer.pending_bytes() > 0:
             if asyncio.get_running_loop().time() >= deadline:
+                log.warning("playback drain timed out; clearing %d pending bytes", buffer.pending_bytes())
                 break
             await asyncio.sleep(OUTPUT_BLOCKSIZE / self.sample_rate / 4)
+        buffer.clear()
 
     async def _run_playback(self) -> None:
-        import sounddevice as sd
-
-        buffer = PlaybackPcmBuffer()
-        restart = threading.Event()
-
-        def callback(outdata, frames, _time, status) -> None:
-            if status:
-                restart.set()
-            buffer.fill(outdata)
-
         while self._playback_queue is not None:
-            restart.clear()
-            stopping = False
             try:
-                stream = sd.RawOutputStream(
-                    device=sounddevice_selector(self.output_device),
-                    samplerate=self.sample_rate,
-                    channels=self.output_channels,
-                    dtype="int16",
-                    blocksize=OUTPUT_BLOCKSIZE,
-                    latency="high",
-                    callback=callback,
-                )
-            except Exception as exc:
-                raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
-
-            with stream:
-                while self._playback_queue is not None and not restart.is_set() and not stopping:
-                    try:
-                        audio = await asyncio.wait_for(self._playback_queue.get(), timeout=0.05)
-                    except TimeoutError:
-                        continue
-                    if audio is _PLAYBACK_STOP:
-                        stopping = True
-                        break
-                    buffer.extend(apply_pcm16_gain(audio, self.output_gain))
-                    pump = getattr(stream, "pump", None)
-                    if pump is not None:
-                        pump(buffer)
-                if stopping:
-                    await self._drain_playback_buffer(buffer)
-                    return
+                audio = await asyncio.wait_for(self._playback_queue.get(), timeout=0.05)
+            except TimeoutError:
+                continue
+            if audio is _PLAYBACK_STOP:
+                await self._drain_playback_buffer()
+                return
+            self._output_buffer.extend(apply_pcm16_gain(audio, self.output_gain))
+            pump = getattr(self._output_stream, "pump", None)
+            if pump is not None:
+                pump(self._output_buffer)

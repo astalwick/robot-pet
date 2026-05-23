@@ -8,6 +8,8 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from drivers.respeaker import (
+    MIC_BLOCKSIZE,
+    MIC_SUBSCRIBER_QUEUE_SIZE,
     PlaybackPcmBuffer,
     ReSpeakerAudio,
     ReSpeakerError,
@@ -66,46 +68,60 @@ class ReSpeakerTest(unittest.TestCase):
         buffer.fill(outdata)
         self.assertEqual(bytes(outdata), b"ef\x00\x00")
 
+    def test_mic_blocksize_is_80ms_at_16khz(self):
+        self.assertEqual(MIC_BLOCKSIZE, 1280)
+
     def test_playback_reuses_one_output_stream(self):
-        class FakeOutputStream:
+        class FakeStream:
             opened = 0
             writes: list[bytes] = []
 
             def __init__(self, callback=None, blocksize=4, **_kwargs):
-                FakeOutputStream.opened += 1
+                FakeStream.opened += 1
                 self._callback = callback
                 self._blocksize = blocksize
 
-            def __enter__(self):
-                return self
+            def start(self):
+                return None
 
-            def __exit__(self, *_args):
-                return False
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
 
             def pump(self, buffer):
                 if not self._callback:
                     return
                 outdata = bytearray(self._blocksize * 2)
                 self._callback(outdata, self._blocksize, None, None)
-                FakeOutputStream.writes.append(bytes(outdata))
+                FakeStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
-            RawOutputStream = FakeOutputStream
+            RawInputStream = FakeStream
+            RawOutputStream = FakeStream
 
         async def run():
-            FakeOutputStream.opened = 0
-            FakeOutputStream.writes = []
+            FakeStream.opened = 0
+            FakeStream.writes = []
             sys.modules["sounddevice"] = FakeSoundDevice
             audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            stop_event = asyncio.Event()
+            await audio.start_io(stop_event)
             await audio.begin_playback()
             await audio.write_output(b"abc")
             await audio.write_output(b"def")
             await audio.end_playback()
+            await audio.begin_playback()
+            await audio.write_output(b"ghi")
+            await audio.end_playback()
+            await audio.stop_io()
 
-            self.assertEqual(FakeOutputStream.opened, 1)
-            played = b"".join(FakeOutputStream.writes)
+            self.assertEqual(FakeStream.opened, 2)
+            played = b"".join(FakeStream.writes)
             self.assertIn(b"abc", played)
             self.assertIn(b"def", played)
+            self.assertIn(b"ghi", played)
 
         try:
             asyncio.run(run())
@@ -118,32 +134,32 @@ class ReSpeakerTest(unittest.TestCase):
         with self.assertRaisesRegex(ReSpeakerError, "playback not started"):
             asyncio.run(audio.write_output(b"abc"))
 
-    def test_playback_recovers_after_stream_open_failure(self):
+    def test_begin_playback_without_start_io_fails(self):
+        audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+
+        with self.assertRaisesRegex(ReSpeakerError, "IO not started"):
+            asyncio.run(audio.begin_playback())
+
+    def test_start_io_reports_missing_output_device(self):
         class FailOutputStream:
             def __init__(self, **_kwargs):
                 raise OSError("output unavailable")
 
-        class GoodOutputStream:
-            writes: list[bytes] = []
+        class FakeInputStream:
+            def __init__(self, **_kwargs):
+                pass
 
-            def __init__(self, callback=None, blocksize=4, **_kwargs):
-                self._callback = callback
-                self._blocksize = blocksize
+            def start(self):
+                return None
 
-            def __enter__(self):
-                return self
+            def stop(self):
+                return None
 
-            def __exit__(self, *_args):
-                return False
-
-            def pump(self, buffer):
-                if not self._callback:
-                    return
-                outdata = bytearray(self._blocksize * 2)
-                self._callback(outdata, self._blocksize, None, None)
-                GoodOutputStream.writes.append(bytes(outdata))
+            def close(self):
+                return None
 
         class FakeSoundDevice:
+            RawInputStream = FakeInputStream
             RawOutputStream = FailOutputStream
 
             @staticmethod
@@ -151,19 +167,10 @@ class ReSpeakerTest(unittest.TestCase):
                 return []
 
         async def run():
-            GoodOutputStream.writes = []
             sys.modules["sounddevice"] = FakeSoundDevice
             audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
-            await audio.begin_playback()
             with self.assertRaises(ReSpeakerError):
-                await audio.end_playback()
-
-            FakeSoundDevice.RawOutputStream = GoodOutputStream
-            await audio.begin_playback()
-            await audio.write_output(b"ok")
-            await audio.end_playback()
-
-            self.assertIn(b"ok", b"".join(GoodOutputStream.writes))
+                await audio.start_io(asyncio.Event())
 
         try:
             asyncio.run(run())
@@ -171,94 +178,49 @@ class ReSpeakerTest(unittest.TestCase):
             del sys.modules["sounddevice"]
 
     def test_stale_end_playback_does_not_stop_new_session(self):
-        class FakeOutputStream:
+        class FakeStream:
             writes: list[bytes] = []
 
             def __init__(self, callback=None, blocksize=4, **_kwargs):
                 self._callback = callback
                 self._blocksize = blocksize
 
-            def __enter__(self):
-                return self
+            def start(self):
+                return None
 
-            def __exit__(self, *_args):
-                return False
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
 
             def pump(self, buffer):
                 if not self._callback:
                     return
                 outdata = bytearray(self._blocksize * 2)
                 self._callback(outdata, self._blocksize, None, None)
-                FakeOutputStream.writes.append(bytes(outdata))
+                FakeStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
-            RawOutputStream = FakeOutputStream
+            RawInputStream = FakeStream
+            RawOutputStream = FakeStream
 
             @staticmethod
             def query_devices():
                 return []
 
         async def run():
-            FakeOutputStream.writes = []
+            FakeStream.writes = []
             sys.modules["sounddevice"] = FakeSoundDevice
             audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.start_io(asyncio.Event())
             old_id = await audio.begin_playback()
             await audio.begin_playback()
             await audio.end_playback(old_id)
             await audio.write_output(b"still playing")
             await audio.end_playback()
 
-            self.assertIn(b"still playing", b"".join(FakeOutputStream.writes))
-
-        try:
-            asyncio.run(run())
-        finally:
-            del sys.modules["sounddevice"]
-
-    def test_playback_reopens_stream_after_xrun(self):
-        class FakeOutputStream:
-            opened = 0
-            writes: list[bytes] = []
-            callback_calls = 0
-
-            def __init__(self, callback=None, blocksize=4, **_kwargs):
-                FakeOutputStream.opened += 1
-                self._callback = callback
-                self._blocksize = blocksize
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def pump(self, buffer):
-                if not self._callback:
-                    return
-                outdata = bytearray(self._blocksize * 2)
-                FakeOutputStream.callback_calls += 1
-                status = object() if FakeOutputStream.callback_calls == 1 else None
-                self._callback(outdata, self._blocksize, None, status)
-                FakeOutputStream.writes.append(bytes(outdata))
-
-        class FakeSoundDevice:
-            RawOutputStream = FakeOutputStream
-
-        async def run():
-            FakeOutputStream.opened = 0
-            FakeOutputStream.writes = []
-            FakeOutputStream.callback_calls = 0
-            sys.modules["sounddevice"] = FakeSoundDevice
-            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
-            await audio.begin_playback()
-            await audio.write_output(b"hello")
-            await audio.write_output(b"world")
-            await audio.end_playback()
-
-            self.assertEqual(FakeOutputStream.opened, 2)
-            played = b"".join(FakeOutputStream.writes)
-            self.assertIn(b"hello", played)
-            self.assertIn(b"world", played)
+            self.assertIn(b"still playing", b"".join(FakeStream.writes))
 
         try:
             asyncio.run(run())
@@ -266,40 +228,42 @@ class ReSpeakerTest(unittest.TestCase):
             del sys.modules["sounddevice"]
 
     def test_begin_playback_waits_for_in_flight_end(self):
-        class FakeOutputStream:
-            opened = 0
+        class FakeStream:
             writes: list[bytes] = []
 
             def __init__(self, callback=None, blocksize=4, **_kwargs):
-                FakeOutputStream.opened += 1
                 self._callback = callback
                 self._blocksize = blocksize
 
-            def __enter__(self):
-                return self
+            def start(self):
+                return None
 
-            def __exit__(self, *_args):
-                return False
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
 
             def pump(self, buffer):
                 if not self._callback:
                     return
                 outdata = bytearray(self._blocksize * 2)
                 self._callback(outdata, self._blocksize, None, None)
-                FakeOutputStream.writes.append(bytes(outdata))
+                FakeStream.writes.append(bytes(outdata))
 
         class FakeSoundDevice:
-            RawOutputStream = FakeOutputStream
+            RawInputStream = FakeStream
+            RawOutputStream = FakeStream
 
             @staticmethod
             def query_devices():
                 return []
 
         async def run():
-            FakeOutputStream.opened = 0
-            FakeOutputStream.writes = []
+            FakeStream.writes = []
             sys.modules["sounddevice"] = FakeSoundDevice
             audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.start_io(asyncio.Event())
             ending = asyncio.Event()
 
             async def end_first_session():
@@ -314,13 +278,159 @@ class ReSpeakerTest(unittest.TestCase):
             await end_task
             await audio.end_playback()
 
-            self.assertEqual(FakeOutputStream.opened, 2)
-            self.assertIn(b"next", b"".join(FakeOutputStream.writes))
+            self.assertIn(b"next", b"".join(FakeStream.writes))
 
         try:
             asyncio.run(run())
         finally:
             del sys.modules["sounddevice"]
+
+    def test_mic_frames_fan_out_to_subscribers(self):
+        class FakeInputStream:
+            callback = None
+
+            def __init__(self, callback=None, **_kwargs):
+                FakeInputStream.callback = callback
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeOutputStream:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeSoundDevice:
+            RawInputStream = FakeInputStream
+            RawOutputStream = FakeOutputStream
+
+        interleaved = pcm16([10, 11, 12, 13, 14, 15])
+
+        async def collect_frames(audio):
+            frames = []
+            async for frame in audio.mic_frames():
+                frames.append(frame)
+                if len(frames) >= 2:
+                    break
+            return frames
+
+        async def run():
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0", capture_channel_index=0)
+            stop_event = asyncio.Event()
+            await audio.start_io(stop_event)
+            first = asyncio.create_task(collect_frames(audio))
+            second = asyncio.create_task(collect_frames(audio))
+            await asyncio.sleep(0.05)
+            FakeInputStream.callback(interleaved, MIC_BLOCKSIZE, None, None)
+            FakeInputStream.callback(interleaved, MIC_BLOCKSIZE, None, None)
+            first_frames = await first
+            second_frames = await second
+            await audio.stop_io()
+
+            self.assertEqual(first_frames, second_frames)
+            self.assertEqual(first_frames[0], pcm16([10]))
+            self.assertEqual(first_frames[1], pcm16([10]))
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
+    def test_mic_frames_drops_when_queue_full(self):
+        import logging
+        from contextlib import suppress
+
+        class FakeInputStream:
+            callback = None
+
+            def __init__(self, callback=None, **_kwargs):
+                FakeInputStream.callback = callback
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeOutputStream:
+            def __init__(self, **_kwargs):
+                pass
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+        class FakeSoundDevice:
+            RawInputStream = FakeInputStream
+            RawOutputStream = FakeOutputStream
+
+        interleaved = pcm16([1, 2, 3, 4, 5, 6])
+
+        async def run():
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0", capture_channel_index=0)
+            await audio.start_io(asyncio.Event())
+
+            first_seen = asyncio.Event()
+            seen: list[bytes] = []
+
+            async def stalled_consumer():
+                # Hold the first frame so the subscriber queue can fill past its bound.
+                async for frame in audio.mic_frames():
+                    seen.append(frame)
+                    first_seen.set()
+                    await asyncio.sleep(60)
+
+            consumer = asyncio.create_task(stalled_consumer())
+
+            # Push frames in batches with yields so the capture loop drains
+            # the raw queue between batches and fan-out hits the full subscriber.
+            for _ in range(4):
+                for _ in range(MIC_SUBSCRIBER_QUEUE_SIZE):
+                    FakeInputStream.callback(interleaved, MIC_BLOCKSIZE, None, None)
+                await asyncio.sleep(0.05)
+
+            await first_seen.wait()
+            consumer.cancel()
+            with suppress(asyncio.CancelledError):
+                await consumer
+            await audio.stop_io()
+
+            self.assertEqual(len(seen), 1)
+
+        with self.assertLogs("drivers.respeaker", level=logging.WARNING) as captured:
+            try:
+                asyncio.run(run())
+            finally:
+                del sys.modules["sounddevice"]
+
+        self.assertTrue(
+            any("mic subscriber queue full" in message for message in captured.output),
+            f"expected drop warning, got: {captured.output}",
+        )
 
     def test_device_formatter_lists_matching_direction(self):
         class FakeSoundDevice:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from typing import Any
 
@@ -35,7 +35,7 @@ class VoiceSession:
         elevenlabs_api_key: str,
         openai_client: Any,
         status_callback: StatusCallback,
-        audio: ReSpeakerAudio | None = None,
+        audio: ReSpeakerAudio,
         scribe_streamer: Callable[..., Any] = stream_audio_to_scribe,
         event_callback: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
@@ -44,18 +44,10 @@ class VoiceSession:
         self.openai_client = openai_client
         self.status_callback = status_callback
         self.event_callback = event_callback
-        self.audio = audio or ReSpeakerAudio(
-            input_device=config.input_device,
-            output_device=config.output_device,
-            sample_rate=config.sample_rate,
-            capture_channels=config.capture_channels,
-            capture_channel_index=config.capture_channel_index,
-            output_channels=config.output_channels,
-            input_gain=config.input_gain,
-            output_gain=config.output_gain,
-        )
+        self.audio = audio
         self.scribe_streamer = scribe_streamer
         self.stop_event = asyncio.Event()
+        self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
         self.scribe_events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
         voice_id = config.voice_id or DEFAULT_VOICE_ID
@@ -77,7 +69,9 @@ class VoiceSession:
         }
 
     async def start(self) -> None:
+        self.stop_event.clear()
         self.status_callback({"status": "starting", "assistant_speaking": False, "last_error": None})
+        self._mic_frames = self.audio.mic_frames(self.stop_event)
 
         async def assistant_runner(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
             async def turn_speaker(text_chunks, api_key, voice_id, playback_event, speaking_event):
@@ -90,7 +84,7 @@ class VoiceSession:
         self.tasks = [
             asyncio.create_task(
                 self.scribe_streamer(
-                    self.audio.microphone_chunks(self.stop_event),
+                    self._mic_frames,
                     self.scribe_events,
                     self.elevenlabs_api_key,
                     self.config.sample_rate,
@@ -125,6 +119,7 @@ class VoiceSession:
             with suppress(asyncio.CancelledError):
                 await task
         self.tasks = []
+        self._mic_frames = None
 
     async def wait(self) -> None:
         if not self.tasks:

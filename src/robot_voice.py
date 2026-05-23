@@ -12,6 +12,7 @@ from collections import deque
 from contextlib import suppress
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
+from drivers.respeaker import ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
@@ -83,6 +84,8 @@ class RobotVoiceService:
         self.telemetry_socket = telemetry_socket
         self.poll_seconds = poll_seconds
         self.session: VoiceSession | None = None
+        self.audio: ReSpeakerAudio | None = None
+        self._io_stop_event: asyncio.Event | None = None
         self.active_config: VoiceConfig | None = None
         self.status: dict[str, object] = {
             "status": "disabled",
@@ -167,11 +170,30 @@ class RobotVoiceService:
 
         self.publish(config, status="starting", last_error=None)
         self.active_config = config
+        self.audio = ReSpeakerAudio(
+            input_device=config.input_device,
+            output_device=config.output_device,
+            sample_rate=config.sample_rate,
+            capture_channels=config.capture_channels,
+            capture_channel_index=config.capture_channel_index,
+            output_channels=config.output_channels,
+            input_gain=config.input_gain,
+            output_gain=config.output_gain,
+        )
+        self._io_stop_event = asyncio.Event()
+        try:
+            await self.audio.start_io(self._io_stop_event)
+        except Exception as exc:
+            log.warning("voice audio start failed: %s", exc)
+            await self.stop_session()
+            self.publish(config, status="error", last_error=str(exc))
+            return
         self.session = VoiceSession(
             config,
             os.environ["ELEVENLABS_API_KEY"],
             AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"]),
             lambda update: self.publish(config, **update),
+            audio=self.audio,
             event_callback=self.timeline.add_event,
         )
         try:
@@ -192,6 +214,12 @@ class RobotVoiceService:
         if self.session is not None:
             await self.session.stop()
             self.session = None
+        if self._io_stop_event is not None:
+            self._io_stop_event.set()
+        if self.audio is not None:
+            await self.audio.stop_io()
+            self.audio = None
+        self._io_stop_event = None
         self.active_config = None
 
     async def _sample_timeline(self) -> None:

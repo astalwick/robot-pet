@@ -417,6 +417,46 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_user_speech_phase_tracks_partials_and_commits(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            events: list[dict[str, object]] = []
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    on_event=events.append,
+                    assistant_runner=idle_forever,
+                )
+            )
+
+            await scribe_events.put({"type": "audio_activity", "rms": 200})
+            await scribe_events.put({"type": "partial", "text": "hello"})
+            await scribe_events.put({"type": "commit", "text": "hello there"})
+            await asyncio.sleep(0.01)
+
+            user_phases = [
+                event
+                for event in events
+                if event.get("type") == "phase" and event.get("name") == "user_speech"
+            ]
+            self.assertEqual(
+                [(event.get("on"),) for event in user_phases],
+                [(True,), (False,)],
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_committed_transcript_during_tts_requires_open_gate(self):
         async def run():
             started_inputs = []

@@ -2,30 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import array
-import logging
 import threading
 from collections.abc import AsyncIterator
-
-
-log = logging.getLogger("robot-voice")
-
-
-def _peak_pcm16(outdata) -> int:
-    nbytes = getattr(outdata, "nbytes", None)
-    if nbytes is not None and hasattr(outdata, "dtype"):
-        import numpy as np
-
-        if outdata.size == 0:
-            return 0
-        return int(np.max(np.abs(outdata)))
-
-    samples = memoryview(outdata).cast("h")
-    return max((abs(sample) for sample in samples), default=0)
 
 
 MIC_BLOCKSIZE = 3200
 OUTPUT_BLOCKSIZE = 1600
 PLAYBACK_QUEUE_MAXSIZE = 50
+PLAYBACK_DRAIN_PADDING_SECS = 2.0
 _PLAYBACK_STOP = object()
 
 
@@ -202,51 +186,32 @@ class ReSpeakerAudio:
             self._playback_task = None
             self._active_playback_id = None
 
+    async def _drain_playback_buffer(self, buffer: PlaybackPcmBuffer) -> None:
+        pending = buffer.pending_bytes()
+        if pending == 0:
+            return
+        bytes_per_second = self.sample_rate * self.output_channels * 2
+        timeout = pending / bytes_per_second + PLAYBACK_DRAIN_PADDING_SECS
+        deadline = asyncio.get_running_loop().time() + timeout
+        while buffer.pending_bytes() > 0:
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(OUTPUT_BLOCKSIZE / self.sample_rate / 4)
+
     async def _run_playback(self) -> None:
         import sounddevice as sd
 
         buffer = PlaybackPcmBuffer()
         restart = threading.Event()
-        session = {
-            "callbacks": 0,
-            "fed_chunks": 0,
-            "fed_bytes": 0,
-            "max_peak": 0,
-            "size_mismatch": 0,
-            "logged": 0,
-        }
 
         def callback(outdata, frames, _time, status) -> None:
-            session["callbacks"] += 1
-            pending_before = buffer.pending_bytes()
-            expected_bytes = frames * self.output_channels * 2
-            outdata_len = len(outdata)
-            outdata_nbytes = getattr(outdata, "nbytes", outdata_len)
-            if outdata_len != expected_bytes and outdata_nbytes != expected_bytes:
-                session["size_mismatch"] += 1
-            buffer.fill(outdata)
-            peak = _peak_pcm16(outdata)
-            if peak > session["max_peak"]:
-                session["max_peak"] = peak
-            if session["logged"] < 5 and (
-                session["callbacks"] <= 2 or pending_before > 0 or outdata_nbytes != expected_bytes
-            ):
-                session["logged"] += 1
-                log.info(
-                    "playback diag: frames=%s pending_before=%s type=%s len=%s nbytes=%s expected_bytes=%s peak_after=%s",
-                    frames,
-                    pending_before,
-                    type(outdata).__name__,
-                    outdata_len,
-                    outdata_nbytes,
-                    expected_bytes,
-                    peak,
-                )
             if status:
                 restart.set()
+            buffer.fill(outdata)
 
         while self._playback_queue is not None:
             restart.clear()
+            stopping = False
             try:
                 stream = sd.RawOutputStream(
                     device=sounddevice_selector(self.output_device),
@@ -261,26 +226,18 @@ class ReSpeakerAudio:
                 raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
 
             with stream:
-                while self._playback_queue is not None and not restart.is_set():
+                while self._playback_queue is not None and not restart.is_set() and not stopping:
                     try:
                         audio = await asyncio.wait_for(self._playback_queue.get(), timeout=0.05)
                     except TimeoutError:
                         continue
                     if audio is _PLAYBACK_STOP:
-                        log.info(
-                            "playback diag: done callbacks=%s fed_chunks=%s fed_bytes=%s max_peak=%s size_mismatch=%s buf_pending=%s",
-                            session["callbacks"],
-                            session["fed_chunks"],
-                            session["fed_bytes"],
-                            session["max_peak"],
-                            session["size_mismatch"],
-                            buffer.pending_bytes(),
-                        )
-                        return
-                    audio = apply_pcm16_gain(audio, self.output_gain)
-                    buffer.extend(audio)
-                    session["fed_chunks"] += 1
-                    session["fed_bytes"] += len(audio)
+                        stopping = True
+                        break
+                    buffer.extend(apply_pcm16_gain(audio, self.output_gain))
                     pump = getattr(stream, "pump", None)
                     if pump is not None:
                         pump(buffer)
+                if stopping:
+                    await self._drain_playback_buffer(buffer)
+                    return

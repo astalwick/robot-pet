@@ -343,6 +343,20 @@ async def handle_scribe_events(
     thinking_on = False
     user_speech_on = False
 
+    def note_user_speech() -> None:
+        nonlocal user_speech_on
+        if user_speech_on:
+            return
+        user_speech_on = True
+        emit("phase", name="user_speech", on=True)
+
+    def end_user_speech() -> None:
+        nonlocal user_speech_on
+        if not user_speech_on:
+            return
+        user_speech_on = False
+        emit("phase", name="user_speech", on=False)
+
     def status(**values: object) -> None:
         nonlocal hearing_on, thinking_on
         if on_status:
@@ -509,6 +523,7 @@ async def handle_scribe_events(
         nonlocal debounce_task, gate_last_reason
         now = asyncio.get_running_loop().time()
         emit("partial", text=text)
+        note_user_speech()
         if is_recent_assistant_echo(text, now):
             await cancel_task(debounce_task)
             debounce_task = None
@@ -576,6 +591,7 @@ async def handle_scribe_events(
         debounce_task = None
         now = asyncio.get_running_loop().time()
         emit("commit", text=text)
+        end_user_speech()
         if is_recent_assistant_echo(text, now):
             emit("echo_suppressed", source="commit", text=text)
             status(status="listening")
@@ -677,15 +693,10 @@ async def handle_scribe_events(
             if event_type == "audio_activity":
                 now = asyncio.get_running_loop().time()
                 last_local_speech_rms = int(event.get("rms", 0))
-                speaking_now = last_local_speech_rms >= policy.local_speech_rms_threshold
-                if speaking_now:
+                if last_local_speech_rms >= policy.local_speech_rms_threshold:
                     last_local_speech_at = now
-                    if not user_speech_on:
-                        user_speech_on = True
-                        emit("phase", name="user_speech", on=True)
-                elif user_speech_on and now - last_local_speech_at >= 0.5:
-                    user_speech_on = False
-                    emit("phase", name="user_speech", on=False)
+                if last_local_speech_rms >= policy.user_speech_phase_rms_threshold:
+                    note_user_speech()
                 levels["mic_rms"] = last_local_speech_rms
                 publish_barge_in_state(now, last_local_speech_rms)
                 continue

@@ -16,16 +16,13 @@ const COLORS = {
   border: '#0a4f6a',
 };
 
-const STATE_COLORS = {
-  listening: '#00d4ff',
-  hearing: '#facc15',
-  thinking: '#7dd3fc',
-  starting: '#facc15',
-  reconnecting: '#f87171',
-  speaking: '#c084fc',
-  error: '#f87171',
-  disabled: '#3a4a55',
-};
+const PHASE_ROWS = [
+  { name: 'hearing',  color: '#facc15' },
+  { name: 'thinking', color: '#7dd3fc' },
+  { name: 'speaking', color: '#c084fc' },
+];
+
+const ASSISTANT_COLOR = '#c084fc';
 
 const EVENT_STYLES = {
   barge_in_fired:      { color: '#f87171', glyph: '●', label: 'BARGE' },
@@ -36,23 +33,22 @@ const EVENT_STYLES = {
   commit:              { color: '#4ade80', glyph: '◆', label: 'commit' },
   commit_decision:     { color: '#4ade80', glyph: '◆', label: 'commit' },
   partial:             { color: '#6a8a9a', glyph: '·',  label: 'partial' },
-  state:               { color: '#6a8a9a', glyph: '│', label: 'state' },
 };
 
 const LANE_RATIOS_NORMAL = {
-  audio: 0.40,
-  state: 0.10,
-  gate:  0.07,
-  events: 0.28,
-  transcript: 0.15,
+  audio: 0.35,
+  state: 0.16,
+  gate:  0.06,
+  events: 0.26,
+  transcript: 0.17,
 };
 
 const LANE_RATIOS_MAXIMIZED = {
-  audio: 0.28,
-  state: 0.06,
+  audio: 0.25,
+  state: 0.12,
   gate:  0.05,
-  events: 0.20,
-  transcript: 0.41,
+  events: 0.18,
+  transcript: 0.40,
 };
 
 let canvas = null;
@@ -292,36 +288,49 @@ function drawSeries(samples, rect, ref, max, idx, color, filled, dashed = false)
 
 function drawStateLane(ref, rect) {
   drawLaneBackground(rect, 'STATE');
-  const segments = stateSegments(ref);
-  for (const seg of segments) {
-    const x1 = Math.max(0, timeToX(seg.start, ref));
-    const x2 = Math.min(viewW, timeToX(seg.end, ref));
-    if (x2 <= x1) continue;
-    ctx.fillStyle = STATE_COLORS[seg.state] || STATE_COLORS.disabled;
-    ctx.globalAlpha = 0.7;
-    ctx.fillRect(x1, rect.y + 4, x2 - x1, rect.h - 6);
-    ctx.globalAlpha = 1;
-    if (x2 - x1 > 50) {
-      ctx.fillStyle = '#020a10';
-      ctx.font = '9px "JetBrains Mono", monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(seg.state.toUpperCase(), x1 + 4, rect.y + rect.h / 2);
+  const innerY = rect.y + 4;
+  const innerH = rect.h - 6;
+  const rowH = innerH / PHASE_ROWS.length;
+  for (let i = 0; i < PHASE_ROWS.length; i++) {
+    const row = PHASE_ROWS[i];
+    const y = innerY + i * rowH;
+    ctx.fillStyle = '#0a1822';
+    ctx.fillRect(0, y, viewW, rowH - 1);
+
+    const intervals = phaseIntervals(row.name, ref);
+    ctx.fillStyle = row.color;
+    for (const [start, end] of intervals) {
+      const x1 = Math.max(0, timeToX(start, ref));
+      const x2 = Math.min(viewW, timeToX(end, ref));
+      if (x2 <= x1) continue;
+      ctx.globalAlpha = 0.75;
+      ctx.fillRect(x1, y, x2 - x1, rowH - 1);
+      ctx.globalAlpha = 1;
     }
+    ctx.fillStyle = '#6a8a9a';
+    ctx.font = '9px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(row.name, 4, y + rowH / 2);
   }
 }
 
-function stateSegments(ref) {
-  const stateEvents = events.filter((e) => e.type === 'state' && e.state);
-  if (!stateEvents.length) return [];
-  stateEvents.sort((a, b) => a.t - b.t);
-  const segments = [];
-  for (let i = 0; i < stateEvents.length; i++) {
-    const start = stateEvents[i].t;
-    const end = i + 1 < stateEvents.length ? stateEvents[i + 1].t : ref;
-    segments.push({ state: String(stateEvents[i].state), start, end });
+function phaseIntervals(name, ref) {
+  const phaseEvents = events.filter((e) => e.type === 'phase' && e.name === name);
+  if (!phaseEvents.length) return [];
+  phaseEvents.sort((a, b) => a.t - b.t);
+  const intervals = [];
+  let openAt = null;
+  for (const event of phaseEvents) {
+    if (event.on && openAt == null) {
+      openAt = event.t;
+    } else if (!event.on && openAt != null) {
+      intervals.push([openAt, event.t]);
+      openAt = null;
+    }
   }
-  return segments;
+  if (openAt != null) intervals.push([openAt, ref]);
+  return intervals;
 }
 
 function drawGateLane(ref, rect) {
@@ -342,7 +351,12 @@ function drawGateLane(ref, rect) {
 function drawEventsLane(ref, rect) {
   drawLaneBackground(rect, 'EVENTS');
   const cutoff = ref - horizon;
-  const visible = events.filter((e) => e.t >= cutoff && e.type !== 'state' && e.type !== 'partial');
+  const visible = events.filter((e) => (
+    e.t >= cutoff
+    && EVENT_STYLES[e.type]
+    && e.type !== 'partial'
+    && e.type !== 'commit'
+  ));
   visible.sort((a, b) => a.t - b.t);
 
   const lanes = [];
@@ -376,9 +390,8 @@ function drawEventsLane(ref, rect) {
 function drawTranscriptLane(ref, rect) {
   drawLaneBackground(rect, 'TRANSCRIPT');
   const cutoff = ref - horizon;
-  const visible = events.filter((e) => (e.type === 'commit' || e.type === 'partial') && e.t >= cutoff && e.text);
-  if (!visible.length) return;
-  visible.sort((a, b) => a.t - b.t);
+  const items = transcriptItems(ref, cutoff);
+  if (!items.length) return;
   ctx.font = '11px "JetBrains Mono", monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
@@ -388,10 +401,11 @@ function drawTranscriptLane(ref, rect) {
   const maxChars = maximized ? 120 : 40;
   const rowEnds = new Array(rowCount).fill(-Infinity);
 
-  for (const event of visible) {
-    const x = timeToX(event.t, ref);
-    const text = (event.type === 'commit' ? '"' : '…') + String(event.text).slice(0, maxChars) + (event.type === 'commit' ? '"' : '');
-    const width = ctx.measureText(text).width + 10;
+  for (const item of items) {
+    const x = timeToX(item.t, ref);
+    const display = item.text ? item.text.slice(0, maxChars) : '';
+    const label = item.wrap ? item.wrap[0] + display + item.wrap[1] : display;
+    const width = Math.max(item.minWidth || 0, ctx.measureText(label).width + 10);
 
     let rowIdx = 0;
     while (rowIdx < rowCount - 1 && rowEnds[rowIdx] > x) rowIdx++;
@@ -399,14 +413,47 @@ function drawTranscriptLane(ref, rect) {
 
     const y = rect.y + 4 + rowIdx * rowH + rowH / 2;
     const boxY = y - 8;
-    ctx.fillStyle = event.type === 'commit' ? withAlpha(COLORS.accent, 0.18) : withAlpha(COLORS.textDim, 0.18);
-    ctx.fillRect(x, boxY, width, 16);
-    ctx.strokeStyle = event.type === 'commit' ? COLORS.accent : COLORS.textDim;
+    if (item.fill) {
+      ctx.fillStyle = withAlpha(item.color, 0.18);
+      ctx.fillRect(x, boxY, width, 16);
+    }
+    ctx.strokeStyle = item.color;
     ctx.lineWidth = 1;
+    if (item.dashed) ctx.setLineDash([3, 3]);
     ctx.strokeRect(x + 0.5, boxY + 0.5, width - 1, 15);
-    ctx.fillStyle = event.type === 'commit' ? COLORS.text : COLORS.textDim;
-    ctx.fillText(text, x + 4, y);
+    if (item.dashed) ctx.setLineDash([]);
+    if (label) {
+      ctx.fillStyle = item.fill ? COLORS.text : item.color;
+      ctx.fillText(label, x + 4, y);
+    }
   }
+}
+
+function transcriptItems(ref, cutoff) {
+  const assistantByTurn = new Map();
+  for (const event of events) {
+    if (event.type === 'assistant' && event.turn_id != null) {
+      assistantByTurn.set(event.turn_id, event);
+    }
+  }
+  const items = [];
+  for (const event of events) {
+    if (event.t < cutoff) continue;
+    if (event.type === 'partial' && event.text) {
+      items.push({ t: event.t, text: String(event.text), wrap: ['…', ''], color: COLORS.textDim, fill: true });
+    } else if (event.type === 'commit' && event.text) {
+      items.push({ t: event.t, text: String(event.text), wrap: ['"', '"'], color: COLORS.accent, fill: true });
+    } else if (event.type === 'assistant_start') {
+      const matched = assistantByTurn.get(event.turn_id);
+      if (matched) {
+        items.push({ t: event.t, text: String(matched.text || ''), wrap: ['‹', '›'], color: ASSISTANT_COLOR, fill: true });
+      } else {
+        items.push({ t: event.t, text: '', color: ASSISTANT_COLOR, fill: false, dashed: true, minWidth: 60 });
+      }
+    }
+  }
+  items.sort((a, b) => a.t - b.t);
+  return items;
 }
 
 function drawLaneBackground(rect, label) {
@@ -465,7 +512,10 @@ function onHover(event) {
     lines.push(`gate      ${sample[4] ? 'open' : 'closed'}`);
   }
   for (const ev of nearbyEvents.slice(-4)) {
-    lines.push(`> ${ev.type}${ev.reason ? ' ' + ev.reason : ''}${ev.state ? ' ' + ev.state : ''}`);
+    const extra = ev.reason
+      || (ev.type === 'phase' ? `${ev.name} ${ev.on ? 'on' : 'off'}` : '')
+      || (ev.text ? String(ev.text).slice(0, 40) : '');
+    lines.push(`> ${ev.type}${extra ? ' ' + extra : ''}`);
   }
   hoverEl.textContent = lines.join('\n');
   hoverEl.classList.remove('hidden');

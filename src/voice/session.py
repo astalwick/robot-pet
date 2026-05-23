@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
@@ -76,10 +77,13 @@ class VoiceSession:
     async def start(self) -> None:
         self.status_callback({"status": "starting", "assistant_speaking": False, "last_error": None})
 
-        async def assistant_runner(*args, **kwargs):
-            monitor = asyncio.create_task(self._status_while_speaking(args[3]))
+        async def assistant_runner(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
+            monitor = asyncio.create_task(self._status_while_speaking(speaking_event, turn_id))
             try:
-                return await run_assistant_turn(*args, **kwargs, tts_speaker=self._speak)
+                return await run_assistant_turn(
+                    turn_id, openai_input, playback_event, speaking_event, *args,
+                    **kwargs, tts_speaker=self._speak,
+                )
             finally:
                 monitor.cancel()
                 with suppress(asyncio.CancelledError):
@@ -152,12 +156,18 @@ class VoiceSession:
         finally:
             await self.audio.end_playback(playback_id)
 
-    async def _status_while_speaking(self, speaking_event: asyncio.Event) -> None:
+    async def _status_while_speaking(self, speaking_event: asyncio.Event, turn_id: int) -> None:
         while not self.stop_event.is_set():
             await asyncio.sleep(0.05)
             if speaking_event.is_set():
                 self.status_callback({"status": "speaking", "assistant_speaking": True})
+                if self.event_callback:
+                    now = time.monotonic()
+                    self.event_callback({"type": "phase", "t": now, "name": "speaking", "on": True})
+                    self.event_callback({"type": "assistant_start", "t": now, "turn_id": turn_id})
                 while speaking_event.is_set() and not self.stop_event.is_set():
                     await asyncio.sleep(0.05)
                 self.status_callback({"status": "listening", "assistant_speaking": False})
+                if self.event_callback:
+                    self.event_callback({"type": "phase", "t": time.monotonic(), "name": "speaking", "on": False})
                 return

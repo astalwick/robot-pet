@@ -43,7 +43,7 @@ class TimelineBuffer:
 
     def add_event(self, event: dict[str, object]) -> None:
         kind = event.get("type")
-        if kind == "state":
+        if kind == "phase":
             self.state_events.append(event)
         elif kind == "partial":
             self.partial_events.append(event)

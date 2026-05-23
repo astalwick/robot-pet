@@ -339,15 +339,26 @@ async def handle_scribe_events(
     levels = audio_levels if audio_levels is not None else {"mic_rms": 0, "playback_rms": 0, "playback_at": 0.0}
     recent_assistant_text = ""
     recent_assistant_echo_until = 0.0
-    last_emitted_state: object | None = None
+    hearing_on = False
+    thinking_on = False
 
     def status(**values: object) -> None:
-        nonlocal last_emitted_state
+        nonlocal hearing_on, thinking_on
         if on_status:
             on_status(values)
-        if on_event and "status" in values and values["status"] != last_emitted_state:
-            last_emitted_state = values["status"]
-            emit("state", state=values["status"])
+        if not on_event or "status" not in values:
+            return
+        new_status = values["status"]
+        if new_status not in {"hearing", "thinking", "listening"}:
+            return
+        new_hearing = new_status == "hearing"
+        new_thinking = new_status == "thinking"
+        if new_hearing != hearing_on:
+            hearing_on = new_hearing
+            emit("phase", name="hearing", on=hearing_on)
+        if new_thinking != thinking_on:
+            thinking_on = new_thinking
+            emit("phase", name="thinking", on=thinking_on)
 
     def emit(kind: str, **payload: object) -> None:
         if not on_event:
@@ -407,6 +418,9 @@ async def handle_scribe_events(
         active_turn = None
         if turn and (turn.is_active() or (turn.playback_release_task and not turn.playback_release_task.done())):
             emit("turn_cancel", turn_id=turn.turn_id, reason=reason, was_speaking=turn.is_speaking())
+            streamed = turn.assistant_streamed_text().strip()
+            if streamed:
+                emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
             turn.request_cancel(reason)
 
     async def release_speculative_playback(turn: ActiveTurn) -> None:
@@ -434,6 +448,8 @@ async def handle_scribe_events(
         recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
         history.append_exchange(turn.committed_text or turn.prompt, assistant_text)
         turn.history_committed = True
+        if assistant_text:
+            emit("assistant", turn_id=turn.turn_id, text=assistant_text)
         status(status="listening", assistant_speaking=False, last_assistant_text=assistant_text)
 
     async def start_turn(prompt: str, speculative: bool) -> None:

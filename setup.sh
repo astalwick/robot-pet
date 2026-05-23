@@ -135,7 +135,6 @@ INSTALL_PATH="$(command -v install)"
 APT_PATH="$(command -v apt)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
-$USER ALL=(root) NOPASSWD: $APT_PATH install -y python3-opencv opencv-data alsa-utils sox portaudio19-dev
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-voice.service

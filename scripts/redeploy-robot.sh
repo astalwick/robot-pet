@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO_DIR="${ROBOT_PET_REPO_DIR:-$HOME/robot-pet}"
-APT_PACKAGES_FILE="scripts/redeploy-apt-packages.txt"
 SERVICES=(
   robot-brain.service
   robot-telemetry.service
@@ -101,10 +100,6 @@ plan_service_restarts() {
   done
 }
 
-read_apt_packages() {
-  grep -v '^[[:space:]]*#' "$REPO_DIR/$APT_PACKAGES_FILE" | grep -v '^[[:space:]]*$'
-}
-
 echo "== Robo-Pet redeploy =="
 echo "repo: $REPO_DIR"
 echo ""
@@ -144,14 +139,10 @@ changed_files="$(git diff --name-only "$old_rev" "$new_rev")"
 echo "Deployed $old_rev -> $new_rev"
 echo ""
 
-need_apt=0
 need_pip=0
 systemd_changed=0
 while IFS= read -r path; do
   [[ -z "$path" ]] && continue
-  if [[ "$path" == "$APT_PACKAGES_FILE" ]]; then
-    need_apt=1
-  fi
   if [[ "$path" == pyproject.toml ]]; then
     need_pip=1
   fi
@@ -161,13 +152,6 @@ while IFS= read -r path; do
 done <<< "$changed_files"
 
 plan_service_restarts <<< "$changed_files"
-
-if [[ "$need_apt" -eq 1 ]]; then
-  echo "Installing system packages..."
-  mapfile -t apt_packages < <(read_apt_packages)
-  sudo apt install -y "${apt_packages[@]}"
-  echo ""
-fi
 
 if [[ "$need_pip" -eq 1 ]]; then
   echo "Installing Python package metadata and dependencies..."

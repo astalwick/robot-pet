@@ -11,6 +11,7 @@ const COLORS = {
   mic: '#00d4ff',
   playback: '#c084fc',
   threshold: '#facc15',
+  scribeGate: '#fb923c',
   gateOpen: '#4ade80',
   gateClosed: '#163040',
   border: '#0a4f6a',
@@ -217,6 +218,8 @@ function drawTimeAxis(ref, y) {
 const MIC_AUDIO_SPLIT = 0.38;
 const MIC_SCALE_FLOOR = 300;
 const OUT_SCALE_FLOOR = 500;
+// Keep in sync with MIC_SCRIBE_SEND_RMS_MIN in src/voice/elevenlabs_io.py
+const MIC_SCRIBE_SEND_RMS_MIN = 100;
 
 function drawAudioLane(ref, rect) {
   if (levels.length < 2) {
@@ -251,15 +254,33 @@ function seriesScaleMax(samples, idx, floor) {
   return maxObserved * 1.15;
 }
 
+function drawLevelLine(rect, max, level, color) {
+  const y = rect.y + rect.h - (level / max) * rect.h;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(0, y);
+  ctx.lineTo(viewW, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  return y;
+}
+
 function drawMicAudioLane(ref, rect) {
   const max = seriesScaleMax(levels, 1, MIC_SCALE_FLOOR);
   drawAudioGrid(rect, max);
   drawSeries(levels, rect, ref, max, 1, COLORS.mic, false);
+  const gateY = drawLevelLine(rect, max, MIC_SCRIBE_SEND_RMS_MIN, COLORS.scribeGate);
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '9px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillText(`max ${Math.round(max)}`, 4, rect.y + 2);
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = COLORS.scribeGate;
+  ctx.fillText(`scribe ${MIC_SCRIBE_SEND_RMS_MIN}`, viewW - 4, gateY - 2);
 }
 
 function drawOutAudioLane(ref, rect) {
@@ -547,7 +568,7 @@ function onHover(event) {
   const lines = [];
   lines.push(`t  -${(ref - t).toFixed(1)}s`);
   if (sample) {
-    lines.push(`mic peak  ${sample[1]}`);
+    lines.push(`mic peak  ${sample[1]}${sample[1] > MIC_SCRIBE_SEND_RMS_MIN ? ' → scribe' : ' → silence'}`);
     lines.push(`playback  ${sample[2]}`);
     lines.push(`threshold ${sample[3]}`);
     lines.push(`gate      ${sample[4] ? 'open' : 'closed'}`);

@@ -10,6 +10,19 @@ from collections.abc import AsyncIterator
 log = logging.getLogger("robot-voice")
 
 
+def _peak_pcm16(outdata) -> int:
+    nbytes = getattr(outdata, "nbytes", None)
+    if nbytes is not None and hasattr(outdata, "dtype"):
+        import numpy as np
+
+        if outdata.size == 0:
+            return 0
+        return int(np.max(np.abs(outdata)))
+
+    samples = memoryview(outdata).cast("h")
+    return max((abs(sample) for sample in samples), default=0)
+
+
 MIC_BLOCKSIZE = 3200
 OUTPUT_BLOCKSIZE = 1600
 PLAYBACK_QUEUE_MAXSIZE = 50
@@ -194,19 +207,46 @@ class ReSpeakerAudio:
 
         buffer = PlaybackPcmBuffer()
         restart = threading.Event()
-        diag = {"chunks": 0, "bytes": 0, "status_hits": 0}
+        session = {
+            "callbacks": 0,
+            "fed_chunks": 0,
+            "fed_bytes": 0,
+            "max_peak": 0,
+            "size_mismatch": 0,
+            "logged": 0,
+        }
 
         def callback(outdata, frames, _time, status) -> None:
-            if status:
-                diag["status_hits"] += 1
-                if diag["status_hits"] <= 3:
-                    log.info("playback diag: callback status=%s pending=%s", status, buffer.pending_bytes())
-                restart.set()
+            session["callbacks"] += 1
+            pending_before = buffer.pending_bytes()
+            expected_bytes = frames * self.output_channels * 2
+            outdata_len = len(outdata)
+            outdata_nbytes = getattr(outdata, "nbytes", outdata_len)
+            if outdata_len != expected_bytes and outdata_nbytes != expected_bytes:
+                session["size_mismatch"] += 1
             buffer.fill(outdata)
+            peak = _peak_pcm16(outdata)
+            if peak > session["max_peak"]:
+                session["max_peak"] = peak
+            if session["logged"] < 5 and (
+                session["callbacks"] <= 2 or pending_before > 0 or outdata_nbytes != expected_bytes
+            ):
+                session["logged"] += 1
+                log.info(
+                    "playback diag: frames=%s pending_before=%s type=%s len=%s nbytes=%s expected_bytes=%s peak_after=%s",
+                    frames,
+                    pending_before,
+                    type(outdata).__name__,
+                    outdata_len,
+                    outdata_nbytes,
+                    expected_bytes,
+                    peak,
+                )
+            if status:
+                restart.set()
 
         while self._playback_queue is not None:
             restart.clear()
-            diag = {"chunks": 0, "bytes": 0, "status_hits": 0}
             try:
                 stream = sd.RawOutputStream(
                     device=sounddevice_selector(self.output_device),
@@ -221,27 +261,26 @@ class ReSpeakerAudio:
                 raise ReSpeakerError(f"{exc}; output devices: {format_sounddevice_devices('output')}") from exc
 
             with stream:
-                if restart.is_set():
-                    log.info("playback diag: restart set before inner loop (status_hits=%s)", diag["status_hits"])
                 while self._playback_queue is not None and not restart.is_set():
                     try:
                         audio = await asyncio.wait_for(self._playback_queue.get(), timeout=0.05)
                     except TimeoutError:
                         continue
                     if audio is _PLAYBACK_STOP:
+                        log.info(
+                            "playback diag: done callbacks=%s fed_chunks=%s fed_bytes=%s max_peak=%s size_mismatch=%s buf_pending=%s",
+                            session["callbacks"],
+                            session["fed_chunks"],
+                            session["fed_bytes"],
+                            session["max_peak"],
+                            session["size_mismatch"],
+                            buffer.pending_bytes(),
+                        )
                         return
                     audio = apply_pcm16_gain(audio, self.output_gain)
                     buffer.extend(audio)
-                    diag["chunks"] += 1
-                    diag["bytes"] += len(audio)
+                    session["fed_chunks"] += 1
+                    session["fed_bytes"] += len(audio)
                     pump = getattr(stream, "pump", None)
                     if pump is not None:
                         pump(buffer)
-            log.info(
-                "playback diag: stream closed chunks=%s bytes=%s status_hits=%s restart=%s buf_pending=%s",
-                diag["chunks"],
-                diag["bytes"],
-                diag["status_hits"],
-                restart.is_set(),
-                buffer.pending_bytes(),
-            )

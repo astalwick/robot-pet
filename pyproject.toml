@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "aiohttp",
     "basicmicro",
-    "evdev",
+    "evdev; sys_platform == 'linux'",
     "gpiozero",
     "numpy",
     "openai",

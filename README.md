@@ -88,6 +88,17 @@ See `docs/ARCHITECTURE.md` for details.
 
 ## Development
 
+**Local unit tests** (Mac or Linux, no robot hardware):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python -m unittest discover tests
+```
+
+`evdev` is Linux-only (gamepad on the Pi); it is omitted on macOS but the unit suite still runs fully.
+
 ```bash
 # Redeploy on the Pi (pulls, reinstalls, restarts services)
 ssh pi@robot-pi.local '~/robot-pet/scripts/redeploy-robot.sh'

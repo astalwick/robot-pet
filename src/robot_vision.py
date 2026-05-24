@@ -33,7 +33,6 @@ DETECTION_MAX_WIDTH = 640
 
 log = setup_logging("robot-vision")
 
-
 PixelBox = tuple[int, int, int, int]
 DetectorResult = tuple[list[PixelBox], int, int]
 Detector = Callable[[bytes], DetectorResult]

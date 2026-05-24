@@ -1,6 +1,6 @@
 # robo-pet
 
-A Raspberry Pi 5 robot: differential drive, live camera, gamepad teleop, browser and SSH operator dashboards. Voice interaction and autonomous navigation come later.
+A Raspberry Pi 5 robot: differential drive, live camera, gamepad teleop, browser dashboard, SSH operator dashboard and voice interaction.
 
 ## Quick Start
 

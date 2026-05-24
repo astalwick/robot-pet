@@ -82,6 +82,7 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual(config.wake_threshold, 0.5)
         self.assertEqual(config.wake_debounce_secs, 2.0)
         self.assertEqual(config.session_idle_secs, 30.0)
+        self.assertTrue(config.session_end_chime_path.endswith("session_end_chime.wav"))
 
     def test_wake_threshold_validation(self):
         with self.assertRaisesRegex(VoiceConfigError, "wake_threshold"):

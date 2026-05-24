@@ -60,14 +60,15 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_deactivate_clears_history(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
-        service.active_config = VoiceConfig()
+        service.active_config = VoiceConfig(wake_word_enabled=False)
         service._mode = "active"
         session = mock.Mock()
         session.history = mock.Mock()
         session.stop = mock.AsyncMock()
         service.session = session
 
-        await service._deactivate_session()
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            await service._deactivate_session()
 
         session.history.clear.assert_called_once()
         self.assertIsNone(service.session)
@@ -94,6 +95,46 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             await loop_task
         service._detector.check.assert_not_called()
 
+
+    async def test_end_session_command_sets_end_event(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "active"
+        self.assertFalse(service._end_session_event.is_set())
+        service.request_end_session()
+        self.assertTrue(service._end_session_event.is_set())
+
+    async def test_end_session_command_ignored_when_armed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command_socket = os.path.join(tmpdir, "cmd.sock")
+            service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", command_socket=command_socket)
+            service._mode = "armed"
+            server = await service._start_command_server()
+            self.assertIsNotNone(server)
+            try:
+                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "end_session"})
+                self.assertTrue(ok)
+                await asyncio.sleep(0.05)
+                self.assertFalse(service._end_session_event.is_set())
+            finally:
+                server.close()
+                with suppress(Exception):
+                    await server.wait_closed()
+
+    async def test_end_session_socket_command_sets_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command_socket = os.path.join(tmpdir, "cmd.sock")
+            service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", command_socket=command_socket)
+            service._mode = "active"
+            server = await service._start_command_server()
+            self.assertIsNotNone(server)
+            try:
+                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "end_session"})
+                self.assertTrue(ok)
+                await asyncio.wait_for(service._end_session_event.wait(), timeout=1.0)
+            finally:
+                server.close()
+                with suppress(Exception):
+                    await server.wait_closed()
 
     async def test_talk_now_command_sets_wake_event(self):
         with tempfile.TemporaryDirectory() as tmpdir:

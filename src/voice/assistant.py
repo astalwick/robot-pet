@@ -23,10 +23,15 @@ DEFAULT_SYSTEM_PROMPT = (
     "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "
     "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices. "
     "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
+    "When the user is clearly done talking for now (goodbye, stop listening, that's all, etc.), "
+    "first say a brief sign-off out loud, then call end_session as your final action for that turn. "
+    "Do not say anything after calling end_session — the session ends immediately. "
     "If a tool call comes back with an error, briefly tell the user what happened in a friendly way "
     "(for example, 'I tried, but the gamepad cut me off' or 'my body isn't responding right now')."
+    "You can speak in English or French. The vast majority of the time, you should speak in English - only speak French when the user speaks french. "
 )
 VOICE_SWITCH_TOOL_NAME = "switch_voice"
+END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
@@ -160,7 +165,24 @@ MOVE_FORWARD_TOOL = {
 }
 
 
-ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL]
+END_SESSION_TOOL = {
+    "type": "function",
+    "name": END_SESSION_TOOL_NAME,
+    "description": (
+        "End the active listening session and return to wake-word-only mode. "
+        "Use when the user is done talking for now."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL]
 
 
 @dataclass(frozen=True)
@@ -260,6 +282,7 @@ async def stream_openai_words(
     openai_client: Any,
     voice_state: VoiceState,
     motion_intent_caller: Callable[[str], Any] | None = None,
+    session_end_caller: Callable[[], Any] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -344,6 +367,21 @@ async def stream_openai_words(
                 )
                 continue
 
+            if name == END_SESSION_TOOL_NAME:
+                if session_end_caller is None:
+                    result = {"ok": False, "error": "session_end_unavailable"}
+                else:
+                    session_end_caller()
+                    result = {"ok": True, "ended": True}
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result),
+                    }
+                )
+                continue
+
             if name in MOTION_TOOL_NAMES:
                 if motion_intent_caller is None:
                     result: dict[str, Any] = {"ok": False, "error": "motion_unavailable"}
@@ -381,6 +419,7 @@ async def run_assistant_turn(
     on_assistant_chunk: Callable[[str], None] | None = None,
     tts_speaker: Callable[..., Any] | None = None,
     motion_intent_caller: Callable[[str], Any] | None = None,
+    session_end_caller: Callable[[], Any] | None = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -388,7 +427,11 @@ async def run_assistant_turn(
 
     async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
         async for chunk in stream_openai_words(
-            openai_input, openai_client, voice_state, motion_intent_caller
+            openai_input,
+            openai_client,
+            voice_state,
+            motion_intent_caller,
+            session_end_caller,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
@@ -421,6 +464,7 @@ async def handle_scribe_events(
     on_event: Callable[[dict[str, object]], None] | None = None,
     assistant_runner: Callable[..., Any] = run_assistant_turn,
     motion_intent_caller: Callable[[str], Any] | None = None,
+    session_end_caller: Callable[[], Any] | None = None,
 ) -> None:
     active_turn: ActiveTurn | None = None
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -581,6 +625,7 @@ async def handle_scribe_events(
                 voice_state,
                 on_assistant_chunk=assistant_streamed_chunks.append,
                 motion_intent_caller=motion_intent_caller,
+                session_end_caller=session_end_caller,
             )
         )
         turn = ActiveTurn(

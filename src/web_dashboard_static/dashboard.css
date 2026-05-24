@@ -373,6 +373,11 @@ button.armed {
   border-color: var(--warn);
 }
 
+button.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
 .voice-toggle {
   display: inline-flex;
   align-items: center;

@@ -39,6 +39,7 @@ class VoiceSession:
         scribe_streamer: Callable[..., Any] = stream_audio_to_scribe,
         event_callback: Callable[[dict[str, object]], None] | None = None,
         motion_intent_caller: Callable[[str], Any] | None = None,
+        session_end_caller: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -48,6 +49,7 @@ class VoiceSession:
         self.audio = audio
         self.scribe_streamer = scribe_streamer
         self.motion_intent_caller = motion_intent_caller
+        self.session_end_caller = session_end_caller
         self.stop_event = asyncio.Event()
         self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
@@ -109,6 +111,7 @@ class VoiceSession:
                     on_event=self.event_callback,
                     assistant_runner=assistant_runner,
                     motion_intent_caller=self.motion_intent_caller,
+                    session_end_caller=self.session_end_caller,
                 )
             ),
         ]

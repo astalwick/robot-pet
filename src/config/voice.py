@@ -13,6 +13,7 @@ from typing import Any
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/voice.json"
 DEFAULT_WAKE_MODEL_PATH = "/home/pi/robot-pet/models/wake/Hey_Bloop.onnx"
 DEFAULT_WAKE_CHIME_PATH = "/home/pi/robot-pet/assets/audio/wake_chime.wav"
+DEFAULT_SESSION_END_CHIME_PATH = "/home/pi/robot-pet/assets/audio/session_end_chime.wav"
 MIN_AUDIO_GAIN = 0.0
 MAX_AUDIO_GAIN = 3.0
 
@@ -49,6 +50,7 @@ class VoiceConfig:
     wake_threshold: float = 0.5
     wake_debounce_secs: float = 2.0
     wake_chime_path: str = DEFAULT_WAKE_CHIME_PATH
+    session_end_chime_path: str = DEFAULT_SESSION_END_CHIME_PATH
     session_idle_secs: float = 30.0
 
     @classmethod
@@ -89,6 +91,9 @@ class VoiceConfig:
             wake_threshold=float(values.get("wake_threshold", defaults.wake_threshold)),
             wake_debounce_secs=float(values.get("wake_debounce_secs", defaults.wake_debounce_secs)),
             wake_chime_path=str(values.get("wake_chime_path", defaults.wake_chime_path)),
+            session_end_chime_path=str(
+                values.get("session_end_chime_path", defaults.session_end_chime_path)
+            ),
             session_idle_secs=float(values.get("session_idle_secs", defaults.session_idle_secs)),
         )
         config.validate()

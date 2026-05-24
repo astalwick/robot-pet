@@ -818,10 +818,10 @@ async def voice_command_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
 
     cmd = payload.get("cmd") if isinstance(payload, dict) else None
-    if cmd != "talk_now":
+    if cmd not in {"talk_now", "end_session"}:
         return web.json_response({"error": f"unknown cmd: {cmd!r}"}, status=400)
 
-    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, {"cmd": "talk_now"})
+    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, {"cmd": cmd})
     if not sent:
         return web.json_response({"error": "voice service not reachable"}, status=503)
     return web.json_response({"ok": True})

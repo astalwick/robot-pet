@@ -106,6 +106,7 @@ class RobotVoiceService:
         self.active_config: VoiceConfig | None = None
         self._mode: str | None = None
         self._wake_event = asyncio.Event()
+        self._end_session_event = asyncio.Event()
         self._last_commit_at: float | None = None
         self.status: dict[str, object] = {
             "status": "disabled",
@@ -193,6 +194,12 @@ class RobotVoiceService:
                     return
                 log.info("talk-now command received")
                 self._wake_event.set()
+            elif cmd == "end_session":
+                if self._mode != "active":
+                    log.info("end-session ignored: no active session")
+                    return
+                log.info("end-session command received")
+                self.request_end_session()
             else:
                 log.warning("voice command socket: unknown cmd %r", cmd)
         finally:
@@ -218,6 +225,10 @@ class RobotVoiceService:
             return
 
         await asyncio.sleep(self.poll_seconds)
+
+    def request_end_session(self) -> None:
+        if self._mode == "active":
+            self._end_session_event.set()
 
     async def start_orchestrator(self, config: VoiceConfig) -> None:
         log.info(
@@ -345,6 +356,7 @@ class RobotVoiceService:
         self._mode = "active"
         self._last_commit_at = time.monotonic()
         self._wake_event.clear()
+        self._end_session_event.clear()
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
         motion_socket = self.motion_intent_socket
         self.session = VoiceSession(
@@ -355,6 +367,7 @@ class RobotVoiceService:
             audio=self.audio,
             event_callback=self.timeline.add_event,
             motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
+            session_end_caller=self.request_end_session,
         )
         try:
             await self.session.start()
@@ -373,12 +386,18 @@ class RobotVoiceService:
         config = self.active_config
         idle_task = asyncio.create_task(self._wait_for_idle())
         session_task = asyncio.create_task(self.session.wait())
-        done, pending = await asyncio.wait({idle_task, session_task}, return_when=asyncio.FIRST_COMPLETED)
+        end_task = asyncio.create_task(self._end_session_event.wait())
+        done, pending = await asyncio.wait(
+            {idle_task, session_task, end_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
         for task in pending:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        if session_task in done and not session_task.cancelled():
+        if end_task in done:
+            log.info("voice session ended by request")
+        elif session_task in done and not session_task.cancelled():
             session_task.result()
         elif config is not None and idle_task in done:
             log.info("voice session idle after %.1fs without commit", config.session_idle_secs)
@@ -399,6 +418,8 @@ class RobotVoiceService:
             return
 
     async def _deactivate_session(self) -> None:
+        config = self.active_config
+        audio = self.audio
         if self._sampler_task is not None:
             self._sampler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -409,7 +430,24 @@ class RobotVoiceService:
             self.session.history.clear()
             self.session = None
         self._last_commit_at = None
+        self._end_session_event.clear()
         self._mode = "armed"
+        if config is not None and config.wake_word_enabled and audio is not None:
+            chime_path = config.session_end_chime_path
+            if Path(chime_path).is_file():
+                try:
+                    await audio.play_wav(chime_path)
+                except Exception as exc:
+                    log.warning("session end chime failed: %s", exc)
+            else:
+                log.warning("session end chime not found: %s", chime_path)
+        if config is not None:
+            self.publish(
+                config,
+                status="waiting",
+                assistant_speaking=False,
+                partial_transcript=None,
+            )
 
     async def _run_wake_loop(self, config: VoiceConfig) -> None:
         audio = self.audio
@@ -469,6 +507,7 @@ class RobotVoiceService:
         self._detector = None
         self._mode = None
         self._wake_event.clear()
+        self._end_session_event.clear()
         self._last_commit_at = None
         if self._sampler_task is not None:
             self._sampler_task.cancel()

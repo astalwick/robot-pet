@@ -10,15 +10,17 @@ import signal
 import time
 from collections import deque
 from contextlib import suppress
+from pathlib import Path
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
-from drivers.respeaker import ReSpeakerAudio
+from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.session import VoiceSession
+from voice.wakeword import WakeWordDetector
 
 
 DEFAULT_POLL_SECONDS = 1.0
@@ -110,10 +112,15 @@ class RobotVoiceService:
             "barge_in_last_reason": None,
             "barge_in_event_count": None,
             "barge_in_last_event": None,
+            "wake_last_score": None,
+            "wake_fire_count": None,
+            "wake_last_fire_at": None,
         }
         self.last_logged_error: str | None = None
         self.timeline = TimelineBuffer()
         self._sampler_task: asyncio.Task[None] | None = None
+        self._wake_task: asyncio.Task[None] | None = None
+        self._detector: WakeWordDetector | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
@@ -128,6 +135,25 @@ class RobotVoiceService:
             if not config.enabled:
                 await self.stop_session()
                 self.publish(config, status="disabled", assistant_speaking=False, last_error=None)
+                await asyncio.sleep(self.poll_seconds)
+                continue
+
+            if config.wake_word_enabled:
+                if self._wake_task is None or self.active_config != config:
+                    await self.stop_session()
+                    await self.start_wake(config)
+                elif self._wake_task.done():
+                    exc = self._wake_task.exception()
+                    if exc is not None:
+                        log.warning("wake loop failed: %s", exc)
+                        last_error = str(exc)
+                    else:
+                        log.warning("wake loop exited unexpectedly")
+                        last_error = "Wake loop exited"
+                    await self.stop_session()
+                    self.publish(config, status="reconnecting", last_error=last_error)
+                    await asyncio.sleep(min(5.0, self.poll_seconds * 2))
+                    continue
                 await asyncio.sleep(self.poll_seconds)
                 continue
 
@@ -213,7 +239,103 @@ class RobotVoiceService:
             return
         self._sampler_task = asyncio.create_task(self._sample_timeline())
 
+    async def start_wake(self, config: VoiceConfig) -> None:
+        log.info(
+            "starting wake word: model=%s threshold=%.2f chime=%s",
+            config.wake_word_model_path,
+            config.wake_threshold,
+            config.wake_chime_path,
+        )
+        if not Path(config.wake_chime_path).is_file():
+            self.publish(config, status="error", last_error=f"Chime WAV not found: {config.wake_chime_path}")
+            return
+        self.publish(config, status="starting", last_error=None)
+        self.active_config = config
+        self.audio = ReSpeakerAudio(
+            input_device=config.input_device,
+            output_device=config.output_device,
+            sample_rate=config.sample_rate,
+            capture_channels=config.capture_channels,
+            capture_channel_index=config.capture_channel_index,
+            output_channels=config.output_channels,
+            input_gain=config.input_gain,
+            output_gain=config.output_gain,
+        )
+        self._io_stop_event = asyncio.Event()
+        try:
+            await self.audio.start_io(self._io_stop_event)
+        except Exception as exc:
+            log.warning("wake audio start failed: %s", exc)
+            await self.stop_session()
+            self.publish(config, status="error", last_error=str(exc))
+            return
+
+        try:
+            detector = WakeWordDetector(
+                config.wake_word_model_path,
+                threshold=config.wake_threshold,
+                debounce_secs=config.wake_debounce_secs,
+            )
+            wake_name = detector.load()
+            log.info("wake model loaded: key=%r", wake_name)
+        except Exception as exc:
+            log.warning("wake model load failed: %s", exc)
+            await self.stop_session()
+            self.publish(config, status="error", last_error=str(exc))
+            return
+
+        self._detector = detector
+        self._wake_task = asyncio.create_task(self._run_wake_loop(config))
+        self.publish(
+            config,
+            status="waiting",
+            last_error=None,
+            wake_last_score=0.0,
+            wake_fire_count=0,
+            wake_last_fire_at=None,
+        )
+
+    async def _run_wake_loop(self, config: VoiceConfig) -> None:
+        audio = self.audio
+        detector = self._detector
+        stop_event = self._io_stop_event
+        if audio is None or detector is None or stop_event is None:
+            return
+
+        async for frame in audio.mic_frames(
+            stop_event,
+            queue_size=WAKE_MIC_QUEUE_SIZE,
+            warn_on_drop=False,
+        ):
+            if not detector.check(frame):
+                continue
+            score = detector.last_score
+            log.info("wake detected score=%.4f threshold=%.2f", score, config.wake_threshold)
+            self.publish(
+                config,
+                status="waiting",
+                wake_last_score=score,
+                wake_fire_count=detector.fire_count,
+                wake_last_fire_at=detector.last_fire_at,
+            )
+            # play_wav blocks this loop, so no frames are scored during chime playback.
+            try:
+                await audio.play_wav(config.wake_chime_path)
+            except Exception as exc:
+                log.warning("wake chime playback failed: %s", exc)
+                self.publish(config, status="error", last_error=str(exc))
+
     async def stop_session(self) -> None:
+        if self._wake_task is not None:
+            wake_task = self._wake_task
+            self._wake_task = None
+            if wake_task.done():
+                wake_task.exception()
+            else:
+                wake_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await wake_task
+        self._detector = None
         if self._sampler_task is not None:
             self._sampler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -303,6 +425,11 @@ class RobotVoiceService:
                 barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
                 barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
                 barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
+                wake_word_enabled=config.wake_word_enabled,
+                wake_threshold=config.wake_threshold if config.wake_word_enabled else None,
+                wake_last_score=optional_float(self.status["wake_last_score"]),
+                wake_fire_count=optional_int(self.status["wake_fire_count"]),
+                wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
                 timeline=self.timeline.snapshot(now),
             ),
         )
@@ -328,6 +455,12 @@ def optional_int(value: object) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -21,6 +21,7 @@ dependencies = [
     "sounddevice",
     "textual",
     "websockets",
+    "openwakeword",
 ]
 
 [tool.setuptools]

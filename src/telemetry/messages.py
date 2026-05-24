@@ -209,6 +209,11 @@ def voice_update(
     barge_in_last_reason: str | None = None,
     barge_in_event_count: int | None = None,
     barge_in_last_event: str | None = None,
+    wake_word_enabled: bool | None = None,
+    wake_threshold: float | None = None,
+    wake_last_score: float | None = None,
+    wake_fire_count: int | None = None,
+    wake_last_fire_at: float | None = None,
     timeline: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -253,6 +258,16 @@ def voice_update(
         payload["barge_in_event_count"] = barge_in_event_count
     if barge_in_last_event is not None:
         payload["barge_in_last_event"] = barge_in_last_event
+    if wake_word_enabled is not None:
+        payload["wake_word_enabled"] = wake_word_enabled
+    if wake_threshold is not None:
+        payload["wake_threshold"] = wake_threshold
+    if wake_last_score is not None:
+        payload["wake_last_score"] = wake_last_score
+    if wake_fire_count is not None:
+        payload["wake_fire_count"] = wake_fire_count
+    if wake_last_fire_at is not None:
+        payload["wake_last_fire_at"] = wake_last_fire_at
     if timeline is not None:
         payload["timeline"] = timeline
     return payload

@@ -10,6 +10,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_voice import RobotVoiceService, TimelineBuffer
+from config.voice import load_voice_config
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -53,6 +54,84 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
         start_session.assert_not_called()
         self.assertTrue(any(message["status"] == "error" for message in published))
         self.assertTrue(any("ELEVENLABS_API_KEY" in message["last_error"] for message in published))
+
+    async def test_wake_only_mode_starts_without_api_keys(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "voice.json")
+            with open(config_path, "w") as file_obj:
+                json.dump({"enabled": True, "wake_word_enabled": True}, file_obj)
+
+            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            stop_event = asyncio.Event()
+
+            async def stop_soon():
+                await asyncio.sleep(0.05)
+                stop_event.set()
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch.object(service, "start_wake", new=mock.AsyncMock()) as start_wake:
+                    with mock.patch.object(service, "start_session") as start_session:
+                        await asyncio.gather(service.run(stop_event), stop_soon())
+
+            start_wake.assert_called()
+            start_session.assert_not_called()
+
+    async def test_wake_loop_failure_restarts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "voice.json")
+            with open(config_path, "w") as file_obj:
+                json.dump({"enabled": True, "wake_word_enabled": True}, file_obj)
+
+            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            stop_event = asyncio.Event()
+            published = []
+            start_count = 0
+
+            async def fake_start_wake(config):
+                nonlocal start_count
+                start_count += 1
+                if start_count == 1:
+
+                    async def fail():
+                        raise RuntimeError("wake loop failed")
+
+                    service._wake_task = asyncio.create_task(fail())
+                    service.active_config = config
+                    await asyncio.sleep(0)
+
+            async def stop_soon():
+                await asyncio.sleep(0.08)
+                stop_event.set()
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                    with mock.patch.object(service, "start_wake", side_effect=fake_start_wake):
+                        await asyncio.gather(service.run(stop_event), stop_soon())
+
+            self.assertGreaterEqual(start_count, 2)
+            self.assertTrue(any(message.get("status") == "reconnecting" for message in published))
+
+    async def test_start_wake_rejects_missing_chime(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "voice.json")
+            with open(config_path, "w") as file_obj:
+                json.dump(
+                    {
+                        "enabled": True,
+                        "wake_word_enabled": True,
+                        "wake_chime_path": os.path.join(tmpdir, "missing.wav"),
+                    },
+                    file_obj,
+                )
+
+            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            published = []
+
+            with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                await service.start_wake(load_voice_config(config_path))
+
+            self.assertIsNone(service._wake_task)
+            self.assertTrue(any("Chime WAV not found" in str(message.get("last_error")) for message in published))
 
     async def test_voice_errors_are_logged_once(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)

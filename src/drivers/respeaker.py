@@ -324,6 +324,25 @@ class ReSpeakerAudio:
                 return
             await self._finish_playback()
 
+    async def play_wav(self, path: str) -> None:
+        import wave
+
+        if self._output_stream is None:
+            raise ReSpeakerError("IO not started; call start_io() first")
+        with wave.open(path, "rb") as wav_file:
+            if wav_file.getnchannels() != 1:
+                raise ReSpeakerError("WAV must be mono")
+            if wav_file.getsampwidth() != 2:
+                raise ReSpeakerError("WAV must be 16-bit PCM")
+            if wav_file.getframerate() != self.sample_rate:
+                raise ReSpeakerError(f"WAV must be {self.sample_rate} Hz")
+            pcm = wav_file.readframes(wav_file.getnframes())
+        playback_id = await self.begin_playback()
+        try:
+            await self.write_output(pcm)
+        finally:
+            await self.end_playback(playback_id)
+
     async def _finish_playback(self) -> None:
         if self._playback_task is None or self._playback_queue is None:
             return

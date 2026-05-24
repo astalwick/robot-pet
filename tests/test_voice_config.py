@@ -76,6 +76,30 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual(config.barge_in_sustain_ms, 350)
         self.assertEqual(config.barge_in_playback_leakage_ratio, 1.8)
 
+    def test_wake_defaults_are_present(self):
+        config = VoiceConfig()
+        self.assertFalse(config.wake_word_enabled)
+        self.assertEqual(config.wake_threshold, 0.5)
+        self.assertEqual(config.wake_debounce_secs, 2.0)
+
+    def test_wake_threshold_validation(self):
+        with self.assertRaisesRegex(VoiceConfigError, "wake_threshold"):
+            VoiceConfig.from_dict({"wake_threshold": 1.5})
+
+    def test_wake_config_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "voice.json")
+            config = VoiceConfig(
+                enabled=True,
+                wake_word_enabled=True,
+                wake_word_model_path="/tmp/hey.onnx",
+                wake_threshold=0.42,
+                wake_debounce_secs=3.0,
+                wake_chime_path="/tmp/chime.wav",
+            )
+            save_voice_config(config, path)
+            self.assertEqual(load_voice_config(path), config)
+
     def test_explicit_interrupt_words_parse_from_config_string(self):
         from voice.turn_policy import turn_policy_from_config
 

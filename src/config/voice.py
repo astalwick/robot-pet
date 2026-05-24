@@ -11,6 +11,8 @@ from typing import Any
 
 
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/voice.json"
+DEFAULT_WAKE_MODEL_PATH = "/home/pi/robot-pet/models/wake/Hey_Bloop.onnx"
+DEFAULT_WAKE_CHIME_PATH = "/home/pi/robot-pet/assets/audio/wake_chime.wav"
 MIN_AUDIO_GAIN = 0.0
 MAX_AUDIO_GAIN = 3.0
 
@@ -42,6 +44,11 @@ class VoiceConfig:
     barge_in_explicit_interrupts: str = "stop,wait,no,cancel,pause"
     barge_in_explicit_requires_sustain: bool = False
     assistant_echo_similarity: float = 0.9
+    wake_word_enabled: bool = False
+    wake_word_model_path: str = DEFAULT_WAKE_MODEL_PATH
+    wake_threshold: float = 0.5
+    wake_debounce_secs: float = 2.0
+    wake_chime_path: str = DEFAULT_WAKE_CHIME_PATH
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "VoiceConfig":
@@ -76,6 +83,11 @@ class VoiceConfig:
             assistant_echo_similarity=float(
                 values.get("assistant_echo_similarity", defaults.assistant_echo_similarity)
             ),
+            wake_word_enabled=bool(values.get("wake_word_enabled", defaults.wake_word_enabled)),
+            wake_word_model_path=str(values.get("wake_word_model_path", defaults.wake_word_model_path)),
+            wake_threshold=float(values.get("wake_threshold", defaults.wake_threshold)),
+            wake_debounce_secs=float(values.get("wake_debounce_secs", defaults.wake_debounce_secs)),
+            wake_chime_path=str(values.get("wake_chime_path", defaults.wake_chime_path)),
         )
         config.validate()
         return config
@@ -89,6 +101,10 @@ class VoiceConfig:
             raise VoiceConfigError("capture_channel_index must be between 0 and 5")
         if self.output_channels != 1:
             raise VoiceConfigError("output_channels must be 1")
+        if self.wake_threshold < 0.0 or self.wake_threshold > 1.0:
+            raise VoiceConfigError("wake_threshold must be between 0 and 1")
+        if self.wake_debounce_secs < 0.0:
+            raise VoiceConfigError("wake_debounce_secs must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

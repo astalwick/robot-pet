@@ -134,43 +134,47 @@ function voiceInSession(voice) {
   return VOICE_SESSION_STATUSES.has(voice?.status);
 }
 
-function updateTalkNowButton(voice, stale) {
+function voiceHasError(voice) {
+  return !!(voice?.last_error) || voice?.status === 'error';
+}
+
+function voiceServiceUp(voice) {
+  return !!voice?.enabled;
+}
+
+function canControlSession(voice) {
+  return voiceServiceUp(voice) && !voiceHasError(voice);
+}
+
+function updateTalkNowButton(voice) {
   const button = document.getElementById('voice-talk-now-button');
   if (!button) return;
-  const enabled = displayEnabled();
-  const inSession = !stale && voiceInSession(voice);
-  const pending = voiceUiPending();
+  const inSession = voiceInSession(voice);
+  const canUse = canControlSession(voice);
   let text = 'Talk now';
-  let title = 'Skip wake word and start talking now';
+  let title = 'Start a conversation session';
   let cls = '';
-  if (!enabled) {
-    button.disabled = true;
-  } else if (pending || stale) {
-    button.disabled = true;
-    text = pending ? 'Starting' : 'Talk now';
-  } else if (inSession) {
-    button.disabled = false;
+  if (inSession) {
     text = 'End session';
-    title = 'Stop listening and return to wake word only';
+    title = 'End the conversation and return to wake word';
     cls = 'warn';
-  } else {
-    button.disabled = false;
   }
+  button.disabled = !canUse;
   button.textContent = text;
   button.className = cls;
   button.title = title;
   button.setAttribute('aria-label', text);
   if (text !== lastTalkButtonLabel) {
     lastTalkButtonLabel = text;
-    voiceDbg('talk-button', { label: text, inSession });
+    voiceDbg('talk-button', { label: text, inSession, canUse });
   }
 }
 
-function displayEnabled() {
-  if (configStore.voice.hasLocal('enabled')) {
-    return !!configStore.voice.get('enabled');
+function displayWakeEnabled() {
+  if (configStore.voice.hasLocal('wake_word_enabled')) {
+    return !!configStore.voice.get('wake_word_enabled');
   }
-  return !!latestVoice && !!latestVoice.enabled;
+  return !!latestVoice && !!latestVoice.wake_word_enabled;
 }
 
 export function renderVoice(snapshot, sources) {
@@ -180,7 +184,7 @@ export function renderVoice(snapshot, sources) {
   configStore.voice.ingestServer(voice);
 
   const prevTelemetry = voiceTelemetryEnabled;
-  voiceTelemetryEnabled = !!voice.enabled;
+  voiceTelemetryEnabled = !!voice.wake_word_enabled;
   if (!voiceHydrated) {
     voiceWantEnabled = voiceTelemetryEnabled;
     voiceHydrated = true;
@@ -198,11 +202,11 @@ export function renderVoice(snapshot, sources) {
   const stale = voiceSource.stale !== false;
   const lastError = voice.last_error;
   const cardStatus = voiceCardStatus(voice, stale, lastError);
-  const enabled = displayEnabled();
+  const wakeOn = displayWakeEnabled();
 
   ensureVoiceRows();
   setVoiceValue('status', cardStatus.text, cardStatus.cls);
-  setVoiceValue('listen', enabled ? 'enabled' : 'disabled', enabled ? 'ok' : 'muted');
+  setVoiceValue('listen', wakeOn ? 'wake on' : 'wake off', wakeOn ? 'ok' : 'muted');
   setVoiceValue('input', voice.input_device || '--');
   setVoiceValue('output', voice.output_device || '--');
   setVoiceValue('channel', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--');
@@ -210,7 +214,7 @@ export function renderVoice(snapshot, sources) {
   updateGainControl('output_gain');
   setVoiceValue('error', lastError || '--', lastError ? 'err' : 'muted');
   updateVoiceToggleButton();
-  updateTalkNowButton(voice, stale);
+  updateTalkNowButton(voice);
 }
 
 async function handleSaveError(result) {
@@ -223,7 +227,7 @@ function onVoiceToggle() {
   updateVoiceToggleButton();
   const patch = voiceWantEnabled
     ? { enabled: true, wake_word_enabled: true }
-    : { enabled: false };
+    : { wake_word_enabled: false };
   configStore.voice.set(patch);
   configStore.voice.flush().then((result) => {
     handleSaveError(result);
@@ -251,18 +255,6 @@ function onVoiceGainCommit(event) {
 
 async function onSessionControl() {
   const inSession = latestVoice && voiceInSession(latestVoice);
-  if (!inSession) {
-    if (!voiceWantEnabled) {
-      voiceWantEnabled = true;
-      updateVoiceToggleButton();
-    }
-    configStore.voice.set({ enabled: true, wake_word_enabled: true });
-    const saveResult = await configStore.voice.flush();
-    if (saveResult && !saveResult.ok) {
-      handleSaveError(saveResult);
-      return;
-    }
-  }
   const cmd = inSession ? 'end_session' : 'talk_now';
   try {
     const response = await fetch('/voice/command', {

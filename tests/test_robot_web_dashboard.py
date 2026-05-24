@@ -209,7 +209,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             payload = await resp.json()
 
         keys = {field["key"] for field in payload["fields"]}
-        self.assertIn("enabled", keys)
+        self.assertNotIn("enabled", keys)
         self.assertIn("wake_word_enabled", keys)
         self.assertIn("wake_threshold", keys)
         self.assertIn("wake_chime_path", keys)
@@ -223,7 +223,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("barge_in_sustain_ms", keys)
         self.assertIn("barge_in_playback_leakage_ratio", keys)
         types = {field["key"]: field["type"] for field in payload["fields"]}
-        self.assertEqual(types["enabled"], "boolean")
+        self.assertEqual(types["wake_word_enabled"], "boolean")
         self.assertEqual(types["input_device"], "text")
         self.assertEqual(types["capture_channel_index"], "number")
         self.assertEqual(types["input_gain"], "number")
@@ -291,9 +291,66 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["input_device"], "hw:2,0")
         self.assertFalse(saved["enabled"])
 
+    async def test_post_config_voice_treats_wake_as_enabled_alias(self):
+        async with self.client.post("/config/voice", json={"wake_word_enabled": True}) as resp:
+            self.assertEqual(resp.status, 200)
+
+        with open(self.voice_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertTrue(saved["enabled"])
+        self.assertTrue(saved["wake_word_enabled"])
+
+        async with self.client.post("/config/voice", json={"wake_word_enabled": False}) as resp:
+            self.assertEqual(resp.status, 200)
+
+        with open(self.voice_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertFalse(saved["enabled"])
+        self.assertFalse(saved["wake_word_enabled"])
+
     async def test_config_unknown_name_returns_404(self):
         async with self.client.get("/config/nope") as resp:
             self.assertEqual(resp.status, 404)
+
+    async def _wait_for_redeploy_result(self, expected: str, timeout: float = 2.0):
+        deadline = asyncio.get_running_loop().time() + timeout
+        status = {}
+        while asyncio.get_running_loop().time() < deadline:
+            async with self.client.get("/redeploy/status") as resp:
+                status = await resp.json()
+            if not status["running"] and status.get("last_result") == expected:
+                return status
+            await asyncio.sleep(0.02)
+        self.fail(f"timed out waiting for redeploy {expected!r}; last status={status!r}")
+
+    async def test_redeploy_status_reports_success_with_message(self):
+        def fake_stream(command, on_line, *, env=None):
+            on_line("Redeploy complete.")
+            return 0
+
+        with mock.patch("robot_web_dashboard.stream_command_output", side_effect=fake_stream):
+            async with self.client.post("/redeploy/arm") as resp:
+                self.assertEqual(resp.status, 200)
+            async with self.client.post("/redeploy/run") as resp:
+                self.assertEqual(resp.status, 200)
+
+            status = await self._wait_for_redeploy_result("success")
+            self.assertEqual(status["last_message"], "Redeploy complete.")
+            self.assertGreater(status["result_serial"], 0)
+
+    async def test_redeploy_status_reports_failure_with_message(self):
+        def fake_stream(command, on_line, *, env=None):
+            on_line("Refusing to redeploy: working tree has local changes.")
+            return 1
+
+        with mock.patch("robot_web_dashboard.stream_command_output", side_effect=fake_stream):
+            async with self.client.post("/redeploy/arm") as resp:
+                self.assertEqual(resp.status, 200)
+            async with self.client.post("/redeploy/run") as resp:
+                self.assertEqual(resp.status, 200)
+
+            status = await self._wait_for_redeploy_result("failed")
+            self.assertIn("local changes", status["last_message"])
 
     async def _publish_repeatedly(self, snapshot):
         while True:
@@ -368,6 +425,15 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("button.disabled = false", self.redeploy_js)
         self.assertIn("syncRedeployFromServer", self.redeploy_js)
 
+    def test_redeploy_shows_alert_and_refreshes_on_success(self):
+        self.assertIn('id="redeploy-alert"', self.dashboard_html)
+        self.assertIn(".redeploy-alert.ok", self.dashboard_css)
+        self.assertIn(".redeploy-alert.err", self.dashboard_css)
+        self.assertIn("location.reload()", self.redeploy_js)
+        self.assertIn("Redeploy succeeded:", self.redeploy_js)
+        self.assertIn("Redeploy failed:", self.redeploy_js)
+        self.assertIn("result_serial", self.redeploy_js)
+
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.telemetry_js)
         self.assertIn("const min = -(2 ** 31);", self.telemetry_js)
@@ -439,13 +505,18 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.voice_js)
         self.assertIn("voiceUiPending", self.voice_js)
         self.assertIn("{ enabled: true, wake_word_enabled: true }", self.voice_js)
-        self.assertIn("{ wake_word_enabled: false }", self.voice_js)
+        self.assertIn("{ enabled: false, wake_word_enabled: false }", self.voice_js)
         self.assertIn("canControlSession", self.voice_js)
         self.assertNotIn("pending || stale", self.voice_js)
         self.assertIn("configStore.voice.set(patch)", self.voice_js)
         self.assertIn("configStore.voice.flush()", self.voice_js)
         self.assertNotIn("voicePersistWork", self.voice_js)
         self.assertNotIn("fetchVoiceValues", self.voice_js)
+
+    def test_talk_now_button_is_disabled_when_wake_is_off(self):
+        self.assertIn("const wakeOn = displayWakeEnabled()", self.voice_js)
+        self.assertIn("const canUse = wakeOn && canControlSession(voice)", self.voice_js)
+        self.assertIn("if (!latestVoice || !displayWakeEnabled() || !canControlSession(latestVoice)) return", self.voice_js)
 
     def test_button_binding_tolerates_missing_elements(self):
         self.assertIn("export function on(id, eventName, handler)", self.dom_js)

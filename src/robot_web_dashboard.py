@@ -109,22 +109,16 @@ VISION_FIELDS = (
 
 VOICE_FIELDS = (
     {
-        "key": "enabled",
-        "label": "Listen enabled",
-        "type": "boolean",
-        "help": "Master switch for robot-voice (ReSpeaker mic + speaker)",
-    },
-    {
         "key": "wake_word_enabled",
-        "label": "Wake word mode",
+        "label": "Voice on",
         "type": "boolean",
-        "help": "Hey Bloop wakes the assistant (Listen toggle sets this on). Needs API keys in voice.env for conversation.",
+        "help": "Hey Bloop wakes the assistant. Talk now starts active listening.",
     },
     {
         "key": "session_idle_secs",
         "label": "Session idle (s)",
         "type": "number",
-        "help": "0 disables. After last committed transcript, return to wake listening.",
+        "help": "0 disables. After user and robot speech are quiet, return to wake listening.",
         "min": 0.0,
         "max": 600.0,
         "step": 5.0,
@@ -476,40 +470,50 @@ class WebDashboardState:
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
         self.redeploy_running = False
+        self.redeploy_last_result: str | None = None
+        self.redeploy_last_message = ""
+        self.redeploy_result_serial = 0
         self.tuning_apply_running = False
+
+    def _redeploy_status_locked(self) -> dict[str, Any]:
+        now = time.monotonic()
+        return {
+            "armed": now <= self.redeploy_armed_until,
+            "armed_seconds_remaining": max(0.0, self.redeploy_armed_until - now),
+            "running": self.redeploy_running,
+            "last_result": self.redeploy_last_result,
+            "last_message": self.redeploy_last_message,
+            "result_serial": self.redeploy_result_serial,
+        }
 
     def redeploy_status(self) -> dict[str, Any]:
         with self._lock:
-            return {
-                "armed": time.monotonic() <= self.redeploy_armed_until,
-                "armed_seconds_remaining": max(0.0, self.redeploy_armed_until - time.monotonic()),
-                "running": self.redeploy_running,
-            }
+            return self._redeploy_status_locked()
 
     def arm_redeploy(self) -> dict[str, Any]:
         with self._lock:
             if not self.redeploy_running:
                 self.redeploy_armed_until = time.monotonic() + REDEPLOY_ARM_SECONDS
-            return {
-                "armed": time.monotonic() <= self.redeploy_armed_until,
-                "armed_seconds_remaining": max(0.0, self.redeploy_armed_until - time.monotonic()),
-                "running": self.redeploy_running,
-            }
+            return self._redeploy_status_locked()
 
     def start_redeploy(self) -> tuple[bool, dict[str, Any]]:
         with self._lock:
-            now = time.monotonic()
-            status = {
-                "armed": now <= self.redeploy_armed_until,
-                "armed_seconds_remaining": max(0.0, self.redeploy_armed_until - now),
-                "running": self.redeploy_running,
-            }
-            if self.redeploy_running or now > self.redeploy_armed_until:
+            status = self._redeploy_status_locked()
+            if self.redeploy_running or time.monotonic() > self.redeploy_armed_until:
                 return False, status
             self.redeploy_running = True
             self.redeploy_armed_until = 0.0
+            self.redeploy_last_result = None
+            self.redeploy_last_message = ""
         threading.Thread(target=self._redeploy_thread, daemon=True).start()
         return True, self.redeploy_status()
+
+    def _finish_redeploy(self, result: str, message: str) -> None:
+        with self._lock:
+            self.redeploy_running = False
+            self.redeploy_result_serial += 1
+            self.redeploy_last_result = result
+            self.redeploy_last_message = message
 
     def set_tuning_apply_running(self, running: bool) -> None:
         with self._lock:
@@ -522,20 +526,30 @@ class WebDashboardState:
     def _redeploy_thread(self) -> None:
         self.log_hub.publish("Starting redeploy...")
         command, env = redeploy_command()
+        last_line = ""
+
+        def on_line(line: str) -> None:
+            nonlocal last_line
+            if line:
+                last_line = line
+            self.log_hub.publish(line)
+
         try:
-            exit_code = stream_command_output(command, self.log_hub.publish, env=env)
+            exit_code = stream_command_output(command, on_line, env=env)
         except OSError as exc:
-            with self._lock:
-                self.redeploy_running = False
-            self.log_hub.publish(f"Redeploy failed to start: {exc}")
+            message = f"Redeploy failed to start: {exc}"
+            self.log_hub.publish(message)
+            self._finish_redeploy("failed", message)
             return
 
-        with self._lock:
-            self.redeploy_running = False
         if exit_code == 0:
+            message = last_line or "Redeploy complete."
             self.log_hub.publish("Redeploy succeeded.")
+            self._finish_redeploy("success", message)
         else:
+            message = last_line or f"Redeploy failed with exit code {exit_code}."
             self.log_hub.publish(f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
+            self._finish_redeploy("failed", message)
 
 
 async def index_handler(request: web.Request) -> web.FileResponse:
@@ -766,6 +780,11 @@ async def config_apply(request: web.Request) -> web.Response:
             raise ValueError("expected a JSON object")
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         return web.json_response({"error": f"Invalid {name} config: {exc}"}, status=400)
+    if name == "voice":
+        if "wake_word_enabled" in patch:
+            patch["enabled"] = bool(patch["wake_word_enabled"])
+        elif "enabled" in patch:
+            patch["wake_word_enabled"] = bool(patch["enabled"])
 
     try:
         current = await asyncio.to_thread(spec["load"], path)

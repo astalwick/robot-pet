@@ -107,7 +107,7 @@ class RobotVoiceService:
         self._mode: str | None = None
         self._wake_event = asyncio.Event()
         self._end_session_event = asyncio.Event()
-        self._last_commit_at: float | None = None
+        self._idle_started_at: float | None = None
         self.status: dict[str, object] = {
             "status": "disabled",
             "assistant_speaking": False,
@@ -146,7 +146,7 @@ class RobotVoiceService:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                if not config.enabled:
+                if not config.enabled or not config.wake_word_enabled:
                     await self.stop_all()
                     self.publish(config, status="disabled", assistant_speaking=False, last_error=None)
                     await asyncio.sleep(self.poll_seconds)
@@ -191,6 +191,9 @@ class RobotVoiceService:
             if cmd == "talk_now":
                 if self._mode == "active":
                     log.info("talk-now ignored: session already active")
+                    return
+                if self._mode != "armed":
+                    log.info("talk-now ignored: voice is not armed")
                     return
                 log.info("talk-now command received")
                 self._wake_event.set()
@@ -239,7 +242,7 @@ class RobotVoiceService:
             config.wake_chime_path,
             config.session_idle_secs,
         )
-        if config.wake_word_enabled and not Path(config.wake_chime_path).is_file():
+        if not Path(config.wake_chime_path).is_file():
             self.publish(config, status="error", last_error=f"Chime WAV not found: {config.wake_chime_path}")
             return
 
@@ -264,25 +267,24 @@ class RobotVoiceService:
             self.publish(config, status="error", last_error=str(exc))
             return
 
-        if config.wake_word_enabled:
-            try:
-                detector = WakeWordDetector(
-                    config.wake_word_model_path,
-                    threshold=config.wake_threshold,
-                    debounce_secs=config.wake_debounce_secs,
-                )
-                wake_name = detector.load()
-                log.info("wake model loaded: key=%r", wake_name)
-            except Exception as exc:
-                log.warning("wake model load failed: %s", exc)
-                await self.stop_all()
-                self.publish(config, status="error", last_error=str(exc))
-                return
-            self._detector = detector
-            self._wake_task = asyncio.create_task(self._run_wake_loop(config))
+        try:
+            detector = WakeWordDetector(
+                config.wake_word_model_path,
+                threshold=config.wake_threshold,
+                debounce_secs=config.wake_debounce_secs,
+            )
+            wake_name = detector.load()
+            log.info("wake model loaded: key=%r", wake_name)
+        except Exception as exc:
+            log.warning("wake model load failed: %s", exc)
+            await self.stop_all()
+            self.publish(config, status="error", last_error=str(exc))
+            return
+        self._detector = detector
+        self._wake_task = asyncio.create_task(self._run_wake_loop(config))
 
         self._mode = "armed"
-        self._last_commit_at = None
+        self._idle_started_at = None
         self._orchestrator_task = asyncio.create_task(self._run_orchestrator())
         self.publish(
             config,
@@ -303,17 +305,14 @@ class RobotVoiceService:
             config = self.active_config
             if config is None:
                 return
-            if not config.wake_word_enabled:
-                self._wake_event.set()
-            else:
-                self.publish(
-                    config,
-                    status="waiting",
-                    assistant_speaking=False,
-                    partial_transcript=None,
-                    last_committed_transcript=None,
-                    last_assistant_text=None,
-                )
+            self.publish(
+                config,
+                status="waiting",
+                assistant_speaking=False,
+                partial_transcript=None,
+                last_committed_transcript=None,
+                last_assistant_text=None,
+            )
             await self._wait_for_session_trigger()
             if self._io_stop_event is not None and self._io_stop_event.is_set():
                 return
@@ -354,7 +353,7 @@ class RobotVoiceService:
             return False
 
         self._mode = "active"
-        self._last_commit_at = time.monotonic()
+        self._idle_started_at = time.monotonic()
         self._wake_event.clear()
         self._end_session_event.clear()
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
@@ -400,7 +399,7 @@ class RobotVoiceService:
         elif session_task in done and not session_task.cancelled():
             session_task.result()
         elif config is not None and idle_task in done:
-            log.info("voice session idle after %.1fs without commit", config.session_idle_secs)
+            log.info("voice session idle after %.1fs without activity", config.session_idle_secs)
 
     async def _wait_for_idle(self) -> None:
         config = self.active_config
@@ -413,7 +412,10 @@ class RobotVoiceService:
                 continue
             if bool(self.status.get("assistant_speaking")):
                 continue
-            if time.monotonic() - self._last_commit_at < config.session_idle_secs:
+            if self._idle_started_at is None:
+                self._idle_started_at = time.monotonic()
+                continue
+            if time.monotonic() - self._idle_started_at < config.session_idle_secs:
                 continue
             return
 
@@ -429,7 +431,7 @@ class RobotVoiceService:
             await self.session.stop()
             self.session.history.clear()
             self.session = None
-        self._last_commit_at = None
+        self._idle_started_at = None
         self._end_session_event.clear()
         self._mode = "armed"
         if config is not None and config.wake_word_enabled and audio is not None:
@@ -508,7 +510,7 @@ class RobotVoiceService:
         self._mode = None
         self._wake_event.clear()
         self._end_session_event.clear()
-        self._last_commit_at = None
+        self._idle_started_at = None
         if self._sampler_task is not None:
             self._sampler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -557,11 +559,19 @@ class RobotVoiceService:
             self.timeline.trim(now)
 
     def publish(self, config: VoiceConfig, **updates: object) -> None:
-        if "last_committed_transcript" in updates:
-            committed = updates["last_committed_transcript"]
-            if committed and committed != self.status.get("last_committed_transcript"):
-                self._last_commit_at = time.monotonic()
+        was_idle = (
+            self._mode == "active"
+            and self.status.get("status") == "listening"
+            and not bool(self.status.get("assistant_speaking"))
+        )
+        next_status = updates.get("status", self.status.get("status"))
+        next_assistant_speaking = updates.get("assistant_speaking", self.status.get("assistant_speaking"))
         self.status.update(updates)
+        is_idle = self._mode == "active" and next_status == "listening" and not bool(next_assistant_speaking)
+        if is_idle and not was_idle:
+            self._idle_started_at = time.monotonic()
+        elif not is_idle:
+            self._idle_started_at = None
         last_error = optional_text(self.status["last_error"])
         if last_error and last_error != self.last_logged_error:
             log.error("voice error: %s", last_error)
@@ -569,11 +579,12 @@ class RobotVoiceService:
         elif last_error is None:
             self.last_logged_error = None
         now = time.monotonic()
+        voice_on = config.enabled and config.wake_word_enabled
         self.timeline.trim(now)
         publish_message(
             self.telemetry_socket,
             voice_update(
-                enabled=config.enabled,
+                enabled=voice_on,
                 status=str(self.status["status"]),
                 input_device=config.input_device,
                 output_device=config.output_device,
@@ -602,8 +613,8 @@ class RobotVoiceService:
                 barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
                 barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
                 barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
-                wake_word_enabled=config.wake_word_enabled,
-                wake_threshold=config.wake_threshold if config.wake_word_enabled else None,
+                wake_word_enabled=voice_on,
+                wake_threshold=config.wake_threshold if voice_on else None,
                 wake_last_score=optional_float(self.status["wake_last_score"]),
                 wake_fire_count=optional_int(self.status["wake_fire_count"]),
                 wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),

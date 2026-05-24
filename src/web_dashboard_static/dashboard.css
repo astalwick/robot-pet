@@ -30,6 +30,52 @@ body {
   grid-template-rows: auto 1fr;
 }
 
+.redeploy-alert {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 0.9rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 2px solid;
+  letter-spacing: 0.04em;
+}
+
+.redeploy-alert.hidden {
+  display: none;
+}
+
+.redeploy-alert.ok {
+  background: #062016;
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.redeploy-alert.err {
+  background: #240808;
+  color: #fecaca;
+  border-color: var(--err);
+}
+
+#redeploy-alert-dismiss {
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
 #hud {
   position: relative;
   z-index: 10;

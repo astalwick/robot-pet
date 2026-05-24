@@ -1,7 +1,9 @@
 import { appendLog } from './logs.js';
 import { refreshCameraStream } from './camera.js';
+import { on } from './dom.js';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
+const REDEPLOY_RELOAD_DELAY_MS = 1500;
 
 let redeployArmedUntil = 0;
 let redeployRunning = false;
@@ -9,6 +11,9 @@ let redeployWork = Promise.resolve();
 let redeployWorkSerial = 0;
 let lastRedeployButtonLabel = '';
 let redeployDisarmTimer = null;
+let redeployResultsSeen = false;
+let seenResultSerial = 0;
+let redeployReloadTimer = null;
 
 function redeployDbg(step, detail) {
   if (DEBUG) console.log('[dashboard redeploy]', step, detail || '');
@@ -21,7 +26,45 @@ function redeploySnapshot() {
     running: redeployRunning,
     workSerial: redeployWorkSerial,
     msUntilDisarm: Math.max(0, redeployArmedUntil - Date.now()),
+    seenResultSerial,
   };
+}
+
+function hideRedeployAlert() {
+  const alert = document.getElementById('redeploy-alert');
+  const dismiss = document.getElementById('redeploy-alert-dismiss');
+  if (!alert) return;
+  alert.className = 'redeploy-alert hidden';
+  if (dismiss) dismiss.classList.add('hidden');
+}
+
+function showRedeployAlert(kind, message) {
+  const alert = document.getElementById('redeploy-alert');
+  const text = document.getElementById('redeploy-alert-text');
+  const dismiss = document.getElementById('redeploy-alert-dismiss');
+  if (!alert || !text) return;
+  clearTimeout(redeployReloadTimer);
+  redeployReloadTimer = null;
+  const prefix = kind === 'success' ? 'Redeploy succeeded: ' : 'Redeploy failed: ';
+  text.textContent = `${prefix}${message}`;
+  alert.className = `redeploy-alert ${kind === 'success' ? 'ok' : 'err'}`;
+  if (dismiss) dismiss.classList.toggle('hidden', kind === 'success');
+}
+
+function scheduleRedeployReload() {
+  clearTimeout(redeployReloadTimer);
+  redeployReloadTimer = setTimeout(() => location.reload(), REDEPLOY_RELOAD_DELAY_MS);
+}
+
+function onRedeployResult(status) {
+  if (status.last_result === 'success') {
+    showRedeployAlert('success', status.last_message || 'Redeploy complete.');
+    scheduleRedeployReload();
+    return;
+  }
+  if (status.last_result === 'failed') {
+    showRedeployAlert('failed', status.last_message || 'Unknown error.');
+  }
 }
 
 function onRedeploy() {
@@ -48,6 +91,7 @@ function onRedeploy() {
   }
   redeployArmedUntil = 0;
   redeployRunning = true;
+  hideRedeployAlert();
   scheduleRedeployDisarm();
   redeployDbg('click -> run (local)', { after: redeploySnapshot() });
   updateRedeployButton();
@@ -56,6 +100,7 @@ function onRedeploy() {
     redeployDbg('run chain error', { job, err: String(err), ...redeploySnapshot() });
     redeployRunning = false;
     updateRedeployButton();
+    showRedeployAlert('failed', String(err));
     appendLog(`redeploy run failed: ${err}`);
   });
   redeployDbg('run queued', { job, ...redeploySnapshot() });
@@ -96,8 +141,19 @@ function applyRedeployStatus(status, source) {
   const before = redeploySnapshot();
   const wasRunning = redeployRunning;
   redeployRunning = status.running === true;
+  const resultSerial = status.result_serial ?? 0;
+  if (!redeployResultsSeen) {
+    redeployResultsSeen = true;
+    seenResultSerial = resultSerial;
+  } else if (resultSerial > seenResultSerial) {
+    seenResultSerial = resultSerial;
+    onRedeployResult(status);
+  }
   redeployDbg('apply status', { source, status, before, after: redeploySnapshot() });
-  if (wasRunning && !redeployRunning) refreshCameraStream();
+  if (wasRunning && !redeployRunning) {
+    refreshCameraStream();
+    syncRedeployFromServer();
+  }
   updateRedeployButton();
 }
 
@@ -142,6 +198,7 @@ function updateRedeployButton() {
 
 export function bindRedeployHandlers(bindOn) {
   bindOn('redeploy-button', 'click', onRedeploy);
+  on('redeploy-alert-dismiss', 'click', hideRedeployAlert);
 }
 
 export function initRedeploy() {

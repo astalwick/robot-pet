@@ -149,12 +149,15 @@ function canControlSession(voice) {
 function updateTalkNowButton(voice) {
   const button = document.getElementById('voice-talk-now-button');
   if (!button) return;
+  const wakeOn = displayWakeEnabled();
   const inSession = voiceInSession(voice);
-  const canUse = canControlSession(voice);
+  const canUse = wakeOn && canControlSession(voice);
   let text = 'Talk now';
   let title = 'Start a conversation session';
   let cls = '';
-  if (inSession) {
+  if (!wakeOn) {
+    title = 'Turn voice on to start a conversation session';
+  } else if (inSession) {
     text = 'End session';
     title = 'End the conversation and return to wake word';
     cls = 'warn';
@@ -227,7 +230,7 @@ function onVoiceToggle() {
   updateVoiceToggleButton();
   const patch = voiceWantEnabled
     ? { enabled: true, wake_word_enabled: true }
-    : { wake_word_enabled: false };
+    : { enabled: false, wake_word_enabled: false };
   configStore.voice.set(patch);
   configStore.voice.flush().then((result) => {
     handleSaveError(result);
@@ -254,6 +257,7 @@ function onVoiceGainCommit(event) {
 }
 
 async function onSessionControl() {
+  if (!latestVoice || !displayWakeEnabled() || !canControlSession(latestVoice)) return;
   const inSession = latestVoice && voiceInSession(latestVoice);
   const cmd = inSession ? 'end_session' : 'talk_now';
   try {

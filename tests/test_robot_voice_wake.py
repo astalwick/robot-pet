@@ -21,11 +21,11 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         service._mode = "armed"
         self.assertIsNone(service.session)
 
-    async def test_wait_for_idle_after_commit(self):
+    async def test_wait_for_idle_after_quiet_time(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.1)
         service._mode = "active"
-        service._last_commit_at = time.monotonic() - 1.0
+        service._idle_started_at = time.monotonic() - 1.0
         service.status["status"] = "listening"
         service.status["assistant_speaking"] = False
 
@@ -35,7 +35,7 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.05)
         service._mode = "active"
-        service._last_commit_at = time.monotonic() - 1.0
+        service._idle_started_at = time.monotonic() - 1.0
         service.status["status"] = "listening"
         service.status["assistant_speaking"] = True
 
@@ -46,17 +46,21 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         with suppress(asyncio.CancelledError):
             await idle_task
 
-    async def test_publish_commit_updates_idle_clock(self):
+    async def test_publish_listening_updates_idle_clock(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "active"
+        service.status["status"] = "speaking"
+        service.status["assistant_speaking"] = True
         config = VoiceConfig()
         with mock.patch("robot_voice.publish_message", return_value=True):
-            service.publish(config, last_committed_transcript="first")
-        first = service._last_commit_at
+            service.publish(config, status="listening", assistant_speaking=False)
+        first = service._idle_started_at
         self.assertIsNotNone(first)
         await asyncio.sleep(0.02)
         with mock.patch("robot_voice.publish_message", return_value=True):
-            service.publish(config, last_committed_transcript="second")
-        self.assertGreater(service._last_commit_at, first)
+            service.publish(config, status="speaking", assistant_speaking=True)
+            service.publish(config, status="listening", assistant_speaking=False)
+        self.assertGreater(service._idle_started_at, first)
 
     async def test_deactivate_clears_history(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
@@ -140,6 +144,7 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             command_socket = os.path.join(tmpdir, "cmd.sock")
             service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", command_socket=command_socket)
+            service._mode = "armed"
             server = await service._start_command_server()
             self.assertIsNotNone(server)
             try:

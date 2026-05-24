@@ -208,6 +208,9 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
 
         keys = {field["key"] for field in payload["fields"]}
         self.assertIn("enabled", keys)
+        self.assertIn("wake_word_enabled", keys)
+        self.assertIn("wake_threshold", keys)
+        self.assertIn("wake_chime_path", keys)
         self.assertIn("input_device", keys)
         self.assertIn("output_device", keys)
         self.assertIn("capture_channel_index", keys)
@@ -224,6 +227,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types["input_gain"], "number")
         self.assertEqual(types["output_gain"], "number")
         self.assertFalse(payload["values"]["enabled"])
+        self.assertFalse(payload["values"]["wake_word_enabled"])
+        self.assertEqual(payload["values"]["wake_threshold"], 0.5)
         self.assertEqual(payload["values"]["input_device"], "XVF3800")
         self.assertTrue(payload["values"]["barge_in_enabled"])
         self.assertEqual(payload["values"]["barge_in_min_rms"], 700)
@@ -231,6 +236,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_post_config_voice_writes_file_to_disk(self):
         body = {
             "enabled": True,
+            "wake_word_enabled": True,
+            "wake_threshold": 0.42,
             "input_device": "hw:1,0",
             "output_device": "plughw:1,0",
             "capture_channel_index": 0,
@@ -247,6 +254,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         with open(self.voice_config_path) as file_obj:
             saved = json.load(file_obj)
         self.assertTrue(saved["enabled"])
+        self.assertTrue(saved["wake_word_enabled"])
+        self.assertEqual(saved["wake_threshold"], 0.42)
         self.assertEqual(saved["input_device"], "hw:1,0")
         self.assertEqual(saved["output_device"], "plughw:1,0")
         self.assertEqual(saved["capture_channel_index"], 0)

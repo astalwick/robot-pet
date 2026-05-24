@@ -9,8 +9,12 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from lib.log import setup_logging
 from voice.conversation import ConversationHistory
 from voice.turn_policy import DEFAULT_TURN_POLICY, TurnPolicy
+
+
+log = setup_logging("robot-voice")
 
 
 OPENAI_MODEL = "gpt-5.4-mini"
@@ -350,59 +354,44 @@ async def stream_openai_words(
         for function_call in function_calls:
             call_id = getattr(function_call, "call_id", "")
             name = getattr(function_call, "name", "")
+            log.info("tool call: %s", name)
+            voice_switch = None
+
             if name == VOICE_SWITCH_TOOL_NAME:
                 voice_switch = voice_state.toggle()
-                yield voice_switch
-                tool_outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(
-                            {
-                                "voice": voice_switch.voice_name,
-                                "voice_id": voice_switch.voice_id,
-                            }
-                        ),
-                    }
-                )
-                continue
-
-            if name == END_SESSION_TOOL_NAME:
+                result: dict[str, Any] = {
+                    "voice": voice_switch.voice_name,
+                    "voice_id": voice_switch.voice_id,
+                }
+            elif name == END_SESSION_TOOL_NAME:
                 if session_end_caller is None:
                     result = {"ok": False, "error": "session_end_unavailable"}
                 else:
                     session_end_caller()
                     result = {"ok": True, "ended": True}
-                tool_outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(result),
-                    }
-                )
-                continue
-
-            if name in MOTION_TOOL_NAMES:
+            elif name in MOTION_TOOL_NAMES:
                 if motion_intent_caller is None:
-                    result: dict[str, Any] = {"ok": False, "error": "motion_unavailable"}
+                    result = {"ok": False, "error": "motion_unavailable"}
                 else:
                     result = await asyncio.to_thread(motion_intent_caller, name)
-                tool_outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(result),
-                    }
-                )
-                continue
+            else:
+                result = {"ok": False, "error": "unsupported tool"}
+
+            if voice_switch is not None:
+                yield voice_switch
 
             tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": json.dumps({"ok": False, "error": "unsupported tool"}),
+                    "output": json.dumps(result),
                 }
             )
+
+            if result.get("ok") is False:
+                log.warning("tool call %s failed: %s", name, result.get("error"))
+            else:
+                log.info("tool call %s ok", name)
 
         previous_response_id = response_id
         response_input = tool_outputs

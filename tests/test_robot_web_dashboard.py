@@ -385,6 +385,70 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             status = await self._wait_for_redeploy_result("failed")
             self.assertIn("local changes", status["last_message"])
 
+    async def test_redeploy_keeps_script_success_when_exit_interrupted(self):
+        def fake_stream(command, on_line, *, env=None):
+            Path(self.redeploy_status_path).write_text(
+                json.dumps(
+                    {
+                        "last_result": "success",
+                        "last_message": "Redeploy complete.",
+                        "restart_dashboard": True,
+                    }
+                )
+                + "\n"
+            )
+            on_line("robot-web-dashboard.service will restart when redeploy finishes")
+            return -15
+
+        with (
+            mock.patch("robot_web_dashboard.stream_command_output", side_effect=fake_stream),
+            mock.patch("robot_web_dashboard.restart_web_dashboard") as restart_mock,
+        ):
+            restart_mock.return_value.returncode = 0
+            async with self.client.post("/redeploy/arm") as resp:
+                self.assertEqual(resp.status, 200)
+            async with self.client.post("/redeploy/run") as resp:
+                self.assertEqual(resp.status, 200)
+
+            status = await self._wait_for_redeploy_result("success")
+            self.assertEqual(status["last_message"], "Redeploy complete.")
+            restart_mock.assert_called_once()
+
+            with open(self.redeploy_status_path) as file_obj:
+                saved = json.load(file_obj)
+            self.assertEqual(saved["last_result"], "success")
+
+    async def test_redeploy_reports_dashboard_restart_failure(self):
+        def fake_stream(command, on_line, *, env=None):
+            Path(self.redeploy_status_path).write_text(
+                json.dumps(
+                    {
+                        "last_result": "success",
+                        "last_message": "Redeploy complete.",
+                        "restart_dashboard": True,
+                    }
+                )
+                + "\n"
+            )
+            return -15
+
+        with (
+            mock.patch("robot_web_dashboard.stream_command_output", side_effect=fake_stream),
+            mock.patch("robot_web_dashboard.restart_web_dashboard") as restart_mock,
+        ):
+            restart_mock.return_value.returncode = 1
+            restart_mock.return_value.stderr = "systemctl failed"
+            restart_mock.return_value.stdout = ""
+
+            async with self.client.post("/redeploy/arm") as resp:
+                self.assertEqual(resp.status, 200)
+            async with self.client.post("/redeploy/run") as resp:
+                self.assertEqual(resp.status, 200)
+
+            status = await self._wait_for_redeploy_result("failed")
+            self.assertIn("dashboard restart failed", status["last_message"])
+            self.assertIn("systemctl failed", status["last_message"])
+
     async def _publish_repeatedly(self, snapshot):
         while True:
             self.store.publish(snapshot)

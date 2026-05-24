@@ -441,6 +441,16 @@ def restart_gamepad_teleop() -> subprocess.CompletedProcess[str]:
     )
 
 
+def restart_web_dashboard() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "--no-block", "robot-web-dashboard.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
 def redeploy_command() -> tuple[list[str], dict[str, str]]:
     repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     script = os.path.join(repo_dir, "scripts", "redeploy-robot.sh")
@@ -561,6 +571,13 @@ class WebDashboardState:
         with self._lock:
             return self.tuning_apply_running
 
+    def _read_redeploy_status_file(self) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(Path(self.redeploy_status_path).read_text())
+        except (OSError, json.JSONDecodeError, TypeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _redeploy_thread(self) -> None:
         self.log_hub.publish("Starting redeploy...")
         command, env = redeploy_command()
@@ -580,14 +597,27 @@ class WebDashboardState:
             self._finish_redeploy("failed", message)
             return
 
-        if exit_code == 0:
-            message = last_line or "Redeploy complete."
+        script_status = self._read_redeploy_status_file()
+        if exit_code == 0 or (script_status and script_status.get("last_result") == "success"):
+            message = str(script_status.get("last_message") if script_status else "") or last_line or "Redeploy complete."
             self.log_hub.publish("Redeploy succeeded.")
+            if script_status and script_status.get("restart_dashboard"):
+                self.log_hub.publish("restarting robot-web-dashboard.service")
+                try:
+                    result = restart_web_dashboard()
+                except subprocess.TimeoutExpired:
+                    self._finish_redeploy("failed", "Redeploy complete, but dashboard restart timed out.")
+                    return
+                if result.returncode != 0:
+                    output = (result.stderr or result.stdout).strip()
+                    self._finish_redeploy("failed", f"Redeploy complete, but dashboard restart failed: {output}")
+                    return
             self._finish_redeploy("success", message)
-        else:
-            message = last_line or f"Redeploy failed with exit code {exit_code}."
-            self.log_hub.publish(f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
-            self._finish_redeploy("failed", message)
+            return
+
+        message = last_line or f"Redeploy failed with exit code {exit_code}."
+        self.log_hub.publish(f"Redeploy failed with exit code {exit_code}. Dashboard left running.")
+        self._finish_redeploy("failed", message)
 
 
 async def index_handler(request: web.Request) -> web.FileResponse:

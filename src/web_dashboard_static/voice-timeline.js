@@ -107,7 +107,9 @@ export function initVoiceTimeline() {
 export function updateVoiceTimeline(timeline) {
   if (!timeline) return;
   if (paused) return;
-  serverRef = Number(timeline.ref) || 0;
+  const nextRef = Number(timeline.ref) || 0;
+  if (nextRef === serverRef) return;
+  serverRef = nextRef;
   browserRefAt = performance.now() / 1000;
   horizon = Number(timeline.horizon_secs) || HORIZON_DEFAULT;
   levels = Array.isArray(timeline.levels) ? timeline.levels : [];

@@ -117,7 +117,22 @@ VOICE_FIELDS = (
         "key": "wake_word_enabled",
         "label": "Wake word mode",
         "type": "boolean",
-        "help": "Hey Bloop locally → chime only (no cloud). Off + Listen on = always-hot assistant (needs API keys in voice.env)",
+        "help": "Hey Bloop wakes the assistant (Listen toggle sets this on). Needs API keys in voice.env for conversation.",
+    },
+    {
+        "key": "force_active",
+        "label": "Talk now (debug)",
+        "type": "boolean",
+        "help": "Skip wake word and stream to Scribe immediately (old always-hot behavior). Clears after session idle.",
+    },
+    {
+        "key": "session_idle_secs",
+        "label": "Session idle (s)",
+        "type": "number",
+        "help": "0 disables. After last committed transcript, return to wake listening.",
+        "min": 0.0,
+        "max": 600.0,
+        "step": 5.0,
     },
     {
         "key": "wake_threshold",

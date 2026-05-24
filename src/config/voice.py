@@ -49,6 +49,8 @@ class VoiceConfig:
     wake_threshold: float = 0.5
     wake_debounce_secs: float = 2.0
     wake_chime_path: str = DEFAULT_WAKE_CHIME_PATH
+    force_active: bool = False
+    session_idle_secs: float = 30.0
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "VoiceConfig":
@@ -88,6 +90,8 @@ class VoiceConfig:
             wake_threshold=float(values.get("wake_threshold", defaults.wake_threshold)),
             wake_debounce_secs=float(values.get("wake_debounce_secs", defaults.wake_debounce_secs)),
             wake_chime_path=str(values.get("wake_chime_path", defaults.wake_chime_path)),
+            force_active=bool(values.get("force_active", defaults.force_active)),
+            session_idle_secs=float(values.get("session_idle_secs", defaults.session_idle_secs)),
         )
         config.validate()
         return config
@@ -105,6 +109,8 @@ class VoiceConfig:
             raise VoiceConfigError("wake_threshold must be between 0 and 1")
         if self.wake_debounce_secs < 0.0:
             raise VoiceConfigError("wake_debounce_secs must be >= 0")
+        if self.session_idle_secs < 0.0:
+            raise VoiceConfigError("session_idle_secs must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

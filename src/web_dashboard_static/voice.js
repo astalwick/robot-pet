@@ -35,6 +35,7 @@ function voiceStatusClass(status, lastError) {
   if (lastError || status === 'error' || status === 'stale') return 'err';
   if (status === 'starting' || status === 'reconnecting' || status === 'hearing' || status === 'thinking') return 'warn';
   if (status === 'listening' || status === 'speaking') return 'ok';
+  if (status === 'waiting') return 'muted';
   return 'muted';
 }
 
@@ -180,7 +181,10 @@ async function handleSaveError(result) {
 function onVoiceToggle() {
   voiceWantEnabled = !voiceWantEnabled;
   updateVoiceToggleButton();
-  configStore.voice.set({ enabled: voiceWantEnabled });
+  const patch = voiceWantEnabled
+    ? { enabled: true, wake_word_enabled: true, force_active: false }
+    : { enabled: false, force_active: false };
+  configStore.voice.set(patch);
   configStore.voice.flush().then((result) => {
     handleSaveError(result);
     if (result && !result.ok) {
@@ -205,9 +209,17 @@ function onVoiceGainCommit(event) {
   configStore.voice.flush().then(handleSaveError);
 }
 
+function onTalkNow() {
+  voiceWantEnabled = true;
+  updateVoiceToggleButton();
+  configStore.voice.set({ enabled: true, wake_word_enabled: true, force_active: true });
+  configStore.voice.flush().then(handleSaveError);
+}
+
 export function bindVoiceHandlers(bindOn) {
   bindOn('voice-toggle-button', 'click', onVoiceToggle);
   bindOn('voice-timeline-toggle-button', 'click', onVoiceToggle);
+  bindOn('voice-talk-now-button', 'click', onTalkNow);
   bindOn('voice-rows', 'input', onVoiceGainInput);
   bindOn('voice-rows', 'change', onVoiceGainCommit);
 }

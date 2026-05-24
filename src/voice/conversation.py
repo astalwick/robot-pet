@@ -27,3 +27,6 @@ class ConversationHistory:
 
     def exchanges(self) -> tuple[ConversationExchange, ...]:
         return tuple(self._exchanges)
+
+    def clear(self) -> None:
+        self._exchanges.clear()

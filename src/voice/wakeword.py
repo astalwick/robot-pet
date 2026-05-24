@@ -40,7 +40,7 @@ class WakeWordDetector:
         if not model_path.is_file():
             raise FileNotFoundError(f"Wake model not found: {model_path}")
         ensure_feature_models()
-        self._model = Model(wakeword_models=[str(model_path)])
+        self._model = Model(wakeword_models=[str(model_path)], inference_framework="onnx")
         names = list(self._model.models.keys())
         if len(names) != 1:
             raise RuntimeError(f"Expected one wake model, got {names}")

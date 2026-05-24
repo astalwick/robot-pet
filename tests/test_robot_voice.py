@@ -128,7 +128,7 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(service._orchestrator_task)
             self.assertTrue(any("Chime WAV not found" in str(message.get("last_error")) for message in published))
 
-    async def test_enabled_without_wake_waits(self):
+    async def test_enabled_without_wake_starts_always_hot(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "voice.json")
             with open(config_path, "w") as file_obj:
@@ -141,19 +141,20 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
                 poll_seconds=0.01,
             )
             stop_event = asyncio.Event()
-            published = []
 
             async def stop_soon():
                 await asyncio.sleep(0.03)
                 stop_event.set()
 
             with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "x", "OPENAI_API_KEY": "y"}):
-                with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                with mock.patch("robot_voice.publish_message", return_value=True):
                     with mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator:
                         await asyncio.gather(service.run(stop_event), stop_soon())
 
-            start_orchestrator.assert_not_called()
-            self.assertTrue(any(message.get("status") == "waiting" for message in published))
+            start_orchestrator.assert_called()
+            (called_config,) = start_orchestrator.call_args.args
+            self.assertTrue(called_config.enabled)
+            self.assertFalse(called_config.wake_word_enabled)
 
     async def test_voice_errors_are_logged_once(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)

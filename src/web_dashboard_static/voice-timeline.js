@@ -40,18 +40,25 @@ const EVENT_STYLES = {
 const LANE_RATIOS_NORMAL = {
   audio: 0.32,
   state: 0.22,
-  gate:  0.06,
-  events: 0.24,
+  gate:  0.08,
+  events: 0.22,
   transcript: 0.16,
 };
 
 const LANE_RATIOS_MAXIMIZED = {
   audio: 0.24,
   state: 0.16,
-  gate:  0.05,
-  events: 0.17,
+  gate:  0.07,
+  events: 0.15,
   transcript: 0.38,
 };
+
+// Timeline level tuple: [t, mic_peak, playback_rms, threshold_rms, barge_gate, scribe_gate]
+const IDX_MIC = 1;
+const IDX_PLAYBACK = 2;
+const IDX_THRESHOLD = 3;
+const IDX_BARGE_GATE = 4;
+const IDX_SCRIBE_GATE = 5;
 
 let canvas = null;
 let ctx = null;
@@ -254,6 +261,16 @@ function seriesScaleMax(samples, idx, floor) {
   return maxObserved * 1.15;
 }
 
+function seriesMax(samples, ...indices) {
+  let maxObserved = 0;
+  for (const sample of samples) {
+    for (const idx of indices) {
+      if (sample[idx] > maxObserved) maxObserved = sample[idx];
+    }
+  }
+  return maxObserved;
+}
+
 function drawLevelLine(rect, max, level, color) {
   const y = rect.y + rect.h - (level / max) * rect.h;
   ctx.strokeStyle = color;
@@ -268,9 +285,9 @@ function drawLevelLine(rect, max, level, color) {
 }
 
 function drawMicAudioLane(ref, rect) {
-  const max = seriesScaleMax(levels, 1, MIC_SCALE_FLOOR);
+  const max = seriesScaleMax(levels, IDX_MIC, MIC_SCALE_FLOOR);
   drawAudioGrid(rect, max);
-  drawSeries(levels, rect, ref, max, 1, COLORS.mic, false);
+  drawSeries(levels, rect, ref, max, IDX_MIC, COLORS.mic, false);
   const gateY = drawLevelLine(rect, max, MIC_SCRIBE_SEND_RMS_MIN, COLORS.scribeGate);
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '9px "JetBrains Mono", monospace';
@@ -284,15 +301,10 @@ function drawMicAudioLane(ref, rect) {
 }
 
 function drawOutAudioLane(ref, rect) {
-  let maxObserved = OUT_SCALE_FLOOR;
-  for (const sample of levels) {
-    if (sample[2] > maxObserved) maxObserved = sample[2];
-    if (sample[3] > maxObserved) maxObserved = sample[3];
-  }
-  const max = maxObserved * 1.15;
+  const max = Math.max(OUT_SCALE_FLOOR, seriesMax(levels, IDX_PLAYBACK, IDX_THRESHOLD)) * 1.15;
   drawAudioGrid(rect, max);
-  drawSeries(levels, rect, ref, max, 2, COLORS.playback, true);
-  drawSeries(levels, rect, ref, max, 3, COLORS.threshold, false, true);
+  drawSeries(levels, rect, ref, max, IDX_PLAYBACK, COLORS.playback, true);
+  drawSeries(levels, rect, ref, max, IDX_THRESHOLD, COLORS.threshold, false, true);
   ctx.fillStyle = COLORS.textDim;
   ctx.font = '9px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';
@@ -396,17 +408,35 @@ function phaseIntervals(name, ref) {
 }
 
 function drawGateLane(ref, rect) {
-  drawLaneBackground(rect, 'GATE');
+  drawLaneBackground(rect, 'GATES');
   if (levels.length < 2) return;
-  ctx.fillStyle = COLORS.gateClosed;
-  ctx.fillRect(0, rect.y + 4, viewW, rect.h - 6);
-  for (let i = 0; i < levels.length - 1; i++) {
-    if (!levels[i][4]) continue;
-    const x1 = Math.max(0, timeToX(levels[i][0], ref));
-    const x2 = Math.min(viewW, timeToX(levels[i + 1][0], ref));
-    if (x2 <= x1) continue;
-    ctx.fillStyle = COLORS.gateOpen;
-    ctx.fillRect(x1, rect.y + 4, x2 - x1, rect.h - 6);
+
+  const innerY = rect.y + 4;
+  const innerH = rect.h - 6;
+  const rowH = innerH / 2;
+  const rows = [
+    { label: 'scribe', idx: IDX_SCRIBE_GATE, open: COLORS.scribeGate, closed: '#2a1810' },
+    { label: 'barge', idx: IDX_BARGE_GATE, open: COLORS.gateOpen, closed: COLORS.gateClosed },
+  ];
+
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const row = rows[rowIdx];
+    const y = innerY + rowIdx * rowH;
+    ctx.fillStyle = row.closed;
+    ctx.fillRect(0, y, viewW, rowH - 1);
+    for (let i = 0; i < levels.length - 1; i++) {
+      if (!levels[i][row.idx]) continue;
+      const x1 = Math.max(0, timeToX(levels[i][0], ref));
+      const x2 = Math.min(viewW, timeToX(levels[i + 1][0], ref));
+      if (x2 <= x1) continue;
+      ctx.fillStyle = row.open;
+      ctx.fillRect(x1, y, x2 - x1, rowH - 1);
+    }
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = '9px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(row.label, 4, y + rowH / 2);
   }
 }
 
@@ -568,10 +598,11 @@ function onHover(event) {
   const lines = [];
   lines.push(`t  -${(ref - t).toFixed(1)}s`);
   if (sample) {
-    lines.push(`mic peak  ${sample[1]}${sample[1] > MIC_SCRIBE_SEND_RMS_MIN ? ' → scribe' : ' → silence'}`);
-    lines.push(`playback  ${sample[2]}`);
-    lines.push(`threshold ${sample[3]}`);
-    lines.push(`gate      ${sample[4] ? 'open' : 'closed'}`);
+    lines.push(`mic peak  ${sample[IDX_MIC]}`);
+    lines.push(`scribe    ${sample[IDX_SCRIBE_GATE] ? 'sending' : 'silence'}`);
+    lines.push(`playback  ${sample[IDX_PLAYBACK]}`);
+    lines.push(`threshold ${sample[IDX_THRESHOLD]}`);
+    lines.push(`barge     ${sample[IDX_BARGE_GATE] ? 'open' : 'closed'}`);
   }
   for (const ev of nearbyEvents.slice(-4)) {
     const extra = ev.reason

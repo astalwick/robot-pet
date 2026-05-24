@@ -34,14 +34,22 @@ log = setup_logging("robot-voice")
 
 class TimelineBuffer:
     def __init__(self) -> None:
-        self.levels: deque[tuple[float, int, int, int, int]] = deque(maxlen=int(TIMELINE_HORIZON_SECS * TIMELINE_SAMPLE_HZ) + 10)
+        self.levels: deque[tuple[float, int, int, int, int, int]] = deque(maxlen=int(TIMELINE_HORIZON_SECS * TIMELINE_SAMPLE_HZ) + 10)
         # Separate deques so high-frequency partials/state can't evict rare signal events.
         self.signal_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_SIGNAL_EVENTS)
         self.state_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_STATE_EVENTS)
         self.partial_events: deque[dict[str, object]] = deque(maxlen=TIMELINE_MAX_PARTIAL_EVENTS)
 
-    def add_sample(self, t: float, mic: int, playback: int, threshold: int, gate_open: int) -> None:
-        self.levels.append((t, mic, playback, threshold, gate_open))
+    def add_sample(
+        self,
+        t: float,
+        mic: int,
+        playback: int,
+        threshold: int,
+        barge_gate_open: int,
+        scribe_gate_open: int,
+    ) -> None:
+        self.levels.append((t, mic, playback, threshold, barge_gate_open, scribe_gate_open))
 
     def add_event(self, event: dict[str, object]) -> None:
         kind = event.get("type")
@@ -249,6 +257,7 @@ class RobotVoiceService:
                 playback_rms,
                 int(levels.get("threshold_rms", 0)),
                 int(levels.get("gate_open", 0)),
+                int(levels.get("scribe_gate_open", 0)),
             )
             self.timeline.trim(now)
 

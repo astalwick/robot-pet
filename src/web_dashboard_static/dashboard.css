@@ -188,7 +188,9 @@ main {
 .swatch-mic { background: var(--accent); }
 .swatch-playback { background: #c084fc; }
 .swatch-threshold { background: var(--warn); }
-.swatch-scribe-gate { background: #fb923c; }
+.swatch-scribe-rms { background: #fb923c; }
+.swatch-scribe-send { background: #fb923c; }
+.swatch-barge-gate { background: var(--ok); }
 
 #voice-timeline-canvas-wrap {
   position: relative;

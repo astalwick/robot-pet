@@ -155,12 +155,15 @@ plan_service_restarts <<< "$changed_files"
 
 if [[ "$need_pip" -eq 1 ]]; then
   echo "Installing Python package metadata and dependencies..."
-  # See setup.sh: force-upgrade past openwakeword 0.4.0 (pip silently picks it
-  # on Python 3.13 because newer releases declare python_requires<3.12).
-  "$REPO_DIR/.venv/bin/python" -m pip install --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
   "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
   echo ""
 fi
+
+# openwakeword lives outside pyproject.toml (see setup.sh comment). Idempotent
+# when already at the right version; cheap enough to run every redeploy.
+echo "Ensuring openwakeword>=0.6.0 is installed..."
+"$REPO_DIR/.venv/bin/python" -m pip install --no-deps --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
+echo ""
 
 echo "Running tests..."
 "$REPO_DIR/.venv/bin/python" -m unittest discover tests

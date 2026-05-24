@@ -186,11 +186,12 @@ fi
 echo "[10/13] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
-# openwakeword's metadata declares python_requires<3.12, so pip silently falls
-# back to the ancient 0.4.0 on the Pi's Python 3.13 (missing download_models).
-# Force the modern release before the editable install consults the constraint.
-python -m pip install --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
 python -m pip install -e "$REPO_DIR"
+# openwakeword: install separately with --no-deps because it hard-requires
+# tflite-runtime on Linux (no Py 3.13 wheel) and we only use the ONNX backend.
+# --ignore-requires-python bypasses its python_requires<3.12 gate, which would
+# otherwise make pip fall back to the ancient 0.4.0 (missing download_models).
+python -m pip install --no-deps --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
 
 echo "[11/13] Running tests..."
 python -m unittest discover tests

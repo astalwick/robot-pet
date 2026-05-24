@@ -81,7 +81,6 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertFalse(config.wake_word_enabled)
         self.assertEqual(config.wake_threshold, 0.5)
         self.assertEqual(config.wake_debounce_secs, 2.0)
-        self.assertFalse(config.force_active)
         self.assertEqual(config.session_idle_secs, 30.0)
 
     def test_wake_threshold_validation(self):
@@ -98,7 +97,6 @@ class VoiceConfigTest(unittest.TestCase):
                 wake_threshold=0.42,
                 wake_debounce_secs=3.0,
                 wake_chime_path="/tmp/chime.wav",
-                force_active=True,
                 session_idle_secs=45.0,
             )
             save_voice_config(config, path)

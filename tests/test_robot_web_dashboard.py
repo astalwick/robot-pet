@@ -89,6 +89,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.teleop_config_path = os.path.join(self.tmpdir.name, "teleop.json")
         self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
         self.voice_config_path = os.path.join(self.tmpdir.name, "voice.json")
+        self.voice_command_socket = os.path.join(self.tmpdir.name, "voice-command.sock")
         self.store = SnapshotStore(asyncio.get_running_loop())
         self.state = WebDashboardState(
             asyncio.get_running_loop(),
@@ -97,6 +98,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.teleop_config_path,
             self.vision_config_path,
             self.voice_config_path,
+            self.voice_command_socket,
         )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
@@ -436,7 +438,9 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("voiceTelemetryEnabled", self.voice_js)
         self.assertIn("voiceWantEnabled = !voiceWantEnabled", self.voice_js)
         self.assertIn("voiceUiPending", self.voice_js)
-        self.assertIn("configStore.voice.set({ enabled: voiceWantEnabled })", self.voice_js)
+        self.assertIn("{ enabled: true, wake_word_enabled: true }", self.voice_js)
+        self.assertIn("{ enabled: false }", self.voice_js)
+        self.assertIn("configStore.voice.set(patch)", self.voice_js)
         self.assertIn("configStore.voice.flush()", self.voice_js)
         self.assertNotIn("voicePersistWork", self.voice_js)
         self.assertNotIn("fetchVoiceValues", self.voice_js)

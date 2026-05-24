@@ -5,19 +5,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import signal
 import time
 from collections import deque
 from contextlib import suppress
-from dataclasses import replace
 from pathlib import Path
 
-from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
+from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET
+from telemetry.paths import DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.session import VoiceSession
@@ -31,6 +31,7 @@ TIMELINE_MAX_SIGNAL_EVENTS = 100
 TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
 PLAYBACK_RMS_STALE_SECS = 0.25
+ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
 
 log = setup_logging("robot-voice")
 
@@ -89,10 +90,12 @@ class RobotVoiceService:
         self,
         config_path: str,
         telemetry_socket: str,
+        command_socket: str = DEFAULT_VOICE_COMMAND_SOCKET,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
+        self.command_socket = command_socket
         self.poll_seconds = poll_seconds
         self.session: VoiceSession | None = None
         self.audio: ReSpeakerAudio | None = None
@@ -128,56 +131,85 @@ class RobotVoiceService:
         self._detector: WakeWordDetector | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
-        while not stop_event.is_set():
+        command_server = await self._start_command_server()
+        try:
+            while not stop_event.is_set():
+                try:
+                    config = load_voice_config(self.config_path)
+                except VoiceConfigError as exc:
+                    await self.stop_all()
+                    self.publish(VoiceConfig(), status="error", last_error=str(exc))
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                if not config.enabled:
+                    await self.stop_all()
+                    self.publish(config, status="disabled", assistant_speaking=False, last_error=None)
+                    await asyncio.sleep(self.poll_seconds)
+                    continue
+
+                if config.wake_word_enabled:
+                    await self._run_wake_orchestrator(config)
+                    continue
+
+                await self.stop_all()
+                self.publish(
+                    config,
+                    status="waiting",
+                    assistant_speaking=False,
+                    last_error=None,
+                    partial_transcript=None,
+                    last_committed_transcript=None,
+                    last_assistant_text=None,
+                )
+                await asyncio.sleep(self.poll_seconds)
+
+            await self.stop_all()
+        finally:
+            if command_server is not None:
+                command_server.close()
+                with suppress(Exception):
+                    await command_server.wait_closed()
+                with suppress(FileNotFoundError):
+                    os.unlink(self.command_socket)
+
+    async def _start_command_server(self) -> asyncio.AbstractServer | None:
+        try:
+            Path(self.command_socket).parent.mkdir(parents=True, exist_ok=True)
+            with suppress(FileNotFoundError):
+                os.unlink(self.command_socket)
+            server = await asyncio.start_unix_server(self._handle_command, path=self.command_socket)
+        except OSError as exc:
+            log.warning("voice command socket disabled: %s", exc)
+            return None
+        log.info("voice command socket listening: %s", self.command_socket)
+        return server
+
+    async def _handle_command(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await reader.readline()
+            if not line:
+                return
             try:
-                config = load_voice_config(self.config_path)
-            except VoiceConfigError as exc:
-                await self.stop_all()
-                self.publish(VoiceConfig(), status="error", last_error=str(exc))
-                await asyncio.sleep(self.poll_seconds)
-                continue
-
-            if not config.enabled:
-                await self.stop_all()
-                self.publish(config, status="disabled", assistant_speaking=False, last_error=None)
-                await asyncio.sleep(self.poll_seconds)
-                continue
-
-            if config.force_active:
-                await self._run_always_hot(config)
-                continue
-
-            if config.wake_word_enabled:
-                await self._run_wake_orchestrator(config)
-                continue
-
-            await self.stop_all()
-            self.publish(
-                config,
-                status="waiting",
-                assistant_speaking=False,
-                last_error=None,
-                partial_transcript=None,
-                last_committed_transcript=None,
-                last_assistant_text=None,
-            )
-            await asyncio.sleep(self.poll_seconds)
-
-        await self.stop_all()
-
-    async def _run_always_hot(self, config: VoiceConfig) -> None:
-        if not self.has_credentials():
-            await self.stop_all()
-            self.publish(config, status="error", last_error="Missing ELEVENLABS_API_KEY or OPENAI_API_KEY")
-            await asyncio.sleep(self.poll_seconds)
-            return
-
-        if self._orchestrator_task is not None or self.session is None or self.active_config != config:
-            await self.stop_all()
-            await self.start_session(config)
-
-        if self.session is not None:
-            await self._wait_on_session(config)
+                payload = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                log.warning("voice command socket: invalid JSON")
+                return
+            if not isinstance(payload, dict):
+                return
+            cmd = payload.get("cmd")
+            if cmd == "talk_now":
+                if self._mode == "active":
+                    log.info("talk-now ignored: session already active")
+                    return
+                log.info("talk-now command received")
+                self._wake_event.set()
+            else:
+                log.warning("voice command socket: unknown cmd %r", cmd)
+        finally:
+            writer.close()
+            with suppress(Exception):
+                await writer.wait_closed()
 
     async def _run_wake_orchestrator(self, config: VoiceConfig) -> None:
         if self._orchestrator_task is None or self.active_config != config:
@@ -197,23 +229,6 @@ class RobotVoiceService:
             return
 
         await asyncio.sleep(self.poll_seconds)
-
-    async def _wait_on_session(self, config: VoiceConfig) -> None:
-        if self.session is None:
-            return
-        wait_task = asyncio.create_task(self.session.wait())
-        sleep_task = asyncio.create_task(asyncio.sleep(self.poll_seconds))
-        done, pending = await asyncio.wait({wait_task, sleep_task}, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        if wait_task in done:
-            try:
-                wait_task.result()
-            except Exception as exc:
-                log.warning("voice session failed: %s", exc)
-                await self.stop_all()
-                self.publish(config, status="reconnecting", last_error=str(exc))
-                await asyncio.sleep(min(5.0, self.poll_seconds * 2))
 
     async def start_orchestrator(self, config: VoiceConfig) -> None:
         log.info(
@@ -284,7 +299,6 @@ class RobotVoiceService:
     async def _run_orchestrator(self) -> None:
         while True:
             self._mode = "armed"
-            self._wake_event.clear()
             config = self.active_config
             if config is None:
                 return
@@ -300,18 +314,17 @@ class RobotVoiceService:
             if self._io_stop_event is not None and self._io_stop_event.is_set():
                 return
             if not await self._activate_session():
+                await asyncio.sleep(ACTIVATE_FAILURE_BACKOFF_SECS)
                 continue
             await self._wait_for_session_end()
             await self._deactivate_session()
+            self._wake_event.clear()
 
     async def _wait_for_session_trigger(self) -> None:
         while True:
             if self._io_stop_event is not None and self._io_stop_event.is_set():
                 return
-            config = self.active_config
-            if config is None:
-                return
-            if config.force_active:
+            if self.active_config is None:
                 return
             if self._wake_event.is_set():
                 return
@@ -327,6 +340,7 @@ class RobotVoiceService:
             return False
         if not self.has_credentials():
             self.publish(config, status="error", last_error="Missing ELEVENLABS_API_KEY or OPENAI_API_KEY")
+            self._wake_event.clear()
             return False
 
         try:
@@ -392,7 +406,6 @@ class RobotVoiceService:
             return
 
     async def _deactivate_session(self) -> None:
-        config = self.active_config
         if self._sampler_task is not None:
             self._sampler_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -404,10 +417,6 @@ class RobotVoiceService:
             self.session = None
         self._last_commit_at = None
         self._mode = "armed"
-        if config is not None and config.force_active:
-            cleared = replace(config, force_active=False)
-            save_voice_config(cleared, self.config_path)
-            self.active_config = cleared
 
     async def _run_wake_loop(self, config: VoiceConfig) -> None:
         audio = self.audio
@@ -440,60 +449,10 @@ class RobotVoiceService:
                 log.warning("wake chime playback failed: %s", exc)
                 self.publish(config, status="error", last_error=str(exc))
                 continue
+            if not self.has_credentials():
+                log.info("wake detected but API keys missing: chime-only, staying armed")
+                continue
             self._wake_event.set()
-
-    async def start_session(self, config: VoiceConfig) -> None:
-        log.info(
-            "starting voice: input=%s output=%s rate=%s channels=%s selected_channel=%s",
-            config.input_device,
-            config.output_device,
-            config.sample_rate,
-            config.capture_channels,
-            config.capture_channel_index,
-        )
-        try:
-            from openai import AsyncOpenAI
-        except ModuleNotFoundError as exc:
-            self.publish(config, status="error", last_error=f"Missing Python dependency: {exc.name}")
-            return
-
-        self.publish(config, status="starting", last_error=None)
-        self.active_config = config
-        self._mode = "active"
-        self.audio = ReSpeakerAudio(
-            input_device=config.input_device,
-            output_device=config.output_device,
-            sample_rate=config.sample_rate,
-            capture_channels=config.capture_channels,
-            capture_channel_index=config.capture_channel_index,
-            output_channels=config.output_channels,
-            input_gain=config.input_gain,
-            output_gain=config.output_gain,
-        )
-        self._io_stop_event = asyncio.Event()
-        try:
-            await self.audio.start_io(self._io_stop_event)
-        except Exception as exc:
-            log.warning("voice audio start failed: %s", exc)
-            await self.stop_all()
-            self.publish(config, status="error", last_error=str(exc))
-            return
-        self.session = VoiceSession(
-            config,
-            os.environ["ELEVENLABS_API_KEY"],
-            AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"]),
-            lambda update: self.publish(config, **update),
-            audio=self.audio,
-            event_callback=self.timeline.add_event,
-        )
-        try:
-            await self.session.start()
-        except Exception as exc:
-            log.warning("voice session start failed: %s", exc)
-            await self.stop_all()
-            self.publish(config, status="error", last_error=str(exc))
-            return
-        self._sampler_task = asyncio.create_task(self._sample_timeline())
 
     async def stop_all(self) -> None:
         if self._orchestrator_task is not None:
@@ -653,6 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot voice assistant service.")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
+    parser.add_argument("--command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     return parser
 
@@ -662,7 +622,13 @@ async def run_service(args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, stop_event.set)
     loop.add_signal_handler(signal.SIGINT, stop_event.set)
-    await RobotVoiceService(args.config, args.telemetry_socket, args.poll_seconds).run(stop_event)
+    service = RobotVoiceService(
+        args.config,
+        args.telemetry_socket,
+        command_socket=args.command_socket,
+        poll_seconds=args.poll_seconds,
+    )
+    await service.run(stop_event)
 
 
 def main() -> None:

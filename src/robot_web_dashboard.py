@@ -47,10 +47,11 @@ from config.voice import (
 from lib.log import setup_logging
 from telemetry.paths import (
     DEFAULT_SUBSCRIBE_SOCKET,
+    DEFAULT_VOICE_COMMAND_SOCKET,
     DEFAULT_WEB_DASHBOARD_HOST,
     DEFAULT_WEB_DASHBOARD_PORT,
 )
-from telemetry.socket_client import subscribe
+from telemetry.socket_client import publish_message, subscribe
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_dashboard_static"
@@ -118,12 +119,6 @@ VOICE_FIELDS = (
         "label": "Wake word mode",
         "type": "boolean",
         "help": "Hey Bloop wakes the assistant (Listen toggle sets this on). Needs API keys in voice.env for conversation.",
-    },
-    {
-        "key": "force_active",
-        "label": "Talk now (debug)",
-        "type": "boolean",
-        "help": "Skip wake word and stream to Scribe immediately (old always-hot behavior). Clears after session idle.",
     },
     {
         "key": "session_idle_secs",
@@ -468,6 +463,7 @@ class WebDashboardState:
         teleop_config_path: str,
         vision_config_path: str,
         voice_config_path: str,
+        voice_command_socket: str,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
@@ -475,6 +471,7 @@ class WebDashboardState:
         self.teleop_config_path = teleop_config_path
         self.vision_config_path = vision_config_path
         self.voice_config_path = voice_config_path
+        self.voice_command_socket = voice_command_socket
         self.log_hub = BroadcastHub(loop)
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
@@ -813,6 +810,23 @@ async def config_apply(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, **spec["payload"](config)})
 
 
+async def voice_command_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
+
+    cmd = payload.get("cmd") if isinstance(payload, dict) else None
+    if cmd != "talk_now":
+        return web.json_response({"error": f"unknown cmd: {cmd!r}"}, status=400)
+
+    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, {"cmd": "talk_now"})
+    if not sent:
+        return web.json_response({"error": "voice service not reachable"}, status=503)
+    return web.json_response({"ok": True})
+
+
 def build_app(state: WebDashboardState) -> web.Application:
     app = web.Application(middlewares=[no_cache_middleware])
     app["state"] = state
@@ -824,6 +838,7 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_post("/redeploy/run", redeploy_run_handler)
     app.router.add_get("/config/{name}", config_get)
     app.router.add_post("/config/{name}", config_apply)
+    app.router.add_post("/voice/command", voice_command_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 
@@ -838,6 +853,7 @@ async def run_service(args: argparse.Namespace) -> None:
         args.teleop_config,
         args.vision_config,
         args.voice_config,
+        args.voice_command_socket,
     )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
@@ -869,6 +885,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
     parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
+    parser.add_argument("--voice-command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--static-dir", default=str(STATIC_DIR))
     return parser
 

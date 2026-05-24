@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import tempfile
 import time
 import unittest
 from contextlib import suppress
@@ -9,8 +10,9 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from robot_voice import RobotVoiceService
+from robot_voice import ACTIVATE_FAILURE_BACKOFF_SECS, RobotVoiceService
 from config.voice import VoiceConfig
+from telemetry.socket_client import publish_message
 
 
 class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
@@ -91,6 +93,102 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         with suppress(asyncio.CancelledError):
             await loop_task
         service._detector.check.assert_not_called()
+
+
+    async def test_talk_now_command_sets_wake_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command_socket = os.path.join(tmpdir, "cmd.sock")
+            service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", command_socket=command_socket)
+            server = await service._start_command_server()
+            self.assertIsNotNone(server)
+            try:
+                self.assertFalse(service._wake_event.is_set())
+                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "talk_now"})
+                self.assertTrue(ok)
+                await asyncio.wait_for(service._wake_event.wait(), timeout=1.0)
+            finally:
+                server.close()
+                with suppress(Exception):
+                    await server.wait_closed()
+
+    async def test_unknown_command_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            command_socket = os.path.join(tmpdir, "cmd.sock")
+            service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", command_socket=command_socket)
+            server = await service._start_command_server()
+            self.assertIsNotNone(server)
+            try:
+                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "do_a_barrel_roll"})
+                self.assertTrue(ok)
+                await asyncio.sleep(0.05)
+                self.assertFalse(service._wake_event.is_set())
+            finally:
+                server.close()
+                with suppress(Exception):
+                    await server.wait_closed()
+
+    async def test_wake_loop_stays_armed_without_credentials(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "armed"
+        service._detector = mock.Mock()
+        service._detector.check.return_value = True
+        service._detector.last_score = 0.9
+        service._detector.fire_count = 1
+        service._detector.last_fire_at = 0.0
+        service._io_stop_event = asyncio.Event()
+
+        async def fake_mic_frames(stop_event, queue_size=10, warn_on_drop=False):
+            yield b"\x00" * 2560
+            await asyncio.sleep(3600)
+
+        audio = mock.Mock()
+        audio.mic_frames = fake_mic_frames
+        audio.play_wav = mock.AsyncMock()
+        service.audio = audio
+
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("robot_voice.publish_message", return_value=True):
+                loop_task = asyncio.create_task(service._run_wake_loop(VoiceConfig()))
+                await asyncio.sleep(0.05)
+                loop_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await loop_task
+
+        audio.play_wav.assert_awaited()
+        self.assertFalse(service._wake_event.is_set())
+
+    async def test_activation_failure_sleeps_before_retry(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service.active_config = VoiceConfig(wake_word_enabled=True)
+        service._io_stop_event = asyncio.Event()
+
+        attempts = 0
+
+        async def fake_activate():
+            nonlocal attempts
+            attempts += 1
+            if attempts >= 2:
+                service._io_stop_event.set()
+            return False
+
+        async def fake_trigger():
+            return
+
+        sleeps: list[float] = []
+        real_sleep = asyncio.sleep
+
+        async def tracking_sleep(seconds):
+            sleeps.append(seconds)
+            await real_sleep(0)
+
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            with mock.patch.object(service, "_activate_session", side_effect=fake_activate):
+                with mock.patch.object(service, "_wait_for_session_trigger", side_effect=fake_trigger):
+                    with mock.patch("robot_voice.asyncio.sleep", side_effect=tracking_sleep):
+                        await asyncio.wait_for(service._run_orchestrator(), timeout=1.0)
+
+        self.assertGreaterEqual(attempts, 2)
+        self.assertIn(ACTIVATE_FAILURE_BACKOFF_SECS, sleeps)
 
 
 if __name__ == "__main__":

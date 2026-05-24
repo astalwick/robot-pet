@@ -14,46 +14,28 @@ from config.voice import load_voice_config
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
-    async def test_disabled_config_does_not_start_session(self):
+    async def test_disabled_config_does_not_start_orchestrator(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "voice.json")
             with open(config_path, "w") as file_obj:
                 json.dump({"enabled": False}, file_obj)
 
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
             stop_event = asyncio.Event()
 
             async def stop_soon():
                 await asyncio.sleep(0.03)
                 stop_event.set()
 
-            with mock.patch.object(service, "start_session") as start_session:
+            with mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator:
                 await asyncio.gather(service.run(stop_event), stop_soon())
 
-        start_session.assert_not_called()
-
-    async def test_missing_api_keys_with_force_active_publishes_error(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = os.path.join(tmpdir, "voice.json")
-            with open(config_path, "w") as file_obj:
-                json.dump({"enabled": True, "force_active": True}, file_obj)
-
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
-            stop_event = asyncio.Event()
-            published = []
-
-            async def stop_soon():
-                await asyncio.sleep(0.03)
-                stop_event.set()
-
-            with mock.patch.dict(os.environ, {}, clear=True):
-                with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
-                    with mock.patch.object(service, "start_session") as start_session:
-                        await asyncio.gather(service.run(stop_event), stop_soon())
-
-        start_session.assert_not_called()
-        self.assertTrue(any(message["status"] == "error" for message in published))
-        self.assertTrue(any("ELEVENLABS_API_KEY" in message["last_error"] for message in published))
+        start_orchestrator.assert_not_called()
 
     async def test_wake_orchestrator_starts_without_api_keys(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -61,7 +43,12 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             with open(config_path, "w") as file_obj:
                 json.dump({"enabled": True, "wake_word_enabled": True}, file_obj)
 
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
             stop_event = asyncio.Event()
 
             async def stop_soon():
@@ -70,11 +57,9 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
             with mock.patch.dict(os.environ, {}, clear=True):
                 with mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator:
-                    with mock.patch.object(service, "start_session") as start_session:
-                        await asyncio.gather(service.run(stop_event), stop_soon())
+                    await asyncio.gather(service.run(stop_event), stop_soon())
 
             start_orchestrator.assert_called()
-            start_session.assert_not_called()
 
     async def test_orchestrator_failure_restarts(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -82,7 +67,12 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             with open(config_path, "w") as file_obj:
                 json.dump({"enabled": True, "wake_word_enabled": True}, file_obj)
 
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
             stop_event = asyncio.Event()
             published = []
             start_count = 0
@@ -124,7 +114,12 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
                     file_obj,
                 )
 
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
             published = []
 
             with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
@@ -133,13 +128,18 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(service._orchestrator_task)
             self.assertTrue(any("Chime WAV not found" in str(message.get("last_error")) for message in published))
 
-    async def test_enabled_without_wake_or_force_active_waits(self):
+    async def test_enabled_without_wake_waits(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "voice.json")
             with open(config_path, "w") as file_obj:
                 json.dump({"enabled": True}, file_obj)
 
-            service = RobotVoiceService(config_path, "/tmp/missing.sock", poll_seconds=0.01)
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
             stop_event = asyncio.Event()
             published = []
 
@@ -149,11 +149,9 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
             with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "x", "OPENAI_API_KEY": "y"}):
                 with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
-                    with mock.patch.object(service, "start_session") as start_session:
-                        with mock.patch.object(service, "start_orchestrator") as start_orchestrator:
-                            await asyncio.gather(service.run(stop_event), stop_soon())
+                    with mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator:
+                        await asyncio.gather(service.run(stop_event), stop_soon())
 
-            start_session.assert_not_called()
             start_orchestrator.assert_not_called()
             self.assertTrue(any(message.get("status") == "waiting" for message in published))
 

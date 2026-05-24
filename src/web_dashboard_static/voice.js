@@ -182,8 +182,8 @@ function onVoiceToggle() {
   voiceWantEnabled = !voiceWantEnabled;
   updateVoiceToggleButton();
   const patch = voiceWantEnabled
-    ? { enabled: true, wake_word_enabled: true, force_active: false }
-    : { enabled: false, force_active: false };
+    ? { enabled: true, wake_word_enabled: true }
+    : { enabled: false };
   configStore.voice.set(patch);
   configStore.voice.flush().then((result) => {
     handleSaveError(result);
@@ -209,11 +209,20 @@ function onVoiceGainCommit(event) {
   configStore.voice.flush().then(handleSaveError);
 }
 
-function onTalkNow() {
-  voiceWantEnabled = true;
-  updateVoiceToggleButton();
-  configStore.voice.set({ enabled: true, wake_word_enabled: true, force_active: true });
-  configStore.voice.flush().then(handleSaveError);
+async function onTalkNow() {
+  try {
+    const response = await fetch('/voice/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: 'talk_now' }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      appendLog(`talk now failed: ${body.error || response.statusText}`);
+    }
+  } catch (exc) {
+    appendLog(`talk now failed: ${exc}`);
+  }
 }
 
 export function bindVoiceHandlers(bindOn) {

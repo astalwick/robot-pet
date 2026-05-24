@@ -14,10 +14,11 @@ from contextlib import suppress
 from pathlib import Path
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
+from control.motion_intent import request_motion_intent
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
+from telemetry.paths import DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.session import VoiceSession
@@ -92,11 +93,13 @@ class RobotVoiceService:
         telemetry_socket: str,
         command_socket: str = DEFAULT_VOICE_COMMAND_SOCKET,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
+        motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
         self.command_socket = command_socket
         self.poll_seconds = poll_seconds
+        self.motion_intent_socket = motion_intent_socket
         self.session: VoiceSession | None = None
         self.audio: ReSpeakerAudio | None = None
         self._io_stop_event: asyncio.Event | None = None
@@ -343,6 +346,7 @@ class RobotVoiceService:
         self._last_commit_at = time.monotonic()
         self._wake_event.clear()
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
+        motion_socket = self.motion_intent_socket
         self.session = VoiceSession(
             config,
             os.environ["ELEVENLABS_API_KEY"],
@@ -350,6 +354,7 @@ class RobotVoiceService:
             lambda update: self.publish(config, **update),
             audio=self.audio,
             event_callback=self.timeline.add_event,
+            motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
         )
         try:
             await self.session.start()
@@ -601,6 +606,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
+    parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     return parser
 
@@ -615,6 +621,7 @@ async def run_service(args: argparse.Namespace) -> None:
         args.telemetry_socket,
         command_socket=args.command_socket,
         poll_seconds=args.poll_seconds,
+        motion_intent_socket=args.motion_intent_socket,
     )
     await service.run(stop_event)
 

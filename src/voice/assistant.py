@@ -17,12 +17,19 @@ OPENAI_MODEL = "gpt-5.4-mini"
 DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a voice assistant named Bloop. Keep responses brief. "
-    "Answer naturally in one or two sentences. Avoid markdown unless the user explicitly asks for it. "
+    "You are a voice assistant named Bloop running on a small robot pet. "
+    "Keep responses brief. Answer naturally in one or two sentences. "
+    "Avoid markdown unless the user explicitly asks for it. "
     "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "
-    "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices."
+    "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices. "
+    "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
+    "If a tool call comes back with an error, briefly tell the user what happened in a friendly way "
+    "(for example, 'I tried, but the gamepad cut me off' or 'my body isn't responding right now')."
 )
 VOICE_SWITCH_TOOL_NAME = "switch_voice"
+WIGGLE_TOOL_NAME = "wiggle"
+MOVE_FORWARD_TOOL_NAME = "move_forward"
+MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 
 
@@ -125,6 +132,37 @@ VOICE_SWITCH_TOOL = {
 }
 
 
+WIGGLE_TOOL = {
+    "type": "function",
+    "name": WIGGLE_TOOL_NAME,
+    "description": "Wiggle the robot's body briefly. A small, playful left-right motion lasting about half a second.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+MOVE_FORWARD_TOOL = {
+    "type": "function",
+    "name": MOVE_FORWARD_TOOL_NAME,
+    "description": "Move the robot a tiny bit forward, about half a second of slow forward motion.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL]
+
+
 @dataclass(frozen=True)
 class VoiceSwitch:
     voice_id: str
@@ -221,6 +259,7 @@ async def stream_openai_words(
     openai_input: list[dict[str, str]],
     openai_client: Any,
     voice_state: VoiceState,
+    motion_intent_caller: Callable[[str], Any] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -232,7 +271,7 @@ async def stream_openai_words(
             "model": OPENAI_MODEL,
             "input": response_input,
             "reasoning": {"effort": "none"},
-            "tools": [VOICE_SWITCH_TOOL],
+            "tools": ASSISTANT_TOOLS,
             "stream": True,
         }
         if previous_response_id:
@@ -287,28 +326,43 @@ async def stream_openai_words(
         tool_outputs: list[dict[str, str]] = []
         for function_call in function_calls:
             call_id = getattr(function_call, "call_id", "")
-            if getattr(function_call, "name", "") != VOICE_SWITCH_TOOL_NAME:
+            name = getattr(function_call, "name", "")
+            if name == VOICE_SWITCH_TOOL_NAME:
+                voice_switch = voice_state.toggle()
+                yield voice_switch
                 tool_outputs.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id,
-                        "output": json.dumps({"error": "unsupported tool"}),
+                        "output": json.dumps(
+                            {
+                                "voice": voice_switch.voice_name,
+                                "voice_id": voice_switch.voice_id,
+                            }
+                        ),
                     }
                 )
                 continue
 
-            voice_switch = voice_state.toggle()
-            yield voice_switch
+            if name in MOTION_TOOL_NAMES:
+                if motion_intent_caller is None:
+                    result: dict[str, Any] = {"ok": False, "error": "motion_unavailable"}
+                else:
+                    result = await asyncio.to_thread(motion_intent_caller, name)
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result),
+                    }
+                )
+                continue
+
             tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": json.dumps(
-                        {
-                            "voice": voice_switch.voice_name,
-                            "voice_id": voice_switch.voice_id,
-                        }
-                    ),
+                    "output": json.dumps({"ok": False, "error": "unsupported tool"}),
                 }
             )
 
@@ -326,13 +380,16 @@ async def run_assistant_turn(
     voice_state: VoiceState,
     on_assistant_chunk: Callable[[str], None] | None = None,
     tts_speaker: Callable[..., Any] | None = None,
+    motion_intent_caller: Callable[[str], Any] | None = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
     assistant_chunks: list[str] = []
 
     async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
-        async for chunk in stream_openai_words(openai_input, openai_client, voice_state):
+        async for chunk in stream_openai_words(
+            openai_input, openai_client, voice_state, motion_intent_caller
+        ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
                 if on_assistant_chunk:
@@ -363,6 +420,7 @@ async def handle_scribe_events(
     on_status: Callable[[dict[str, object]], None] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     assistant_runner: Callable[..., Any] = run_assistant_turn,
+    motion_intent_caller: Callable[[str], Any] | None = None,
 ) -> None:
     active_turn: ActiveTurn | None = None
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -522,6 +580,7 @@ async def handle_scribe_events(
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=assistant_streamed_chunks.append,
+                motion_intent_caller=motion_intent_caller,
             )
         )
         turn = ActiveTurn(

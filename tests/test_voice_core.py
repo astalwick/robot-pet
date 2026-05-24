@@ -269,6 +269,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 return f"assistant response {turn_id}"
@@ -332,6 +333,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:
@@ -379,6 +381,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:
@@ -427,6 +430,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 return "ok"
@@ -521,6 +525,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:
@@ -576,6 +581,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 speaking_event.set()
@@ -662,6 +668,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 elevenlabs_api_key,
                 voice_state,
                 on_assistant_chunk=None,
+                **kwargs,
             ):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:

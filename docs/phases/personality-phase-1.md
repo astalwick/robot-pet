@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. The core STT -> LLM -> TTS loop is implemented and demoable. Wake word activation is still open.
+Complete.
 
 ## Goal
 
@@ -38,20 +38,15 @@ This phase is done when:
 - Use the ReSpeaker for audio input and output on the same USB path so built-in echo cancellation has the best chance to work.
 - Avoid pulling in a large smart-home platform just to get wake word.
 
-Until wake word lands, the web dashboard Listen toggle (`voice.json` `enabled`) is the stand-in for starting a session.
+The web dashboard Listen toggle (`voice.json` `enabled`) remains available as a manual override for starting a session.
 
 ## What Exists
 
 - `robot-voice.service` owns capture, Scribe streaming, OpenAI responses, Flash playback, conversation history, and barge-in.
 - ReSpeaker driver with configurable processed mic channel.
 - Dashboard voice controls and telemetry timeline.
-
-## Still Open
-
-- Wake word detection (openWakeWord on the Pi).
-- Wake chime after detection.
-- Idle timeout that ends the active session and returns to wake-word-only listening.
-- Demo reliability tuning as needed.
+- Wake word detection (openWakeWord on the Pi) with a short local chime after detection.
+- Idle timeout ends the active session and returns to wake-word-only listening.
 
 ## V1 Interaction Loop
 

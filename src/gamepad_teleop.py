@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning
-from control.commands import WheelSpeedCommand
+from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
+from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
 from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
 from drivers.motor import MotorDriver
@@ -25,7 +26,7 @@ from telemetry.messages import (
     motor_battery_message,
     wheel_message,
 )
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET
+from telemetry.paths import DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
 
@@ -54,6 +55,7 @@ class TeleopConfig:
     idle_release_delay: float = 0.25
     roboclaw_timeout: float = 0.5
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
+    motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET
 
 
 class GamepadTeleopRunner:
@@ -65,6 +67,7 @@ class GamepadTeleopRunner:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         telemetry_publisher: Callable[[str, dict[str, Any]], bool] = publish_message,
+        intent_bridge_factory: Callable[[], MotionIntentBridge] | None = None,
     ):
         self.config = config
         self.controller_factory = controller_factory or self._controller_factory
@@ -72,6 +75,10 @@ class GamepadTeleopRunner:
         self.sleep = sleep
         self.clock = clock
         self.telemetry_publisher = telemetry_publisher
+        self.intent_bridge_factory = intent_bridge_factory or self._intent_bridge_factory
+        self.intent_executor = MotionIntentExecutor()
+        self.intent_bridge: MotionIntentBridge | None = None
+        self.pending_intent_complete: Callable[[dict[str, Any]], None] | None = None
         self.stop_requested = False
         self.policy = GamepadTeleopPolicy(
             left_stick_deadzone=config.drive_tuning.left_stick_deadzone,
@@ -102,19 +109,43 @@ class GamepadTeleopRunner:
         self.stop_requested = True
 
     def run_forever(self):
-        while not self.stop_requested:
-            controller = self._wait_for_controller()
-            if self.stop_requested:
-                break
+        self._start_intent_bridge()
+        try:
+            while not self.stop_requested:
+                controller = self._wait_for_controller()
+                if self.stop_requested:
+                    break
 
-            motor = self._wait_for_roboclaw()
-            if self.stop_requested:
+                motor = self._wait_for_roboclaw()
+                if self.stop_requested:
+                    controller.cleanup()
+                    break
+
+                self._run_connected(controller, motor)
                 controller.cleanup()
-                break
+                motor.cleanup()
+        finally:
+            self._stop_intent_bridge()
 
-            self._run_connected(controller, motor)
-            controller.cleanup()
-            motor.cleanup()
+    def _start_intent_bridge(self):
+        try:
+            bridge = self.intent_bridge_factory()
+            bridge.start()
+        except OSError as exc:
+            log.warning("motion intent bridge unavailable: %s", exc)
+            self.intent_bridge = None
+            return
+        self.intent_bridge = bridge
+        log.info("motion intent socket at %s", self.config.motion_intent_socket)
+
+    def _stop_intent_bridge(self):
+        self._fail_pending_intent("shutdown")
+        if self.intent_bridge is not None:
+            self.intent_bridge.stop()
+            self.intent_bridge = None
+
+    def _intent_bridge_factory(self) -> MotionIntentBridge:
+        return MotionIntentBridge(self.config.motion_intent_socket)
 
     def _wait_for_controller(self):
         self._set_drive_state("waiting_for_controller")
@@ -179,7 +210,11 @@ class GamepadTeleopRunner:
             cycle_started = self.clock()
             now = cycle_started
             self.loop_samples.append(now)
-            command = self.policy.motion_from_state(controller.state)
+            gamepad_command = self.policy.motion_from_state(controller.state)
+            gamepad_active = gamepad_command.linear_x != 0.0 or gamepad_command.angular_z != 0.0
+            self._service_intent_requests(now)
+            intent_command = self._tick_intent(now, gamepad_active)
+            command = gamepad_command if gamepad_active or intent_command is None else intent_command
             wheels = self.mixer.mix(command)
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
             if controller.state.rb:
@@ -310,6 +345,39 @@ class GamepadTeleopRunner:
 
     def _release_idle(self, motor):
         motor.stop()
+
+    def _service_intent_requests(self, now: float) -> None:
+        if self.intent_bridge is None or self.pending_intent_complete is not None:
+            return
+        pending = self.intent_bridge.take_pending()
+        if pending is None:
+            return
+        tool, complete = pending
+        error = self.intent_executor.start(tool, now)
+        if error is not None:
+            complete({"ok": False, "error": error})
+            return
+        self.pending_intent_complete = complete
+
+    def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
+        if not self.intent_executor.is_active():
+            return None
+        tick = self.intent_executor.tick(now, gamepad_active)
+        if tick.finished and self.pending_intent_complete is not None:
+            complete = self.pending_intent_complete
+            self.pending_intent_complete = None
+            if tick.result == "completed":
+                complete({"ok": True, "result": "completed"})
+            else:
+                complete({"ok": False, "error": tick.result or "unknown"})
+        return tick.command
+
+    def _fail_pending_intent(self, reason: str) -> None:
+        if self.pending_intent_complete is None:
+            return
+        complete = self.pending_intent_complete
+        self.pending_intent_complete = None
+        complete({"ok": False, "error": reason})
 
     def _set_drive_state(self, state: str, reason: str | None = None):
         if state != self.drive_state or reason != self.stop_reason:
@@ -489,6 +557,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--idle-release-delay", type=float, default=0.25, help="Seconds after stopping before releasing to zero duty")
     parser.add_argument("--roboclaw-timeout", type=float, default=0.5, help="RoboClaw serial watchdog timeout in seconds")
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET, help="Telemetry hub publisher socket")
+    parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET, help="Voice motion intent listener socket")
     return parser
 
 
@@ -526,6 +595,7 @@ def main():
         idle_release_delay=args.idle_release_delay,
         roboclaw_timeout=args.roboclaw_timeout,
         telemetry_socket=args.telemetry_socket,
+        motion_intent_socket=args.motion_intent_socket,
     )
     runner = GamepadTeleopRunner(config)
     signal.signal(signal.SIGTERM, runner.request_stop)

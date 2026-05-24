@@ -210,6 +210,16 @@ function onVoiceGainCommit(event) {
 }
 
 async function onTalkNow() {
+  if (!voiceWantEnabled) {
+    voiceWantEnabled = true;
+    updateVoiceToggleButton();
+  }
+  configStore.voice.set({ enabled: true, wake_word_enabled: true });
+  const saveResult = await configStore.voice.flush();
+  if (saveResult && !saveResult.ok) {
+    handleSaveError(saveResult);
+    return;
+  }
   try {
     const response = await fetch('/voice/command', {
       method: 'POST',

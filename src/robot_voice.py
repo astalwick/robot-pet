@@ -148,21 +148,7 @@ class RobotVoiceService:
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
-                if config.wake_word_enabled:
-                    await self._run_wake_orchestrator(config)
-                    continue
-
-                await self.stop_all()
-                self.publish(
-                    config,
-                    status="waiting",
-                    assistant_speaking=False,
-                    last_error=None,
-                    partial_transcript=None,
-                    last_committed_transcript=None,
-                    last_assistant_text=None,
-                )
-                await asyncio.sleep(self.poll_seconds)
+                await self._run_wake_orchestrator(config)
 
             await self.stop_all()
         finally:
@@ -232,13 +218,14 @@ class RobotVoiceService:
 
     async def start_orchestrator(self, config: VoiceConfig) -> None:
         log.info(
-            "starting wake orchestrator: model=%s threshold=%.2f chime=%s idle=%.1fs",
+            "starting orchestrator: wake=%s model=%s threshold=%.2f chime=%s idle=%.1fs",
+            config.wake_word_enabled,
             config.wake_word_model_path,
             config.wake_threshold,
             config.wake_chime_path,
             config.session_idle_secs,
         )
-        if not Path(config.wake_chime_path).is_file():
+        if config.wake_word_enabled and not Path(config.wake_chime_path).is_file():
             self.publish(config, status="error", last_error=f"Chime WAV not found: {config.wake_chime_path}")
             return
 
@@ -263,25 +250,25 @@ class RobotVoiceService:
             self.publish(config, status="error", last_error=str(exc))
             return
 
-        try:
-            detector = WakeWordDetector(
-                config.wake_word_model_path,
-                threshold=config.wake_threshold,
-                debounce_secs=config.wake_debounce_secs,
-            )
-            wake_name = detector.load()
-            log.info("wake model loaded: key=%r", wake_name)
-        except Exception as exc:
-            log.warning("wake model load failed: %s", exc)
-            await self.stop_all()
-            self.publish(config, status="error", last_error=str(exc))
-            return
+        if config.wake_word_enabled:
+            try:
+                detector = WakeWordDetector(
+                    config.wake_word_model_path,
+                    threshold=config.wake_threshold,
+                    debounce_secs=config.wake_debounce_secs,
+                )
+                wake_name = detector.load()
+                log.info("wake model loaded: key=%r", wake_name)
+            except Exception as exc:
+                log.warning("wake model load failed: %s", exc)
+                await self.stop_all()
+                self.publish(config, status="error", last_error=str(exc))
+                return
+            self._detector = detector
+            self._wake_task = asyncio.create_task(self._run_wake_loop(config))
 
-        self._detector = detector
         self._mode = "armed"
-        self._wake_event.clear()
         self._last_commit_at = None
-        self._wake_task = asyncio.create_task(self._run_wake_loop(config))
         self._orchestrator_task = asyncio.create_task(self._run_orchestrator())
         self.publish(
             config,
@@ -302,14 +289,17 @@ class RobotVoiceService:
             config = self.active_config
             if config is None:
                 return
-            self.publish(
-                config,
-                status="waiting",
-                assistant_speaking=False,
-                partial_transcript=None,
-                last_committed_transcript=None,
-                last_assistant_text=None,
-            )
+            if not config.wake_word_enabled:
+                self._wake_event.set()
+            else:
+                self.publish(
+                    config,
+                    status="waiting",
+                    assistant_speaking=False,
+                    partial_transcript=None,
+                    last_committed_transcript=None,
+                    last_assistant_text=None,
+                )
             await self._wait_for_session_trigger()
             if self._io_stop_event is not None and self._io_stop_event.is_set():
                 return
@@ -350,7 +340,7 @@ class RobotVoiceService:
             return False
 
         self._mode = "active"
-        self._last_commit_at = None
+        self._last_commit_at = time.monotonic()
         self._wake_event.clear()
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
         self.session = VoiceSession(
@@ -390,13 +380,11 @@ class RobotVoiceService:
 
     async def _wait_for_idle(self) -> None:
         config = self.active_config
-        if config is None or config.session_idle_secs <= 0:
+        if config is None or config.session_idle_secs <= 0 or not config.wake_word_enabled:
             await asyncio.Event().wait()
             return
         while self._mode == "active":
             await asyncio.sleep(0.5)
-            if self._last_commit_at is None:
-                continue
             if self.status.get("status") != "listening":
                 continue
             if bool(self.status.get("assistant_speaking")):

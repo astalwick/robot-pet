@@ -23,7 +23,7 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_for_idle_after_commit(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
-        service.active_config = VoiceConfig(session_idle_secs=0.1)
+        service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.1)
         service._mode = "active"
         service._last_commit_at = time.monotonic() - 1.0
         service.status["status"] = "listening"
@@ -33,7 +33,7 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_wait_for_idle_ignored_while_speaking(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
-        service.active_config = VoiceConfig(session_idle_secs=0.05)
+        service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.05)
         service._mode = "active"
         service._last_commit_at = time.monotonic() - 1.0
         service.status["status"] = "listening"

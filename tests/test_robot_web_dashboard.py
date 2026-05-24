@@ -90,6 +90,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
         self.voice_config_path = os.path.join(self.tmpdir.name, "voice.json")
         self.voice_command_socket = os.path.join(self.tmpdir.name, "voice-command.sock")
+        self.redeploy_status_path = os.path.join(self.tmpdir.name, "redeploy-status.json")
         self.store = SnapshotStore(asyncio.get_running_loop())
         self.state = WebDashboardState(
             asyncio.get_running_loop(),
@@ -99,6 +100,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.vision_config_path,
             self.voice_config_path,
             self.voice_command_socket,
+            self.redeploy_status_path,
         )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
@@ -338,6 +340,37 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status["last_message"], "Redeploy complete.")
             self.assertGreater(status["result_serial"], 0)
 
+            with open(self.redeploy_status_path) as file_obj:
+                saved = json.load(file_obj)
+            self.assertEqual(saved["last_result"], "success")
+
+    async def test_redeploy_status_survives_dashboard_restart(self):
+        Path(self.redeploy_status_path).write_text(
+            json.dumps(
+                {
+                    "last_result": "success",
+                    "last_message": "Redeploy complete.",
+                }
+            )
+            + "\n"
+        )
+
+        new_state = WebDashboardState(
+            asyncio.get_running_loop(),
+            self.store,
+            STATIC_DIR,
+            self.teleop_config_path,
+            self.vision_config_path,
+            self.voice_config_path,
+            self.voice_command_socket,
+            self.redeploy_status_path,
+        )
+
+        status = new_state.redeploy_status()
+        self.assertEqual(status["last_result"], "success")
+        self.assertEqual(status["last_message"], "Redeploy complete.")
+        self.assertGreater(status["result_serial"], 0)
+
     async def test_redeploy_status_reports_failure_with_message(self):
         def fake_stream(command, on_line, *, env=None):
             on_line("Refusing to redeploy: working tree has local changes.")
@@ -433,6 +466,8 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("Redeploy succeeded:", self.redeploy_js)
         self.assertIn("Redeploy failed:", self.redeploy_js)
         self.assertIn("result_serial", self.redeploy_js)
+        self.assertIn("clearTimeout(redeployReloadTimer)", self.redeploy_js)
+        self.assertIn("showRedeployAlert('failed', String(err))", self.redeploy_js)
 
     def test_fix_wraparound_uses_safe_integer_exponent_not_signed_shift(self):
         self.assertIn("const max = (2 ** 31) - 1;", self.telemetry_js)

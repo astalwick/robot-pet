@@ -93,6 +93,24 @@ class TestRedeployRobot(unittest.TestCase):
         body = SCRIPT.read_text()
         self.assertNotIn("apt install", body)
 
+    def test_dashboard_restart_writes_success_before_restart(self):
+        body = SCRIPT.read_text()
+        self.assertIn(
+            """if [[ -n "${RESTART_SERVICES[robot-web-dashboard.service]:-}" ]]; then
+    if [[ -n "${ROBOT_PET_REDEPLOY_STATUS_FILE:-}" ]]; then
+      redeploy_status_dir="$(dirname "$ROBOT_PET_REDEPLOY_STATUS_FILE")"
+      redeploy_status_tmp="$redeploy_status_dir/.redeploy-status.$$"
+      mkdir -p "$redeploy_status_dir"
+      printf '{"last_result":"success","last_message":"Redeploy complete."}\\n' > "$redeploy_status_tmp"
+      mv "$redeploy_status_tmp" "$ROBOT_PET_REDEPLOY_STATUS_FILE"
+    fi
+    echo "restarting robot-web-dashboard.service"
+    sudo systemctl restart --no-block robot-web-dashboard.service
+  fi""",
+            body,
+        )
+        self.assertIn("ROBOT_PET_REDEPLOY_STATUS_FILE", body)
+
     def test_voice_paths_restart_voice_only(self):
         services = planned_services(["src/voice/assistant.py"])
         self.assertEqual(services, {"robot-voice.service"})

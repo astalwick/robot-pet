@@ -201,6 +201,13 @@ else
     fi
   done
   if [[ -n "${RESTART_SERVICES[robot-web-dashboard.service]:-}" ]]; then
+    if [[ -n "${ROBOT_PET_REDEPLOY_STATUS_FILE:-}" ]]; then
+      redeploy_status_dir="$(dirname "$ROBOT_PET_REDEPLOY_STATUS_FILE")"
+      redeploy_status_tmp="$redeploy_status_dir/.redeploy-status.$$"
+      mkdir -p "$redeploy_status_dir"
+      printf '{"last_result":"success","last_message":"Redeploy complete."}\n' > "$redeploy_status_tmp"
+      mv "$redeploy_status_tmp" "$ROBOT_PET_REDEPLOY_STATUS_FILE"
+    fi
     echo "restarting robot-web-dashboard.service"
     sudo systemctl restart --no-block robot-web-dashboard.service
   fi

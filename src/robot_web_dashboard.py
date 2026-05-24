@@ -56,6 +56,7 @@ from telemetry.socket_client import publish_message, subscribe
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_dashboard_static"
 REDEPLOY_ARM_SECONDS = 10.0
+DEFAULT_REDEPLOY_STATUS_PATH = "/tmp/robot-pet-web-dashboard-redeploy.json"
 SHUTDOWN_TIMEOUT_SECONDS = 2.0
 
 # Keep aligned with `systemctl enable` in setup.sh (all shipped robot *.service units).
@@ -443,7 +444,11 @@ def restart_gamepad_teleop() -> subprocess.CompletedProcess[str]:
 def redeploy_command() -> tuple[list[str], dict[str, str]]:
     repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     script = os.path.join(repo_dir, "scripts", "redeploy-robot.sh")
-    return [script], {**os.environ, "ROBOT_PET_REPO_DIR": repo_dir}
+    return [script], {
+        **os.environ,
+        "ROBOT_PET_REPO_DIR": repo_dir,
+        "ROBOT_PET_REDEPLOY_STATUS_FILE": DEFAULT_REDEPLOY_STATUS_PATH,
+    }
 
 
 class WebDashboardState:
@@ -458,6 +463,7 @@ class WebDashboardState:
         vision_config_path: str,
         voice_config_path: str,
         voice_command_socket: str,
+        redeploy_status_path: str = DEFAULT_REDEPLOY_STATUS_PATH,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
@@ -466,6 +472,7 @@ class WebDashboardState:
         self.vision_config_path = vision_config_path
         self.voice_config_path = voice_config_path
         self.voice_command_socket = voice_command_socket
+        self.redeploy_status_path = redeploy_status_path
         self.log_hub = BroadcastHub(loop)
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
@@ -476,6 +483,24 @@ class WebDashboardState:
         self.tuning_apply_running = False
 
     def _redeploy_status_locked(self) -> dict[str, Any]:
+        status_path = Path(self.redeploy_status_path)
+        try:
+            stat = status_path.stat()
+            payload = json.loads(status_path.read_text())
+        except FileNotFoundError:
+            payload = None
+        except (OSError, json.JSONDecodeError, TypeError):
+            payload = None
+        if (
+            payload is not None
+            and payload.get("last_result") in {"success", "failed"}
+            and stat.st_mtime_ns > self.redeploy_result_serial
+        ):
+            self.redeploy_running = False
+            self.redeploy_result_serial = stat.st_mtime_ns
+            self.redeploy_last_result = payload["last_result"]
+            self.redeploy_last_message = str(payload.get("last_message") or "")
+
         now = time.monotonic()
         return {
             "armed": now <= self.redeploy_armed_until,
@@ -505,13 +530,26 @@ class WebDashboardState:
             self.redeploy_armed_until = 0.0
             self.redeploy_last_result = None
             self.redeploy_last_message = ""
+            try:
+                Path(self.redeploy_status_path).unlink()
+            except FileNotFoundError:
+                pass
         threading.Thread(target=self._redeploy_thread, daemon=True).start()
         return True, self.redeploy_status()
 
     def _finish_redeploy(self, result: str, message: str) -> None:
+        try:
+            status_path = Path(self.redeploy_status_path)
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = status_path.with_name(f".{status_path.name}.{os.getpid()}.tmp")
+            tmp_path.write_text(json.dumps({"last_result": result, "last_message": message}) + "\n")
+            os.replace(tmp_path, status_path)
+            result_serial = status_path.stat().st_mtime_ns
+        except OSError:
+            result_serial = time.time_ns()
         with self._lock:
             self.redeploy_running = False
-            self.redeploy_result_serial += 1
+            self.redeploy_result_serial = result_serial
             self.redeploy_last_result = result
             self.redeploy_last_message = message
 

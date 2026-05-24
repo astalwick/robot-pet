@@ -31,6 +31,8 @@ function redeploySnapshot() {
 }
 
 function hideRedeployAlert() {
+  clearTimeout(redeployReloadTimer);
+  redeployReloadTimer = null;
   const alert = document.getElementById('redeploy-alert');
   const dismiss = document.getElementById('redeploy-alert-dismiss');
   if (!alert) return;
@@ -84,6 +86,7 @@ function onRedeploy() {
       redeployArmedUntil = 0;
       scheduleRedeployDisarm();
       updateRedeployButton();
+      showRedeployAlert('failed', String(err));
       appendLog(`redeploy arm failed: ${err}`);
     });
     redeployDbg('arm queued', { job, ...redeploySnapshot() });

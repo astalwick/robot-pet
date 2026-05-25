@@ -358,6 +358,7 @@ class RobotVoiceService:
         self._end_session_event.clear()
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
         motion_socket = self.motion_intent_socket
+        log.info("voice motion intent socket: %s", motion_socket)
         self.session = VoiceSession(
             config,
             os.environ["ELEVENLABS_API_KEY"],

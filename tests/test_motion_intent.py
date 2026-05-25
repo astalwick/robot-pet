@@ -247,7 +247,7 @@ class MotionToolDispatchTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_motion_tool_with_no_caller_reports_motion_unavailable(self):
+    def test_motion_tool_with_no_caller_reports_motion_caller_missing(self):
         async def run():
             class FakeResponses:
                 def __init__(self):
@@ -301,7 +301,7 @@ class MotionToolDispatchTest(unittest.TestCase):
             second_input = fake_responses.requests[1]["input"]
             self.assertEqual(
                 json.loads(second_input[0]["output"]),
-                {"ok": False, "error": "motion_unavailable"},
+                {"ok": False, "error": "motion_caller_missing"},
             )
 
         asyncio.run(run())

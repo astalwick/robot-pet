@@ -163,6 +163,7 @@ class GamepadTeleopRunner:
     def _wait_for_controller(self):
         self._set_drive_state("waiting_for_controller")
         while not self.stop_requested:
+            self._ensure_intent_bridge()
             self._publish_status_update()
             controller = self.controller_factory()
             if controller.connect():
@@ -177,6 +178,7 @@ class GamepadTeleopRunner:
     def _wait_for_roboclaw(self):
         self._set_drive_state("waiting_for_roboclaw")
         while not self.stop_requested:
+            self._ensure_intent_bridge()
             self._publish_status_update()
             try:
                 motor = self.motor_factory()
@@ -199,6 +201,8 @@ class GamepadTeleopRunner:
         deadline = self.clock() + duration
         next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
         while self.clock() < deadline and not self.stop_requested:
+            if self.intent_bridge is not None:
+                self._reject_intent_requests_while_not_driving()
             if self.clock() >= next_publish_at:
                 self._publish_status_update(controller_reader_alive=controller_reader_alive)
                 next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
@@ -372,6 +376,15 @@ class GamepadTeleopRunner:
             complete({"ok": False, "error": error})
             return
         self.pending_intent_complete = complete
+
+    def _reject_intent_requests_while_not_driving(self) -> None:
+        if self.intent_bridge is None:
+            return
+        pending = self.intent_bridge.take_pending()
+        if pending is None:
+            return
+        _, complete = pending
+        complete({"ok": False, "error": self.drive_state})
 
     def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
         if not self.intent_executor.is_active():

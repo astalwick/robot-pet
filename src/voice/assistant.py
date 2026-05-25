@@ -371,7 +371,7 @@ async def stream_openai_words(
                     result = {"ok": True, "ended": True}
             elif name in MOTION_TOOL_NAMES:
                 if motion_intent_caller is None:
-                    result = {"ok": False, "error": "motion_unavailable"}
+                    result = {"ok": False, "error": "motion_caller_missing"}
                 else:
                     result = await asyncio.to_thread(motion_intent_caller, name)
             else:

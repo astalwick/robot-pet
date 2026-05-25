@@ -115,6 +115,7 @@ class FakeIntentBridge:
         self.socket_path = socket_path
         self.started = False
         self.stopped = False
+        self.pending = None
 
     def start(self):
         self.started = True
@@ -127,6 +128,11 @@ class FakeIntentBridge:
             os.unlink(self.socket_path)
         except FileNotFoundError:
             pass
+
+    def take_pending(self):
+        pending = self.pending
+        self.pending = None
+        return pending
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
@@ -541,6 +547,19 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             self.assertEqual(len(bridges), 2)
             self.assertTrue(bridges[0].stopped)
             self.assertTrue(bridges[1].started)
+
+    def test_waiting_for_controller_rejects_motion_intent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = []
+            bridge = FakeIntentBridge(os.path.join(tmpdir, "motion.sock"))
+            bridge.pending = ("wiggle", result.append)
+            runner = GamepadTeleopRunner(fast_config(), sleep=lambda _seconds: None)
+            runner.intent_bridge = bridge
+            runner._set_drive_state("waiting_for_controller")
+
+            runner._reject_intent_requests_while_not_driving()
+
+            self.assertEqual(result, [{"ok": False, "error": "waiting_for_controller"}])
 
 
 if __name__ == "__main__":

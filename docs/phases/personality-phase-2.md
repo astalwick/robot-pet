@@ -37,7 +37,7 @@ Both are time-bounded, parameterless, and produce small wheel speeds via the exi
 
 ### Architecture
 
-- The voice service (`robot-voice`) never touches motor hardware. It calls a tiny Unix-socket motion-intent protocol (`/run/robot-pet/motion-intent.sock`).
+- The voice service (`robot-voice`) never touches motor hardware. It calls a tiny Unix-socket motion-intent protocol (`/run/robot-pet-gamepad/motion-intent.sock`).
 - A pure-state executor (`src/control/motion_intent.py`) decides per control-loop tick whether to emit a `MotionCommand`, finish, or be preempted.
 - `gamepad-teleop` temporarily hosts the executor and the intent socket — it polls the bridge each tick, runs the executor through the same mixer that gamepad input uses, and reports the outcome back to the voice client. Body Phase 2 replaces this with a dedicated `robot-motion` service that owns the RoboClaw.
 

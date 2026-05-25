@@ -47,6 +47,10 @@ Restart it after changing code:
 sudo systemctl restart gamepad-teleop
 ```
 
+Voice motion tools (`wiggle`, `move_forward`) use a Unix socket at `/run/robot-pet-gamepad/motion-intent.sock` created by this service. If voice reports `motion_socket_missing`, check `journalctl -u gamepad-teleop` for `motion intent socket at`, `motion intent socket disappeared`, or `motion intent bridge unavailable`. Restarting `gamepad-teleop` recreates the socket; a full reboot is not required.
+
+`/run/robot-pet-gamepad` is owned by `gamepad-teleop.service` (`RuntimeDirectory=robot-pet-gamepad`). This keeps the motion socket out of the telemetry runtime directory, so a telemetry restart cannot delete it. Gamepad teleop also re-binds on the next control-loop tick if the socket path still disappears.
+
 ## Foreground Debugging
 
 Stop the service before running a foreground teleop process so only one process owns the RoboClaw:

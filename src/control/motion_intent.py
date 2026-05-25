@@ -265,9 +265,9 @@ def request_motion_intent(
                     break
                 buffer += chunk
     except FileNotFoundError:
-        return {"ok": False, "error": "motion_unavailable"}
+        return {"ok": False, "error": "motion_socket_missing"}
     except (ConnectionRefusedError, ConnectionResetError, BrokenPipeError):
-        return {"ok": False, "error": "motion_unavailable"}
+        return {"ok": False, "error": "motion_socket_refused"}
     except TimeoutError:
         return {"ok": False, "error": "timeout"}
     except OSError as exc:

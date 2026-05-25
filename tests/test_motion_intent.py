@@ -139,11 +139,20 @@ class MotionIntentBridgeTest(unittest.TestCase):
 
 
 class MotionIntentClientErrorTest(unittest.TestCase):
-    def test_missing_socket_returns_motion_unavailable(self):
+    def test_missing_socket_returns_motion_socket_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             missing = os.path.join(tmpdir, "nope.sock")
             result = request_motion_intent(missing, "wiggle", timeout=0.5)
-        self.assertEqual(result, {"ok": False, "error": "motion_unavailable"})
+        self.assertEqual(result, {"ok": False, "error": "motion_socket_missing"})
+
+    def test_stale_socket_returns_motion_socket_refused(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "stale.sock")
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(socket_path)
+            server.close()
+            result = request_motion_intent(socket_path, "wiggle", timeout=0.5)
+        self.assertEqual(result, {"ok": False, "error": "motion_socket_refused"})
 
     def test_no_response_when_server_closes_silently(self):
         with tempfile.TemporaryDirectory() as tmpdir:

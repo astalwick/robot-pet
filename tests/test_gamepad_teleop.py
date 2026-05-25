@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 import logging
 from types import SimpleNamespace
@@ -107,6 +108,25 @@ class FakeMotor:
 
     def cleanup(self):
         self.cleaned_up = True
+
+
+class FakeIntentBridge:
+    def __init__(self, socket_path):
+        self.socket_path = socket_path
+        self.started = False
+        self.stopped = False
+
+    def start(self):
+        self.started = True
+        with open(self.socket_path, "w"):
+            pass
+
+    def stop(self):
+        self.stopped = True
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
@@ -496,6 +516,31 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         self.assertEqual(len(published), 1)
         self.assertEqual(published[0]["drive_status"]["state"], "stopped")
+
+    def test_intent_bridge_rebinds_when_socket_path_disappears(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "motion.sock")
+            bridges = []
+
+            def bridge_factory():
+                bridge = FakeIntentBridge(socket_path)
+                bridges.append(bridge)
+                return bridge
+
+            runner = GamepadTeleopRunner(
+                fast_config(motion_intent_socket=socket_path),
+                intent_bridge_factory=bridge_factory,
+                sleep=lambda _seconds: None,
+            )
+
+            runner._ensure_intent_bridge()
+            runner._ensure_intent_bridge()
+            os.unlink(socket_path)
+            runner._ensure_intent_bridge()
+
+            self.assertEqual(len(bridges), 2)
+            self.assertTrue(bridges[0].stopped)
+            self.assertTrue(bridges[1].started)
 
 
 if __name__ == "__main__":

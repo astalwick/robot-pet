@@ -2,6 +2,7 @@
 """Boot-ready gamepad teleop service for RoboClaw closed-loop speed control."""
 
 import argparse
+import os
 import signal
 import threading
 import time
@@ -109,9 +110,9 @@ class GamepadTeleopRunner:
         self.stop_requested = True
 
     def run_forever(self):
-        self._start_intent_bridge()
         try:
             while not self.stop_requested:
+                self._ensure_intent_bridge()
                 controller = self._wait_for_controller()
                 if self.stop_requested:
                     break
@@ -127,12 +128,24 @@ class GamepadTeleopRunner:
         finally:
             self._stop_intent_bridge()
 
-    def _start_intent_bridge(self):
+    def _ensure_intent_bridge(self) -> None:
+        if self.intent_bridge is not None:
+            if os.path.exists(self.config.motion_intent_socket):
+                return
+            log.warning(
+                "motion intent socket disappeared (%s), rebinding",
+                self.config.motion_intent_socket,
+            )
+            self._stop_intent_bridge()
         try:
             bridge = self.intent_bridge_factory()
             bridge.start()
         except OSError as exc:
-            log.warning("motion intent bridge unavailable: %s", exc)
+            log.error(
+                "motion intent bridge unavailable (%s): %s",
+                self.config.motion_intent_socket,
+                exc,
+            )
             self.intent_bridge = None
             return
         self.intent_bridge = bridge
@@ -347,6 +360,7 @@ class GamepadTeleopRunner:
         motor.stop()
 
     def _service_intent_requests(self, now: float) -> None:
+        self._ensure_intent_bridge()
         if self.intent_bridge is None or self.pending_intent_complete is not None:
             return
         pending = self.intent_bridge.take_pending()

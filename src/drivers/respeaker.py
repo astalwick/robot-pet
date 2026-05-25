@@ -324,6 +324,15 @@ class ReSpeakerAudio:
                 return
             await self._finish_playback(drain=drain)
 
+    def stop_playback_now(self) -> None:
+        if self._playback_task is not None:
+            self._playback_task.cancel()
+            self._playback_task.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+        self._playback_queue = None
+        self._playback_task = None
+        self._active_playback_id = None
+        self._output_buffer.clear()
+
     async def play_wav(self, path: str) -> None:
         import wave
 

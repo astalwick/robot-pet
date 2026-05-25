@@ -560,6 +560,18 @@ async def handle_scribe_events(
         barge_in_hearing_reported = True
         publish_barge_in_event(source, "hearing")
 
+    def trigger_stop_playback_now() -> None:
+        if not stop_playback_now:
+            return
+        try:
+            result = stop_playback_now()
+        except Exception:
+            log.exception("stop playback failed")
+            return
+        if asyncio.iscoroutine(result):
+            task = asyncio.create_task(result)
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
     async def cancel_active_turn(reason: str) -> None:
         nonlocal active_turn
         turn = active_turn
@@ -570,9 +582,7 @@ async def handle_scribe_events(
             if streamed:
                 emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
             if stop_playback_now and turn.is_playing_back():
-                result = stop_playback_now()
-                if asyncio.iscoroutine(result):
-                    await result
+                trigger_stop_playback_now()
             turn.request_cancel(reason)
 
     async def release_speculative_playback(turn: ActiveTurn) -> None:

@@ -135,9 +135,10 @@ class VoiceSession:
         for task in done:
             task.result()
 
-    async def stop_playback_now(self) -> None:
-        await self.audio.end_playback(drain=False)
+    def stop_playback_now(self) -> None:
+        self.audio.stop_playback_now()
         self.audio_levels["playback_rms"] = 0
+        self.audio_levels["playback_at"] = 0.0
 
     async def _speak(self, text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event, turn_id):
         from voice.elevenlabs_io import speak_with_eleven_flash

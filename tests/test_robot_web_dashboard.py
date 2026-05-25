@@ -223,7 +223,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("barge_in_enabled", keys)
         self.assertIn("barge_in_min_rms", keys)
         self.assertIn("barge_in_sustain_ms", keys)
-        self.assertIn("barge_in_playback_leakage_ratio", keys)
+        self.assertNotIn("barge_in_playback_leakage_ratio", keys)
         types = {field["key"]: field["type"] for field in payload["fields"]}
         self.assertEqual(types["wake_word_enabled"], "boolean")
         self.assertEqual(types["input_device"], "text")

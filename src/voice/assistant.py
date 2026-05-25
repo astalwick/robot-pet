@@ -66,20 +66,18 @@ def refresh_barge_in_gate(
     gate_above_since = audio_levels.get("gate_above_since")
     if gate_above_since is not None and not isinstance(gate_above_since, (int, float)):
         gate_above_since = None
-    playback_rms = effective_playback_rms(audio_levels, now)
     if assistant_speaking:
         gate_above_since, gate_open, threshold_rms, reason = update_near_end_gate(
             policy,
             gate_above_since,
             now,
             mic_rms,
-            playback_rms,
         )
     else:
         gate_above_since = None
         gate_open = False
         reason = "assistant_not_speaking"
-        threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
+        threshold_rms = policy.barge_in_min_rms
     if gate_above_since is None:
         audio_levels.pop("gate_above_since", None)
     else:
@@ -94,9 +92,8 @@ def update_near_end_gate(
     gate_above_since: float | None,
     now: float,
     mic_rms: int,
-    playback_rms: int,
 ) -> tuple[float | None, bool, int, str]:
-    threshold_rms = policy.dynamic_barge_in_threshold_rms(playback_rms)
+    threshold_rms = policy.barge_in_min_rms
     if mic_rms < threshold_rms:
         return None, False, threshold_rms, "low_rms"
 
@@ -468,7 +465,6 @@ async def handle_scribe_events(
     gate_threshold_rms = policy.barge_in_min_rms
     gate_last_reason = "assistant_not_speaking"
     recent_barge_in_mic_rms = 0
-    recent_barge_in_playback_rms = 0
     recent_barge_in_gate_open = False
     recent_barge_in_gate_reason = "assistant_not_speaking"
     recent_barge_in_audio_at = 0.0
@@ -620,12 +616,11 @@ async def handle_scribe_events(
 
     async def start_turn(prompt: str, speculative: bool) -> None:
         nonlocal active_turn, next_turn_id, barge_in_hearing_reported
-        nonlocal recent_barge_in_mic_rms, recent_barge_in_playback_rms
+        nonlocal recent_barge_in_mic_rms
         nonlocal recent_barge_in_gate_open, recent_barge_in_gate_reason, recent_barge_in_audio_at
         await cancel_active_turn("new_turn")
         barge_in_hearing_reported = False
         recent_barge_in_mic_rms = 0
-        recent_barge_in_playback_rms = 0
         recent_barge_in_gate_open = False
         recent_barge_in_gate_reason = "assistant_not_speaking"
         recent_barge_in_audio_at = 0.0
@@ -701,12 +696,10 @@ async def handle_scribe_events(
             publish_barge_in_state(now)
             playback_rms = effective_playback_rms(levels, now)
             decision_mic_rms = last_local_speech_rms
-            decision_playback_rms = playback_rms
             decision_gate_open = gate_open
             decision_gate_reason = gate_last_reason
             if now - recent_barge_in_audio_at <= policy.local_speech_window_secs:
                 decision_mic_rms = recent_barge_in_mic_rms
-                decision_playback_rms = recent_barge_in_playback_rms
                 decision_gate_open = recent_barge_in_gate_open
                 decision_gate_reason = recent_barge_in_gate_reason
             should_barge_in, gate_last_reason = policy.barge_in_decision(
@@ -715,26 +708,24 @@ async def handle_scribe_events(
                 gate_open=decision_gate_open,
                 assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
                 mic_rms=decision_mic_rms,
-                playback_rms=decision_playback_rms,
                 gate_reason=decision_gate_reason,
                 assistant_text=active_turn.assistant_streamed_text(),
             )
-            decision_threshold_rms = policy.dynamic_barge_in_threshold_rms(decision_playback_rms)
             emit(
                 "barge_in_considered",
                 source="partial",
                 accepted=should_barge_in,
                 reason=gate_last_reason,
                 mic=decision_mic_rms,
-                playback=decision_playback_rms,
-                threshold=decision_threshold_rms,
+                playback=playback_rms,
+                threshold=policy.barge_in_min_rms,
             )
             status(
                 **barge_in_telemetry(
                     policy,
                     decision_mic_rms,
-                    decision_playback_rms,
-                    decision_threshold_rms,
+                    playback_rms,
+                    policy.barge_in_min_rms,
                     decision_gate_open,
                     gate_last_reason,
                 )
@@ -796,12 +787,10 @@ async def handle_scribe_events(
             publish_barge_in_state(now)
             playback_rms = effective_playback_rms(levels, now)
             decision_mic_rms = last_local_speech_rms
-            decision_playback_rms = playback_rms
             decision_gate_open = gate_open
             decision_gate_reason = gate_last_reason
             if now - recent_barge_in_audio_at <= policy.local_speech_window_secs:
                 decision_mic_rms = recent_barge_in_mic_rms
-                decision_playback_rms = recent_barge_in_playback_rms
                 decision_gate_open = recent_barge_in_gate_open
                 decision_gate_reason = recent_barge_in_gate_reason
             should_barge_in, gate_last_reason = policy.barge_in_decision(
@@ -810,26 +799,24 @@ async def handle_scribe_events(
                 gate_open=decision_gate_open,
                 assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
                 mic_rms=decision_mic_rms,
-                playback_rms=decision_playback_rms,
                 gate_reason=decision_gate_reason,
                 assistant_text=active_turn.assistant_streamed_text(),
             )
-            decision_threshold_rms = policy.dynamic_barge_in_threshold_rms(decision_playback_rms)
             emit(
                 "barge_in_considered",
                 source="commit",
                 accepted=should_barge_in,
                 reason=gate_last_reason,
                 mic=decision_mic_rms,
-                playback=decision_playback_rms,
-                threshold=decision_threshold_rms,
+                playback=playback_rms,
+                threshold=policy.barge_in_min_rms,
             )
             status(
                 **barge_in_telemetry(
                     policy,
                     decision_mic_rms,
-                    decision_playback_rms,
-                    decision_threshold_rms,
+                    playback_rms,
+                    policy.barge_in_min_rms,
                     decision_gate_open,
                     gate_last_reason,
                 )
@@ -913,12 +900,10 @@ async def handle_scribe_events(
                 levels["mic_rms"] = last_local_speech_rms
                 publish_barge_in_state(now, last_local_speech_rms)
                 if active_turn and active_turn.is_active() and active_turn.is_speaking():
-                    playback_rms = effective_playback_rms(levels, now)
                     fresh = now - recent_barge_in_audio_at <= policy.local_speech_window_secs
-                    if last_local_speech_rms >= policy.dynamic_barge_in_threshold_rms(playback_rms) or gate_open:
+                    if last_local_speech_rms >= policy.user_active_rms_threshold or gate_open:
                         if not fresh or last_local_speech_rms > recent_barge_in_mic_rms:
                             recent_barge_in_mic_rms = last_local_speech_rms
-                            recent_barge_in_playback_rms = playback_rms
                         if not fresh:
                             recent_barge_in_gate_open = False
                         if gate_open:

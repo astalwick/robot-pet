@@ -74,7 +74,6 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertTrue(config.barge_in_enabled)
         self.assertEqual(config.barge_in_min_rms, 700)
         self.assertEqual(config.barge_in_sustain_ms, 350)
-        self.assertEqual(config.barge_in_playback_leakage_ratio, 1.8)
 
     def test_wake_defaults_are_present(self):
         config = VoiceConfig()

@@ -201,7 +201,6 @@ def voice_update(
     barge_in_enabled: bool | None = None,
     barge_in_min_rms: int | None = None,
     barge_in_sustain_ms: int | None = None,
-    barge_in_playback_leakage_ratio: float | None = None,
     barge_in_threshold_rms: int | None = None,
     barge_in_mic_rms: int | None = None,
     barge_in_playback_rms: int | None = None,
@@ -242,8 +241,6 @@ def voice_update(
         payload["barge_in_min_rms"] = barge_in_min_rms
     if barge_in_sustain_ms is not None:
         payload["barge_in_sustain_ms"] = barge_in_sustain_ms
-    if barge_in_playback_leakage_ratio is not None:
-        payload["barge_in_playback_leakage_ratio"] = barge_in_playback_leakage_ratio
     if barge_in_threshold_rms is not None:
         payload["barge_in_threshold_rms"] = barge_in_threshold_rms
     if barge_in_mic_rms is not None:

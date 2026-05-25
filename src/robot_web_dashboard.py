@@ -230,15 +230,6 @@ VOICE_FIELDS = (
         "step": 50,
     },
     {
-        "key": "barge_in_playback_leakage_ratio",
-        "label": "Playback leakage ratio",
-        "type": "number",
-        "help": "0.5 .. 5.0",
-        "min": 0.5,
-        "max": 5.0,
-        "step": 0.1,
-    },
-    {
         "key": "barge_in_cooldown_secs",
         "label": "Barge-in cooldown (s)",
         "type": "number",

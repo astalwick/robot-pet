@@ -78,6 +78,30 @@ class TurnPolicyTest(unittest.TestCase):
             )
         )
 
+    def test_explicit_interrupt_uses_user_active_threshold(self):
+        should_barge_in, reason = TurnPolicy().barge_in_decision(
+            "Okay stop please",
+            assistant_speaking=True,
+            gate_open=False,
+            mic_rms=200,
+            assistant_speech_elapsed_secs=1.0,
+        )
+
+        self.assertTrue(should_barge_in)
+        self.assertEqual(reason, "explicit_interrupt")
+
+    def test_explicit_interrupt_still_requires_local_speech(self):
+        should_barge_in, reason = TurnPolicy().barge_in_decision(
+            "stop",
+            assistant_speaking=True,
+            gate_open=False,
+            mic_rms=12,
+            assistant_speech_elapsed_secs=1.0,
+        )
+
+        self.assertFalse(should_barge_in)
+        self.assertEqual(reason, "low_rms")
+
     def test_assistant_echo_partial_while_speaking_does_not_barge_in(self):
         should_barge_in, reason = TurnPolicy().barge_in_decision(
             "Sure. Here's a tiny one.",
@@ -103,17 +127,25 @@ class TurnPolicyTest(unittest.TestCase):
         self.assertFalse(should_barge_in)
         self.assertEqual(reason, "disabled")
 
-    def test_dynamic_threshold_uses_playback_leakage(self):
-        policy = TurnPolicy(barge_in_min_rms=500, barge_in_playback_leakage_ratio=2.0)
-        self.assertEqual(policy.dynamic_barge_in_threshold_rms(400), 800)
+    def test_barge_in_threshold_uses_min_rms(self):
+        should_barge_in, reason = TurnPolicy(barge_in_min_rms=500).barge_in_decision(
+            "tell me another story please",
+            assistant_speaking=True,
+            gate_open=True,
+            mic_rms=400,
+            assistant_speech_elapsed_secs=1.0,
+        )
+
+        self.assertFalse(should_barge_in)
+        self.assertEqual(reason, "low_rms")
 
     def test_sustained_near_end_gate_requires_continuous_audio(self):
         policy = TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=350)
-        above_since, gate_open, threshold, reason = update_near_end_gate(policy, None, 0.0, 900, 0)
+        above_since, gate_open, threshold, reason = update_near_end_gate(policy, None, 0.0, 900)
         self.assertFalse(gate_open)
         self.assertEqual(reason, "not_sustained")
         self.assertEqual(threshold, 500)
-        above_since, gate_open, threshold, reason = update_near_end_gate(policy, above_since, 0.4, 900, 0)
+        above_since, gate_open, threshold, reason = update_near_end_gate(policy, above_since, 0.4, 900)
         self.assertTrue(gate_open)
 
     def test_scribe_upload_gate_holds_open_after_last_above_threshold(self):
@@ -157,7 +189,7 @@ class TurnPolicyTest(unittest.TestCase):
 
     def test_single_loud_spike_does_not_open_gate_without_sustain(self):
         policy = TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=350)
-        _, gate_open, _, reason = update_near_end_gate(policy, None, 1.0, 1200, 300)
+        _, gate_open, _, reason = update_near_end_gate(policy, None, 1.0, 1200)
         self.assertFalse(gate_open)
         self.assertEqual(reason, "not_sustained")
 

@@ -33,7 +33,6 @@ class TurnPolicy:
     barge_in_enabled: bool = True
     barge_in_min_rms: int = 700
     barge_in_sustain_ms: int = 350
-    barge_in_playback_leakage_ratio: float = 1.8
     barge_in_explicit_requires_sustain: bool = False
     user_active_rms_threshold: int = USER_ACTIVE_RMS_THRESHOLD
     local_speech_window_secs: float = LOCAL_SPEECH_WINDOW_SECS
@@ -142,15 +141,6 @@ class TurnPolicy:
 
         return False
 
-    def dynamic_barge_in_threshold_rms(self, playback_rms: int) -> int:
-        return max(
-            self.barge_in_min_rms,
-            int(playback_rms * self.barge_in_playback_leakage_ratio),
-        )
-
-    def mic_above_barge_in_threshold(self, mic_rms: int, playback_rms: int) -> bool:
-        return mic_rms >= self.dynamic_barge_in_threshold_rms(playback_rms)
-
     def should_accept_barge_in(
         self,
         text: str,
@@ -158,7 +148,6 @@ class TurnPolicy:
         gate_open: bool,
         assistant_speech_elapsed_secs: float | None = None,
         mic_rms: int | None = None,
-        playback_rms: int = 0,
         gate_reason: str = "not_sustained",
         assistant_text: str = "",
     ) -> bool:
@@ -168,7 +157,6 @@ class TurnPolicy:
             gate_open,
             assistant_speech_elapsed_secs,
             mic_rms,
-            playback_rms,
             gate_reason,
             assistant_text,
         )
@@ -181,7 +169,6 @@ class TurnPolicy:
         gate_open: bool,
         assistant_speech_elapsed_secs: float | None = None,
         mic_rms: int | None = None,
-        playback_rms: int = 0,
         gate_reason: str = "not_sustained",
         assistant_text: str = "",
     ) -> tuple[bool, str]:
@@ -190,9 +177,9 @@ class TurnPolicy:
         if not self.barge_in_enabled:
             return False, "disabled"
 
-        mic_ok = mic_rms is None or self.mic_above_barge_in_threshold(mic_rms, playback_rms)
+        mic_ok = mic_rms is None or mic_rms >= self.barge_in_min_rms
         if self.has_explicit_interrupt(text):
-            if not mic_ok:
+            if mic_rms is not None and mic_rms < self.user_active_rms_threshold:
                 return False, "low_rms"
             if self.barge_in_explicit_requires_sustain and not gate_open:
                 return False, "not_sustained"
@@ -238,7 +225,6 @@ def turn_policy_from_config(config: VoiceConfig) -> TurnPolicy:
         barge_in_enabled=config.barge_in_enabled,
         barge_in_min_rms=config.barge_in_min_rms,
         barge_in_sustain_ms=config.barge_in_sustain_ms,
-        barge_in_playback_leakage_ratio=config.barge_in_playback_leakage_ratio,
         barge_in_explicit_requires_sustain=config.barge_in_explicit_requires_sustain,
         assistant_speech_barge_in_cooldown_secs=config.barge_in_cooldown_secs,
         assistant_echo_similarity=config.assistant_echo_similarity,
@@ -271,7 +257,6 @@ def should_accept_barge_in(
     gate_open: bool,
     assistant_speech_elapsed_secs: float | None = None,
     mic_rms: int | None = None,
-    playback_rms: int = 0,
     gate_reason: str = "not_sustained",
 ) -> bool:
     return DEFAULT_TURN_POLICY.should_accept_barge_in(
@@ -280,6 +265,5 @@ def should_accept_barge_in(
         gate_open,
         assistant_speech_elapsed_secs,
         mic_rms,
-        playback_rms,
         gate_reason,
     )

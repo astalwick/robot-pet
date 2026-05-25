@@ -606,7 +606,6 @@ class RobotVoiceService:
                 ),
                 barge_in_min_rms=config.barge_in_min_rms,
                 barge_in_sustain_ms=config.barge_in_sustain_ms,
-                barge_in_playback_leakage_ratio=config.barge_in_playback_leakage_ratio,
                 barge_in_threshold_rms=optional_int(self.status["barge_in_threshold_rms"]),
                 barge_in_mic_rms=optional_int(self.status["barge_in_mic_rms"]),
                 barge_in_playback_rms=optional_int(self.status["barge_in_playback_rms"]),

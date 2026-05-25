@@ -41,7 +41,6 @@ class VoiceConfig:
     barge_in_cooldown_secs: float = 0.35
     barge_in_min_rms: int = 700
     barge_in_sustain_ms: int = 350
-    barge_in_playback_leakage_ratio: float = 1.8
     barge_in_explicit_interrupts: str = "stop,wait,no,cancel,pause"
     barge_in_explicit_requires_sustain: bool = False
     assistant_echo_similarity: float = 0.9
@@ -74,9 +73,6 @@ class VoiceConfig:
             barge_in_cooldown_secs=float(values.get("barge_in_cooldown_secs", defaults.barge_in_cooldown_secs)),
             barge_in_min_rms=int(values.get("barge_in_min_rms", defaults.barge_in_min_rms)),
             barge_in_sustain_ms=int(values.get("barge_in_sustain_ms", defaults.barge_in_sustain_ms)),
-            barge_in_playback_leakage_ratio=float(
-                values.get("barge_in_playback_leakage_ratio", defaults.barge_in_playback_leakage_ratio)
-            ),
             barge_in_explicit_interrupts=str(
                 values.get("barge_in_explicit_interrupts", defaults.barge_in_explicit_interrupts)
             ),

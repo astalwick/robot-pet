@@ -275,6 +275,60 @@ class ReSpeakerTest(unittest.TestCase):
         finally:
             del sys.modules["sounddevice"]
 
+    def test_stop_playback_now_is_synchronous_and_clears_buffer(self):
+        # Phase 2 acceptance: stop_playback_now() is the barge-in fast path.
+        # It must not await anything (so the scribe event loop never blocks),
+        # it must drop pending PCM, and it must release the active playback id
+        # so a stale end_playback(old_id) is a no-op.
+        class FakeStream:
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
+                self._callback = callback
+                self._blocksize = blocksize
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+            def pump(self, _buffer):
+                return None
+
+        class FakeSoundDevice:
+            RawInputStream = FakeStream
+            RawOutputStream = FakeStream
+
+            @staticmethod
+            def query_devices():
+                return []
+
+        async def run():
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.start_io(asyncio.Event())
+            playback_id = await audio.begin_playback()
+            await audio.write_output(b"about to be dropped")
+            for _ in range(10):
+                if audio._output_buffer.pending_bytes() > 0:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertGreater(audio._output_buffer.pending_bytes(), 0)
+
+            self.assertIsNone(audio.stop_playback_now())
+            self.assertEqual(audio._output_buffer.pending_bytes(), 0)
+            self.assertIsNone(audio._playback_queue)
+            self.assertIsNone(audio._active_playback_id)
+
+            await audio.end_playback(playback_id)
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
     def test_begin_playback_waits_for_in_flight_end(self):
         class FakeStream:
             writes: list[bytes] = []

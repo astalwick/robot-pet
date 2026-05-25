@@ -5,6 +5,7 @@ import { connectLogs, bindLogToolbar, bindLogScroll } from './logs.js';
 import { initRedeploy, bindRedeployHandlers } from './redeploy.js';
 import { bindVoiceHandlers } from './voice.js';
 import { initVoiceTimeline } from './voice-timeline.js';
+import { initVoiceTurnStats } from './voice-turn-stats.js';
 import { bindConfigHandlers } from './config.js';
 
 setupCameraStream();
@@ -12,6 +13,7 @@ bindLogToolbar(on);
 bindLogScroll(on);
 bindVoiceHandlers(on);
 initVoiceTimeline();
+initVoiceTurnStats();
 bindRedeployHandlers(on);
 bindConfigHandlers(on);
 connectTelemetry();

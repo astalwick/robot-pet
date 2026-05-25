@@ -11,6 +11,7 @@ import {
 import { renderFaceOverlay } from './camera.js';
 import { renderVoice } from './voice.js';
 import { updateVoiceTimeline } from './voice-timeline.js';
+import { updateVoiceTurnStats } from './voice-turn-stats.js';
 
 const HISTORY_LENGTH = 48;
 
@@ -65,6 +66,7 @@ function render(snapshot) {
   renderLink(linkLoop, driveStatusPayload);
   renderVoice(snapshot, sources);
   updateVoiceTimeline((snapshot.voice || {}).timeline);
+  updateVoiceTurnStats((snapshot.voice || {}).timeline);
   renderFaceOverlay(snapshot, sources);
   setTelemetryStatus(gamepadStale ? 'stale' : 'live', gamepadStale ? 'warn' : 'ok');
 }

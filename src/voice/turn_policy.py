@@ -37,6 +37,7 @@ class TurnPolicy:
     user_active_rms_threshold: int = USER_ACTIVE_RMS_THRESHOLD
     local_speech_window_secs: float = LOCAL_SPEECH_WINDOW_SECS
     assistant_speech_barge_in_cooldown_secs: float = 0.35
+    assistant_echo_enabled: bool = True
     assistant_echo_similarity: float = 0.9
     assistant_echo_recent_words: int = 60
     assistant_echo_window_slop_words: int = 2
@@ -113,6 +114,8 @@ class TurnPolicy:
         return any(word in self.explicit_interrupt_words for word in normalized_words[: self.explicit_interrupt_scan_words])
 
     def matches_assistant_echo(self, text: str, assistant_text: str) -> bool:
+        if not self.assistant_echo_enabled:
+            return False
         partial = self.normalized_transcript(text)
         assistant = self.normalized_transcript(assistant_text)
         partial_words = partial.split()
@@ -227,6 +230,7 @@ def turn_policy_from_config(config: VoiceConfig) -> TurnPolicy:
         barge_in_sustain_ms=config.barge_in_sustain_ms,
         barge_in_explicit_requires_sustain=config.barge_in_explicit_requires_sustain,
         assistant_speech_barge_in_cooldown_secs=config.barge_in_cooldown_secs,
+        assistant_echo_enabled=config.assistant_echo_enabled,
         assistant_echo_similarity=config.assistant_echo_similarity,
         explicit_interrupt_words=parse_explicit_interrupt_words(config.barge_in_explicit_interrupts),
     )

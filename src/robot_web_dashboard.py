@@ -269,10 +269,16 @@ VOICE_FIELDS = (
         "help": "Explicit interrupt words also require sustained near-end audio",
     },
     {
+        "key": "assistant_echo_enabled",
+        "label": "Echo suppression",
+        "type": "boolean",
+        "help": "Software echo suppression (off by default — rely on XVF3800 hardware AEC)",
+    },
+    {
         "key": "assistant_echo_similarity",
         "label": "Echo similarity",
         "type": "number",
-        "help": "0.5 .. 1.0",
+        "help": "0.5 .. 1.0 (only used when echo suppression is on)",
         "min": 0.5,
         "max": 1.0,
         "step": 0.05,

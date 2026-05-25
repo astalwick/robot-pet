@@ -641,26 +641,36 @@ async def handle_scribe_events(
         recent_barge_in_gate_reason = "assistant_not_speaking"
         recent_barge_in_audio_at = 0.0
         next_turn_id += 1
+        new_turn_id = next_turn_id
         playback_event = asyncio.Event()
         speaking_event = asyncio.Event()
         assistant_streamed_chunks: list[str] = []
+        first_token_emitted = False
+
+        def on_assistant_chunk(chunk: str) -> None:
+            nonlocal first_token_emitted
+            assistant_streamed_chunks.append(chunk)
+            if not first_token_emitted:
+                first_token_emitted = True
+                emit("turn_first_token", turn_id=new_turn_id)
+
         openai_input = history.input_for(prompt, system_prompt)
         task = asyncio.create_task(
             assistant_runner(
-                next_turn_id,
+                new_turn_id,
                 openai_input,
                 playback_event,
                 speaking_event,
                 openai_client,
                 elevenlabs_api_key,
                 voice_state,
-                on_assistant_chunk=assistant_streamed_chunks.append,
+                on_assistant_chunk=on_assistant_chunk,
                 motion_intent_caller=motion_intent_caller,
                 session_end_caller=session_end_caller,
             )
         )
         turn = ActiveTurn(
-            turn_id=next_turn_id,
+            turn_id=new_turn_id,
             prompt=prompt,
             speculative=speculative,
             task=task,
@@ -671,7 +681,9 @@ async def handle_scribe_events(
         )
         task.add_done_callback(lambda _task, completed_turn=turn: scribe_events.put_nowait({"type": "assistant_done", "turn": completed_turn}))
         active_turn = turn
-        emit("turn_start", turn_id=next_turn_id, speculative=speculative, prompt=prompt)
+        emit("turn_start", turn_id=new_turn_id, speculative=speculative, prompt=prompt)
+        if not speculative:
+            emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
         status(status="thinking", assistant_speaking=False)
         if speculative:
             active_turn.playback_release_task = asyncio.create_task(release_speculative_playback(active_turn))
@@ -751,7 +763,9 @@ async def handle_scribe_events(
                 await cancel_active_turn("barge_in")
                 await cancel_task(debounce_task)
                 debounce_task = None
-                if gate_last_reason != "explicit_interrupt":
+                if gate_last_reason == "explicit_interrupt":
+                    status(status="listening", partial_transcript=None)
+                else:
                     debounce_task = asyncio.create_task(start_after_stable_partial(text))
             return
 
@@ -843,11 +857,11 @@ async def handle_scribe_events(
 
             publish_barge_in_event("commit", gate_last_reason)
             await cancel_active_turn("barge_in_commit")
-            if should_start_from_commit:
-                status(status="thinking", partial_transcript=None, last_committed_transcript=text)
-                await start_turn(text, speculative=False)
-            else:
+            if gate_last_reason == "explicit_interrupt" or not should_start_from_commit:
                 status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                return
+            status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+            await start_turn(text, speculative=False)
             return
 
         status(status="thinking", partial_transcript=None, last_committed_transcript=text)
@@ -869,6 +883,7 @@ async def handle_scribe_events(
         if active_turn and active_turn.is_active():
             if policy.transcript_matches(text, active_turn.prompt):
                 await active_turn.confirm(text)
+                emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
                 await maybe_commit_history(active_turn)
             else:
                 if not should_start_from_commit:
@@ -877,6 +892,7 @@ async def handle_scribe_events(
                 await start_turn(text, speculative=False)
         elif active_turn and policy.transcript_matches(text, active_turn.prompt):
             await active_turn.confirm(text)
+            emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
             await maybe_commit_history(active_turn)
         else:
             if not should_start_from_commit:

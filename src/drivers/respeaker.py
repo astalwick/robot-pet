@@ -301,6 +301,18 @@ class ReSpeakerAudio:
         except asyncio.CancelledError:
             raise
 
+    # Playback contract (see docs/plans/2026-05-24 - voice-core-stabilization.md, Phase 2):
+    #   begin_playback()                  -> open a new output queue, return its playback_id
+    #   write_output(pcm)                 -> queue PCM for the current playback
+    #   end_playback(playback_id, drain)  -> finish that playback gracefully if it is still current;
+    #                                        a stale id is a no-op so an old turn cannot stop a new one
+    #   stop_playback_now()               -> synchronous, immediate: cancel the playback task and clear
+    #                                        the hardware output buffer. Never awaits anything; safe to
+    #                                        call from the scribe event loop without blocking input.
+    # Voice turn callers:
+    #   normal TTS completion  -> end_playback(id, drain=True)
+    #   cancelled TTS cleanup  -> end_playback(id, drain=False)
+    #   barge-in fast path     -> stop_playback_now()  (before any task cleanup)
     async def begin_playback(self) -> int:
         if self._output_stream is None:
             raise ReSpeakerError("IO not started; call start_io() first")

@@ -43,6 +43,7 @@ class VoiceConfig:
     barge_in_sustain_ms: int = 350
     barge_in_explicit_interrupts: str = "stop,wait,no,cancel,pause"
     barge_in_explicit_requires_sustain: bool = False
+    assistant_echo_enabled: bool = False
     assistant_echo_similarity: float = 0.9
     wake_word_enabled: bool = False
     wake_word_model_path: str = DEFAULT_WAKE_MODEL_PATH
@@ -78,6 +79,9 @@ class VoiceConfig:
             ),
             barge_in_explicit_requires_sustain=bool(
                 values.get("barge_in_explicit_requires_sustain", defaults.barge_in_explicit_requires_sustain)
+            ),
+            assistant_echo_enabled=bool(
+                values.get("assistant_echo_enabled", defaults.assistant_echo_enabled)
             ),
             assistant_echo_similarity=float(
                 values.get("assistant_echo_similarity", defaults.assistant_echo_similarity)

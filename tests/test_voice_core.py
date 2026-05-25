@@ -1001,6 +1001,190 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_substantial_partial_during_playback_starts_new_turn(self):
+        # Phase 0 scenario: assistant is speaking and the user changes topic
+        # ("actually tell me about the motors please"). The current turn should be
+        # cancelled, playback should stop, and a new turn should start once
+        # the policy accepts the partial.
+        async def run():
+            started_inputs = []
+            cancelled = []
+            playback_stops = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                barge_in_sustain_ms=0,
+                assistant_speech_barge_in_cooldown_secs=0,
+            )
+
+            async def stop_playback_now():
+                playback_stops.append("stop")
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input[-1]["content"])
+                playback_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                    stop_playback_now=stop_playback_now,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "partial", "text": "actually tell me about the motors please"})
+            await asyncio.sleep(0.1)
+
+            self.assertEqual(
+                started_inputs,
+                ["Tell me a story please", "actually tell me about the motors please"],
+            )
+            self.assertEqual(cancelled, ["Tell me a story please"])
+            self.assertEqual(playback_stops, ["stop"])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_explicit_partial_interrupt_returns_to_listening(self):
+        # Phase 1: an explicit interrupt ("wait") during playback must stop the
+        # turn AND return the session to listening, without starting a new turn.
+        async def run():
+            started_inputs = []
+            cancelled = []
+            playback_stops = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def stop_playback_now():
+                playback_stops.append("stop")
+
+            async def fake_run_assistant_turn(turn_id, openai_input, playback_event, speaking_event, openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs):
+                started_inputs.append(openai_input[-1]["content"])
+                playback_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(handle_scribe_events(
+                scribe_events,
+                openai_client=object(),
+                elevenlabs_api_key="test-key",
+                voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                stop_event=stop_event,
+                assistant_runner=fake_run_assistant_turn,
+                on_status=statuses.append,
+                stop_playback_now=stop_playback_now,
+            ))
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "partial", "text": "wait"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(started_inputs, ["Tell me a story please"])
+            self.assertEqual(cancelled, ["Tell me a story please"])
+            self.assertEqual(playback_stops, ["stop"])
+            self.assertEqual(statuses[-1].get("status"), "listening")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_substantial_commit_starting_with_interrupt_word_does_not_start_new_turn(self):
+        # Phase 1: a commit that starts with an explicit interrupt word but is
+        # long enough to pass commit_decision (e.g. "wait, tell me about the
+        # motors please") must still stop playback and return to listening — it
+        # must not start a new turn from the trailing follow-up.
+        async def run():
+            started_inputs = []
+            cancelled = []
+            playback_stops = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def stop_playback_now():
+                playback_stops.append("stop")
+
+            async def fake_run_assistant_turn(turn_id, openai_input, playback_event, speaking_event, openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs):
+                started_inputs.append(openai_input[-1]["content"])
+                playback_event.set()
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(handle_scribe_events(
+                scribe_events,
+                openai_client=object(),
+                elevenlabs_api_key="test-key",
+                voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                stop_event=stop_event,
+                assistant_runner=fake_run_assistant_turn,
+                on_status=statuses.append,
+                stop_playback_now=stop_playback_now,
+            ))
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "commit", "text": "wait tell me about the motors please"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(started_inputs, ["Tell me a story please"])
+            self.assertEqual(cancelled, ["Tell me a story please"])
+            self.assertEqual(playback_stops, ["stop"])
+            self.assertEqual(statuses[-1].get("status"), "listening")
+            self.assertTrue(any(
+                status.get("barge_in_last_event") == "commit: explicit_interrupt"
+                for status in statuses
+            ))
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_playback_stop_callback_cannot_block_scribe_events(self):
         async def run():
             cancelled = []

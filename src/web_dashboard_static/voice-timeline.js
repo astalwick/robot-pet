@@ -31,6 +31,8 @@ const EVENT_STYLES = {
   barge_in_considered: { color: '#facc15', glyph: '○', label: 'check' },
   echo_suppressed:     { color: '#c084fc', glyph: '×',  label: 'echo' },
   turn_start:          { color: '#7dd3fc', glyph: '▶', label: 'turn' },
+  turn_first_token:    { color: '#7dd3fc', glyph: '◇', label: 'token1' },
+  turn_committed:      { color: '#4ade80', glyph: '◆', label: 'turn-commit' },
   turn_cancel:         { color: '#f87171', glyph: '■', label: 'cancel' },
   commit:              { color: '#4ade80', glyph: '◆', label: 'commit' },
   commit_decision:     { color: '#4ade80', glyph: '◆', label: 'commit' },

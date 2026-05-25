@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 from voice.assistant import VoiceSwitch
 from voice.assistant import note_mic_chunk
-from voice.turn_policy import DEFAULT_TURN_POLICY, pcm16_rms
+from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pcm16_rms
 
 
 SAMPLE_RATE = 16000
@@ -21,7 +21,7 @@ SCRIBE_VAD_THRESHOLD = 0.6
 SCRIBE_MIN_SPEECH_DURATION_MS = 200
 SCRIBE_MIN_SILENCE_DURATION_MS = 300
 LOCAL_SPEECH_LOG_INTERVAL_SECS = 0.35
-MIC_SCRIBE_SEND_RMS_MIN = 100
+MIC_SCRIBE_SEND_RMS_MIN = USER_ACTIVE_RMS_THRESHOLD
 MIC_SCRIBE_GATE_HOLD_SECS = 1
 
 

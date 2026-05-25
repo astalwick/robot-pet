@@ -425,6 +425,58 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_low_user_active_rms_delays_committed_playback_release(self):
+        async def run():
+            playback_opened = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(commit_playback_delay_secs=0.01, speculative_local_quiet_secs=0.04)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                await playback_event.wait()
+                playback_opened.append(True)
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story"})
+            await scribe_events.put({"type": "audio_activity", "rms": 120})
+            for _ in range(5):
+                await asyncio.sleep(0.01)
+                await scribe_events.put({"type": "audio_activity", "rms": 120})
+
+            self.assertEqual(playback_opened, [])
+
+            await asyncio.sleep(0.06)
+            self.assertEqual(playback_opened, [True])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_continuation_commit_replaces_turn_before_playback_release(self):
         async def run():
             started_inputs = []

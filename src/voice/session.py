@@ -153,6 +153,7 @@ class VoiceSession:
                     self.event_callback({"type": "assistant_start", "t": now, "turn_id": turn_id})
 
         playback_id = await self.audio.begin_playback()
+        cancelled = False
         try:
             await speak_with_eleven_flash(
                 text_chunks,
@@ -163,8 +164,11 @@ class VoiceSession:
                 audio_writer=self.audio.write_output,
                 on_playback_rms=on_playback_rms,
             )
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await self.audio.end_playback(playback_id)
+            await self.audio.end_playback(playback_id, drain=not cancelled)
             if speaking_started:
                 self.status_callback({"status": "listening", "assistant_speaking": False})
                 if self.event_callback:

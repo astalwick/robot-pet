@@ -318,11 +318,11 @@ class ReSpeakerAudio:
             raise ReSpeakerError("playback not started; call begin_playback() first")
         await self._playback_queue.put(audio)
 
-    async def end_playback(self, playback_id: int | None = None) -> None:
+    async def end_playback(self, playback_id: int | None = None, *, drain: bool = True) -> None:
         async with self._playback_lock:
             if playback_id is not None and playback_id != self._active_playback_id:
                 return
-            await self._finish_playback()
+            await self._finish_playback(drain=drain)
 
     async def play_wav(self, path: str) -> None:
         import wave
@@ -343,12 +343,18 @@ class ReSpeakerAudio:
         finally:
             await self.end_playback(playback_id)
 
-    async def _finish_playback(self) -> None:
+    async def _finish_playback(self, *, drain: bool = True) -> None:
         if self._playback_task is None or self._playback_queue is None:
             return
         try:
-            await self._playback_queue.put(_PLAYBACK_STOP)
-            await self._playback_task
+            if drain:
+                await self._playback_queue.put(_PLAYBACK_STOP)
+                await self._playback_task
+            else:
+                self._playback_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._playback_task
+                self._output_buffer.clear()
         finally:
             self._playback_queue = None
             self._playback_task = None

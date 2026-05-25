@@ -873,9 +873,10 @@ async def handle_scribe_events(
                     int(event.get("rms", 0)),
                     int(levels.get("mic_peak", 0)),
                 )
-                if last_local_speech_rms >= policy.local_speech_rms_threshold:
+                if last_local_speech_rms >= policy.user_active_rms_threshold:
                     last_local_speech_at = now
-                if last_local_speech_rms >= policy.user_speech_phase_rms_threshold:
+                    note_user_speech()
+                elif bool(levels.get("scribe_gate_open", 0)):
                     note_user_speech()
                 levels["mic_rms"] = last_local_speech_rms
                 publish_barge_in_state(now, last_local_speech_rms)

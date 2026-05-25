@@ -227,6 +227,54 @@ class ReSpeakerTest(unittest.TestCase):
         finally:
             del sys.modules["sounddevice"]
 
+    def test_end_playback_without_drain_flushes_buffer(self):
+        class FakeStream:
+            def __init__(self, callback=None, blocksize=4, **_kwargs):
+                self._callback = callback
+                self._blocksize = blocksize
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+            def close(self):
+                return None
+
+            def pump(self, _buffer):
+                return None
+
+        class FakeSoundDevice:
+            RawInputStream = FakeStream
+            RawOutputStream = FakeStream
+
+            @staticmethod
+            def query_devices():
+                return []
+
+        async def run():
+            sys.modules["sounddevice"] = FakeSoundDevice
+            audio = ReSpeakerAudio("hw:0,0", "plughw:0,0")
+            await audio.start_io(asyncio.Event())
+            playback_id = await audio.begin_playback()
+            await audio.write_output(b"still pending")
+            for _ in range(10):
+                if audio._output_buffer.pending_bytes() > 0:
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertGreater(audio._output_buffer.pending_bytes(), 0)
+
+            await audio.end_playback(playback_id, drain=False)
+
+            self.assertEqual(audio._output_buffer.pending_bytes(), 0)
+
+        try:
+            asyncio.run(run())
+        finally:
+            del sys.modules["sounddevice"]
+
     def test_begin_playback_waits_for_in_flight_end(self):
         class FakeStream:
             writes: list[bytes] = []

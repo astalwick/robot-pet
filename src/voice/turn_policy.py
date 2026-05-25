@@ -14,8 +14,7 @@ SPECULATIVE_PLAYBACK_DELAY_SECS = 0.8
 COMMIT_PLAYBACK_DELAY_SECS = 0.8
 SPECULATIVE_LOCAL_QUIET_SECS = 0.65
 SPECULATIVE_CONFIRM_SIMILARITY = 0.82
-LOCAL_SPEECH_RMS_THRESHOLD = 500
-USER_SPEECH_PHASE_RMS_THRESHOLD = 80
+USER_ACTIVE_RMS_THRESHOLD = 100
 LOCAL_SPEECH_WINDOW_SECS = 1.2
 
 
@@ -36,8 +35,7 @@ class TurnPolicy:
     barge_in_sustain_ms: int = 350
     barge_in_playback_leakage_ratio: float = 1.8
     barge_in_explicit_requires_sustain: bool = False
-    local_speech_rms_threshold: int = LOCAL_SPEECH_RMS_THRESHOLD
-    user_speech_phase_rms_threshold: int = USER_SPEECH_PHASE_RMS_THRESHOLD
+    user_active_rms_threshold: int = USER_ACTIVE_RMS_THRESHOLD
     local_speech_window_secs: float = LOCAL_SPEECH_WINDOW_SECS
     assistant_speech_barge_in_cooldown_secs: float = 0.35
     assistant_echo_similarity: float = 0.9

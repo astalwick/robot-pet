@@ -847,6 +847,68 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_delayed_committed_interrupt_uses_recent_barge_in_audio(self):
+        async def run():
+            started_inputs = []
+            cancelled = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input)
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me something"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await scribe_events.put({"type": "commit", "text": "Stop"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(len(started_inputs), 1)
+            self.assertEqual(cancelled, ["Tell me something"])
+            self.assertTrue(
+                any(
+                    status.get("barge_in_last_event") == "commit: explicit_interrupt"
+                    for status in statuses
+                )
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_effective_playback_rms_decays_when_stale(self):
         from voice.assistant import effective_playback_rms
 

@@ -884,9 +884,13 @@ class AssistantStreamingTest(unittest.TestCase):
     def test_partial_wait_barges_while_playback_open_without_speaking_event(self):
         async def run():
             cancelled = []
+            playback_stops = []
             statuses = []
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
+
+            async def stop_playback_now():
+                playback_stops.append("stop")
 
             async def fake_run_assistant_turn(
                 turn_id,
@@ -915,6 +919,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     stop_event=stop_event,
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
+                    stop_playback_now=stop_playback_now,
                 )
             )
 
@@ -925,12 +930,69 @@ class AssistantStreamingTest(unittest.TestCase):
             await asyncio.sleep(0.05)
 
             self.assertEqual(cancelled, ["Tell me a story please"])
+            self.assertEqual(playback_stops, ["stop"])
             self.assertTrue(
                 any(
                     status.get("barge_in_last_event") == "partial: explicit_interrupt"
                     for status in statuses
                 )
             )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_partial_wait_barge_in_does_not_start_new_turn(self):
+        async def run():
+            started_inputs = []
+            cancelled = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(speculative_partial_delay_secs=0, speculative_local_quiet_secs=0)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input[-1]["content"])
+                playback_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                    stop_playback_now=lambda: None,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "partial", "text": "wait wait wait wait wait"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(started_inputs, ["Tell me a story please"])
+            self.assertEqual(cancelled, ["Tell me a story please"])
 
             stop_event.set()
             handler_task.cancel()

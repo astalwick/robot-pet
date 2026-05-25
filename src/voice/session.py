@@ -112,6 +112,7 @@ class VoiceSession:
                     assistant_runner=assistant_runner,
                     motion_intent_caller=self.motion_intent_caller,
                     session_end_caller=self.session_end_caller,
+                    stop_playback_now=self.stop_playback_now,
                 )
             ),
         ]
@@ -133,6 +134,10 @@ class VoiceSession:
         done, _pending = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_EXCEPTION)
         for task in done:
             task.result()
+
+    async def stop_playback_now(self) -> None:
+        await self.audio.end_playback(drain=False)
+        self.audio_levels["playback_rms"] = 0
 
     async def _speak(self, text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event, turn_id):
         from voice.elevenlabs_io import speak_with_eleven_flash

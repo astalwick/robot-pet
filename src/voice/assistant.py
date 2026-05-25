@@ -457,6 +457,7 @@ async def handle_scribe_events(
     assistant_runner: Callable[..., Any] = run_assistant_turn,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
+    stop_playback_now: Callable[[], Any] | None = None,
 ) -> None:
     active_turn: ActiveTurn | None = None
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -568,6 +569,10 @@ async def handle_scribe_events(
             streamed = turn.assistant_streamed_text().strip()
             if streamed:
                 emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
+            if stop_playback_now and turn.is_playing_back():
+                result = stop_playback_now()
+                if asyncio.iscoroutine(result):
+                    await result
             turn.request_cancel(reason)
 
     async def release_speculative_playback(turn: ActiveTurn) -> None:
@@ -735,7 +740,9 @@ async def handle_scribe_events(
                 publish_barge_in_event("partial", gate_last_reason)
                 await cancel_active_turn("barge_in")
                 await cancel_task(debounce_task)
-                debounce_task = asyncio.create_task(start_after_stable_partial(text))
+                debounce_task = None
+                if gate_last_reason != "explicit_interrupt":
+                    debounce_task = asyncio.create_task(start_after_stable_partial(text))
             return
 
         if active_turn and active_turn.speculative and text != active_turn.prompt and policy.transcript_matches(text, active_turn.prompt):

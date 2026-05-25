@@ -16,6 +16,7 @@ from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pc
 SAMPLE_RATE = 16000
 SCRIBE_MODEL = "scribe_v2_realtime"
 ELEVEN_FLASH_MODEL = "eleven_flash_v2_5"
+ELEVEN_CLOSE_TIMEOUT_SECS = 0.2
 SCRIBE_VAD_SILENCE_THRESHOLD_SECS = 1.0
 SCRIBE_VAD_THRESHOLD = 0.6
 SCRIBE_MIN_SPEECH_DURATION_MS = 200
@@ -145,7 +146,7 @@ async def speak_with_eleven_flash(
     async def open_voice_socket(next_voice_id: str):
         query = urlencode({"model_id": ELEVEN_FLASH_MODEL, "output_format": "pcm_16000"})
         url = f"wss://api.elevenlabs.io/v1/text-to-speech/{next_voice_id}/stream-input?{query}"
-        next_ws = await websockets.connect(url, ssl=ssl_context())
+        next_ws = await websockets.connect(url, ssl=ssl_context(), close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
         await next_ws.send(
             json.dumps(
                 {
@@ -221,7 +222,8 @@ async def speak_with_eleven_flash(
             with suppress(asyncio.CancelledError, websockets.exceptions.ConnectionClosed):
                 await play_task
         if ws:
-            await ws.close()
+            with suppress(TimeoutError):
+                await asyncio.wait_for(ws.close(), timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
         play_task = None
         ws = None
         speaking_event.clear()

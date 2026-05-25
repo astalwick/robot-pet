@@ -315,6 +315,7 @@ class AssistantStreamingTest(unittest.TestCase):
             history = ConversationHistory()
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
+            policy = TurnPolicy(commit_playback_delay_secs=0.01)
 
             async def fake_run_assistant_turn(
                 turn_id,
@@ -337,6 +338,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     elevenlabs_api_key="test-key",
                     voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
                     stop_event=stop_event,
+                    policy=policy,
                     conversation_history=history,
                     system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
@@ -366,6 +368,110 @@ class AssistantStreamingTest(unittest.TestCase):
                     ],
                 ],
             )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_committed_turn_starts_llm_before_playback_release(self):
+        async def run():
+            playback_opened = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(commit_playback_delay_secs=0.04)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_opened.append(playback_event.is_set())
+                await playback_event.wait()
+                playback_opened.append(True)
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "What is your name?"})
+            await asyncio.sleep(0.01)
+            self.assertEqual(playback_opened, [False])
+
+            await asyncio.sleep(0.05)
+            self.assertEqual(playback_opened, [False, True])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_continuation_commit_replaces_turn_before_playback_release(self):
+        async def run():
+            started_inputs = []
+            cancelled = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(commit_playback_delay_secs=0.08)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                prompt = openai_input[-1]["content"]
+                started_inputs.append(prompt)
+                try:
+                    await playback_event.wait()
+                    return "ok"
+                except asyncio.CancelledError:
+                    cancelled.append(prompt)
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me about batteries"})
+            await asyncio.sleep(0.02)
+            await scribe_events.put({"type": "commit", "text": "Tell me about batteries and motors"})
+            await asyncio.sleep(0.02)
+
+            self.assertEqual(started_inputs, ["Tell me about batteries", "Tell me about batteries and motors"])
+            self.assertEqual(cancelled, ["Tell me about batteries"])
 
             stop_event.set()
             handler_task.cancel()

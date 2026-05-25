@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 SPECULATIVE_PARTIAL_DELAY_SECS = 0.35
 SPECULATIVE_PLAYBACK_DELAY_SECS = 0.8
+COMMIT_PLAYBACK_DELAY_SECS = 0.8
 SPECULATIVE_LOCAL_QUIET_SECS = 0.65
 SPECULATIVE_CONFIRM_SIMILARITY = 0.82
 LOCAL_SPEECH_RMS_THRESHOLD = 500
@@ -22,6 +23,7 @@ LOCAL_SPEECH_WINDOW_SECS = 1.2
 class TurnPolicy:
     speculative_partial_delay_secs: float = SPECULATIVE_PARTIAL_DELAY_SECS
     speculative_playback_delay_secs: float = SPECULATIVE_PLAYBACK_DELAY_SECS
+    commit_playback_delay_secs: float = COMMIT_PLAYBACK_DELAY_SECS
     speculative_local_quiet_secs: float = SPECULATIVE_LOCAL_QUIET_SECS
     confirm_similarity: float = SPECULATIVE_CONFIRM_SIMILARITY
     min_speculative_words: int = 3

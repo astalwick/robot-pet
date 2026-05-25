@@ -230,11 +230,13 @@ class ActiveTurn:
     committed_text: str | None = None
     assistant_text: str | None = None
     history_committed: bool = False
+    delay_playback: bool = False
 
     def __post_init__(self) -> None:
         if not self.speculative:
             self.committed_text = self.prompt
-            self.open_playback()
+            if not self.delay_playback:
+                self.open_playback()
 
     def is_active(self) -> bool:
         return not self.task.done()
@@ -261,6 +263,7 @@ class ActiveTurn:
         self.committed_text = commit_text
         self.prompt = commit_text
         self.speculative = False
+        self.delay_playback = False
         self.open_playback()
         await cancel_task(self.playback_release_task)
         self.playback_release_task = None
@@ -574,9 +577,25 @@ async def handle_scribe_events(
                 return
             await asyncio.sleep(quiet_remaining_secs)
 
+    async def release_committed_playback(turn: ActiveTurn) -> None:
+        await asyncio.sleep(policy.commit_playback_delay_secs)
+        while active_turn is turn and not turn.playback_event.is_set():
+            quiet_remaining_secs = policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), last_local_speech_at)
+            if quiet_remaining_secs <= 0:
+                turn.open_playback()
+                await maybe_commit_history(turn)
+                return
+            await asyncio.sleep(quiet_remaining_secs)
+
     async def maybe_commit_history(turn: ActiveTurn) -> None:
         nonlocal recent_assistant_text, recent_assistant_echo_until
-        if active_turn is not turn or turn.history_committed or turn.speculative or not turn.task.done():
+        if (
+            active_turn is not turn
+            or turn.history_committed
+            or turn.speculative
+            or not turn.playback_event.is_set()
+            or not turn.task.done()
+        ):
             return
         try:
             assistant_text = turn.task.result()
@@ -625,6 +644,7 @@ async def handle_scribe_events(
             playback_event=playback_event,
             speaking_event=speaking_event,
             assistant_streamed_chunks=assistant_streamed_chunks,
+            delay_playback=not speculative,
         )
         task.add_done_callback(lambda _task, completed_turn=turn: scribe_events.put_nowait({"type": "assistant_done", "turn": completed_turn}))
         active_turn = turn
@@ -632,6 +652,8 @@ async def handle_scribe_events(
         status(status="thinking", assistant_speaking=False)
         if speculative:
             active_turn.playback_release_task = asyncio.create_task(release_speculative_playback(active_turn))
+        else:
+            active_turn.playback_release_task = asyncio.create_task(release_committed_playback(active_turn))
 
     async def start_after_stable_partial(text: str) -> None:
         await asyncio.sleep(policy.speculative_partial_delay_secs)
@@ -711,6 +733,18 @@ async def handle_scribe_events(
                     active_turn.playback_release_task = None
             return
 
+        if (
+            active_turn
+            and not active_turn.speculative
+            and not active_turn.playback_event.is_set()
+            and not active_turn.is_speaking()
+            and policy.normalized_transcript(text) != policy.normalized_transcript(active_turn.prompt)
+        ):
+            await cancel_active_turn("commit_continuation")
+            await cancel_task(debounce_task)
+            debounce_task = asyncio.create_task(start_after_stable_partial(text))
+            return
+
         await cancel_task(debounce_task)
         debounce_task = asyncio.create_task(start_after_stable_partial(text))
 
@@ -781,6 +815,20 @@ async def handle_scribe_events(
             return
 
         status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+
+        if active_turn and not active_turn.speculative and not active_turn.playback_event.is_set():
+            if policy.normalized_transcript(text) == policy.normalized_transcript(active_turn.prompt):
+                active_turn.committed_text = text
+                active_turn.prompt = text
+                await maybe_commit_history(active_turn)
+                return
+            if active_turn.is_speaking():
+                return
+            if not should_start_from_commit:
+                return
+            await cancel_active_turn("commit_continuation")
+            await start_turn(text, speculative=False)
+            return
 
         if active_turn and active_turn.is_active():
             if policy.transcript_matches(text, active_turn.prompt):

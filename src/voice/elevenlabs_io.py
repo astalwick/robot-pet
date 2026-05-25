@@ -166,36 +166,33 @@ async def speak_with_eleven_flash(
         pending_audio: list[bytes] = []
         final_received = False
 
-        try:
-            while True:
-                if playback_event.is_set() and pending_audio:
-                    for buffered_audio in pending_audio:
-                        await write_audio(buffered_audio)
-                    pending_audio.clear()
+        while True:
+            if playback_event.is_set() and pending_audio:
+                for buffered_audio in pending_audio:
+                    await write_audio(buffered_audio)
+                pending_audio.clear()
 
-                if final_received and not pending_audio:
-                    break
+            if final_received and not pending_audio:
+                break
 
-                try:
-                    message = await asyncio.wait_for(active_ws.recv(), timeout=0.05)
-                except TimeoutError:
-                    continue
-                except websockets.exceptions.ConnectionClosedOK:
-                    break
-                except websockets.exceptions.ConnectionClosed:
-                    break
+            try:
+                message = await asyncio.wait_for(active_ws.recv(), timeout=0.05)
+            except TimeoutError:
+                continue
+            except websockets.exceptions.ConnectionClosedOK:
+                break
+            except websockets.exceptions.ConnectionClosed:
+                break
 
-                data = json.loads(message)
-                if data.get("audio"):
-                    audio = base64.b64decode(data["audio"])
-                    if playback_event.is_set():
-                        await write_audio(audio)
-                    else:
-                        pending_audio.append(audio)
-                if data.get("isFinal"):
-                    final_received = True
-        finally:
-            speaking_event.clear()
+            data = json.loads(message)
+            if data.get("audio"):
+                audio = base64.b64decode(data["audio"])
+                if playback_event.is_set():
+                    await write_audio(audio)
+                else:
+                    pending_audio.append(audio)
+            if data.get("isFinal"):
+                final_received = True
 
     async def start_voice_socket(next_voice_id: str) -> None:
         nonlocal play_task, ws
@@ -227,6 +224,7 @@ async def speak_with_eleven_flash(
             await ws.close()
         play_task = None
         ws = None
+        speaking_event.clear()
 
     try:
         async for chunk in text_chunks:
@@ -245,3 +243,5 @@ async def speak_with_eleven_flash(
     except Exception:
         await cancel_voice_socket()
         raise
+    finally:
+        speaking_event.clear()

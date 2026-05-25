@@ -776,6 +776,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:
                     on_assistant_chunk("I am still talking.")
+                playback_event.set()
                 speaking_event.set()
                 try:
                     await asyncio.Event().wait()
@@ -830,6 +831,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 **kwargs,
             ):
                 started_inputs.append(openai_input)
+                playback_event.set()
                 speaking_event.set()
                 try:
                     await asyncio.Event().wait()
@@ -879,6 +881,64 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_partial_wait_barges_while_playback_open_without_speaking_event(self):
+        async def run():
+            cancelled = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    stop_event=stop_event,
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "partial", "text": "Wait"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(cancelled, ["Tell me a story please"])
+            self.assertTrue(
+                any(
+                    status.get("barge_in_last_event") == "partial: explicit_interrupt"
+                    for status in statuses
+                )
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_delayed_committed_interrupt_uses_recent_barge_in_audio(self):
         async def run():
             started_inputs = []
@@ -899,6 +959,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 **kwargs,
             ):
                 started_inputs.append(openai_input)
+                playback_event.set()
                 speaking_event.set()
                 try:
                     await asyncio.Event().wait()
@@ -981,6 +1042,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 started_inputs.append(openai_input)
                 if on_assistant_chunk:
                     on_assistant_chunk("Stop saying stop because that is confusing.")
+                playback_event.set()
                 speaking_event.set()
                 try:
                     await asyncio.Event().wait()

@@ -241,6 +241,9 @@ class ActiveTurn:
     def is_speaking(self) -> bool:
         return self.speaking_event.is_set()
 
+    def is_playing_back(self) -> bool:
+        return self.is_active() and self.playback_event.is_set()
+
     def mark_speech_started(self, now: float) -> None:
         if self.speech_started_at is None:
             self.speech_started_at = now
@@ -520,9 +523,7 @@ async def handle_scribe_events(
     def publish_barge_in_state(now: float, mic_rms: int | None = None) -> None:
         nonlocal gate_open, gate_threshold_rms, gate_last_reason
         mic = last_local_speech_rms if mic_rms is None else mic_rms
-        assistant_speaking = bool(
-            active_turn and active_turn.is_active() and active_turn.is_speaking()
-        )
+        assistant_speaking = bool(active_turn and active_turn.is_playing_back())
         _, gate_open, gate_threshold_rms, gate_last_reason = refresh_barge_in_gate(
             levels,
             now,
@@ -690,7 +691,7 @@ async def handle_scribe_events(
             return
 
         status(status="hearing", partial_transcript=text)
-        if active_turn and active_turn.is_active() and active_turn.is_speaking():
+        if active_turn and active_turn.is_playing_back():
             active_turn.mark_speech_started(now)
             publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
@@ -778,8 +779,7 @@ async def handle_scribe_events(
 
         if (
             active_turn
-            and active_turn.is_active()
-            and active_turn.is_speaking()
+            and active_turn.is_playing_back()
             and not policy.transcript_matches(text, active_turn.prompt)
         ):
             active_turn.mark_speech_started(now)
@@ -899,7 +899,7 @@ async def handle_scribe_events(
                     note_user_speech()
                 levels["mic_rms"] = last_local_speech_rms
                 publish_barge_in_state(now, last_local_speech_rms)
-                if active_turn and active_turn.is_active() and active_turn.is_speaking():
+                if active_turn and active_turn.is_playing_back():
                     fresh = now - recent_barge_in_audio_at <= policy.local_speech_window_secs
                     if last_local_speech_rms >= policy.user_active_rms_threshold or gate_open:
                         if not fresh or last_local_speech_rms > recent_barge_in_mic_rms:

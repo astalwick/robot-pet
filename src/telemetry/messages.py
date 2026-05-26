@@ -144,8 +144,10 @@ def drive_status_message(
     last_motor_command_ack_age_seconds: float | None,
     telemetry_publish_failures: int,
     last_telemetry_publish_ok: bool | None,
+    safety_blocked: bool | None = None,
+    safety_reason: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "state": state,
         "stop_reason": stop_reason,
         "controller_reader_alive": controller_reader_alive,
@@ -155,6 +157,11 @@ def drive_status_message(
         "telemetry_publish_failures": telemetry_publish_failures,
         "last_telemetry_publish_ok": last_telemetry_publish_ok,
     }
+    if safety_blocked is not None:
+        payload["safety_blocked"] = safety_blocked
+    if safety_reason is not None:
+        payload["safety_reason"] = safety_reason
+    return payload
 
 
 def sensors_update(

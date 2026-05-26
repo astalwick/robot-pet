@@ -1,6 +1,6 @@
 # Gamepad Teleop
 
-Boot-ready gamepad teleop runs as `gamepad-teleop.service`. It waits for the Xbox 360 controller and RoboClaw, commands an initial zero speed, then drives only while RB is held.
+Boot-ready gamepad teleop runs as `gamepad-teleop.service`. It waits for the Xbox 360 controller and `robot-motion`, then sends drive commands while RB is held. `robot-motion.service` owns the RoboClaw and applies safety gating from range sensors.
 
 ## Safety Checklist
 
@@ -47,16 +47,16 @@ Restart it after changing code:
 sudo systemctl restart gamepad-teleop
 ```
 
-Voice motion tools (`wiggle`, `move_forward`) use a Unix socket at `/run/robot-pet-gamepad/motion-intent.sock` created by this service. If voice reports `motion_socket_missing`, check `journalctl -u gamepad-teleop` for `motion intent socket at`, `motion intent socket disappeared`, or `motion intent bridge unavailable`. Restarting `gamepad-teleop` recreates the socket; a full reboot is not required.
+Voice motion tools (`wiggle`, `move_forward`) use `/run/robot-pet/motion-intent.sock` on `robot-motion.service`. If voice reports `motion_socket_missing`, check `journalctl -u robot-motion` for `motion intent socket at` or `motion intent bridge unavailable`. Restarting `robot-motion` recreates the socket.
 
-`/run/robot-pet-gamepad` is owned by `gamepad-teleop.service` (`RuntimeDirectory=robot-pet-gamepad`). This keeps the motion socket out of the telemetry runtime directory, so a telemetry restart cannot delete it. Gamepad teleop also re-binds on the next control-loop tick if the socket path still disappears.
+Gamepad wheel commands go to `/run/robot-pet/motion-drive.sock`. If teleop logs `waiting for robot-motion`, start or restart `robot-motion.service` first.
 
 ## Foreground Debugging
 
-Stop the service before running a foreground teleop process so only one process owns the RoboClaw:
+Stop the services before running a foreground teleop process so only one process owns the RoboClaw:
 
 ```bash
-sudo systemctl stop gamepad-teleop
+sudo systemctl stop gamepad-teleop robot-motion
 cd ~/robot-pet
 source .venv/bin/activate
 PYTHONPATH=src python src/gamepad_teleop.py --speed-scale 0.15

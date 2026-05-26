@@ -10,6 +10,7 @@ SCRIPT = REPO_ROOT / "scripts" / "redeploy-robot.sh"
 ALL_SERVICES = {
     "robot-brain.service",
     "robot-telemetry.service",
+    "robot-motion.service",
     "robot-camera.service",
     "gamepad-teleop.service",
     "robot-vision.service",
@@ -38,8 +39,11 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-telemetry.service")
         elif path == "src/robot_camera.py":
             want("robot-camera.service")
+        elif path == "src/robot_motion.py":
+            want("robot-motion.service")
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
             want("gamepad-teleop.service")
+            want("robot-motion.service")
         elif path == "src/robot_vision.py":
             want("robot-vision.service")
         elif path == "src/robot_sensors.py":
@@ -56,6 +60,7 @@ def planned_services(paths: list[str]) -> set[str]:
             "src/drivers/__init__.py",
         ):
             want("robot-brain.service")
+            want("robot-motion.service")
             want("gamepad-teleop.service")
         elif path == "src/drivers/camera.py":
             want("robot-camera.service")
@@ -70,6 +75,9 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-camera.service")
             want("robot-vision.service")
             want("robot-voice.service")
+        elif path == "src/config/sensors.py":
+            want("robot-sensors.service")
+            want("robot-motion.service")
         elif path.startswith("src/config/"):
             want("gamepad-teleop.service")
             want("robot-vision.service")

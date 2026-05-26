@@ -109,13 +109,15 @@ src/
 |---------|---------|--------|
 | `robot-brain` | Orchestrator / behavior state machine | Stub |
 | `robot-telemetry` | In-memory local telemetry hub for dashboard clients | Active |
-| `gamepad-teleop` | Xbox controller to RoboClaw closed-loop speed teleop | Active |
+| `gamepad-teleop` | Xbox controller input; sends drive commands to `robot-motion` | Active |
 | `robot-camera` | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP | Active |
 | `robot-vision` | Polls camera snapshots and publishes face-detection telemetry | Active |
 | `robot-sensors` | Polls ToF range sensors and publishes distance telemetry | Active |
 | `robot-web-dashboard` | Browser dashboard with live camera, telemetry, logs, redeploy, and drive tuning | Active |
 | `robot-dashboard` | Foreground SSH TUI for telemetry, logs, and drive tuning | Manual tool |
-| `robot-motion` | Autonomous motor control | Not yet created |
+| `robot-motion` | RoboClaw owner, range-sensor safety, voice motion intents | Active |
+
+`robot-motion` owns `MotorDriver` / RoboClaw, subscribes to sensor telemetry for safety gating, accepts drive commands on `/run/robot-pet/motion-drive.sock`, and hosts voice motion intents on `/run/robot-pet/motion-intent.sock`. Thresholds come from `sensors.json` (`safety.enabled`, cliff/forward mm limits, per-sensor `role`).
 
 `robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/teleop.json` and restart `gamepad-teleop.service`; it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 
@@ -135,12 +137,13 @@ All services log to stdout/stderr. systemd captures output to journald.
 
 - View logs: `journalctl -u robot-brain -f`
 - View telemetry logs: `journalctl -u robot-telemetry -f`
+- View motion service logs: `journalctl -u robot-motion -f`
 - View gamepad teleop logs: `journalctl -u gamepad-teleop -f`
 - View camera service logs: `journalctl -u robot-camera -f`
 - View vision service logs: `journalctl -u robot-vision -f`
 - View sensors service logs: `journalctl -u robot-sensors -f`
 - View web dashboard logs: `journalctl -u robot-web-dashboard -f`
-- View multiple: `journalctl -u robot-brain -u robot-telemetry -u robot-sensors -u gamepad-teleop -u robot-camera -u robot-vision -u robot-web-dashboard -f`
+- View multiple: `journalctl -u robot-brain -u robot-telemetry -u robot-motion -u robot-sensors -u gamepad-teleop -u robot-camera -u robot-vision -u robot-web-dashboard -f`
 - Format: `LEVEL service-name: message`
 
 Timestamps come from journald, not the application.

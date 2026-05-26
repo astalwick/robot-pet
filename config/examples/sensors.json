@@ -1,9 +1,14 @@
 {
   "enabled": true,
   "poll_rate_hz": 10,
+  "safety": {
+    "enabled": false,
+    "cliff_trip_above_mm": 200,
+    "forward_stop_below_mm": 150
+  },
   "sensors": [
-    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0 },
-    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1 },
-    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2 }
+    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "role": "cliff" },
+    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1, "role": "cliff" },
+    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2, "role": "cliff" }
   ]
 }

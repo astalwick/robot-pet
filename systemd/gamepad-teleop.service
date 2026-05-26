@@ -1,7 +1,7 @@
 [Unit]
-Description=Gamepad Teleop - RoboClaw closed-loop speed control
-After=robot-brain.service robot-telemetry.service
-Wants=robot-brain.service robot-telemetry.service
+Description=Gamepad Teleop - controller input to robot-motion
+After=robot-brain.service robot-telemetry.service robot-motion.service
+Wants=robot-brain.service robot-telemetry.service robot-motion.service
 
 [Service]
 Type=simple
@@ -11,8 +11,6 @@ Environment=PYTHONPATH=/home/pi/robot-pet/src
 ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/gamepad_teleop.py
 Restart=always
 RestartSec=2
-RuntimeDirectory=robot-pet-gamepad
-RuntimeDirectoryMode=0755
 StandardOutput=journal
 StandardError=journal
 

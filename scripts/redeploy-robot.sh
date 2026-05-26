@@ -5,6 +5,7 @@ REPO_DIR="${ROBOT_PET_REPO_DIR:-$HOME/robot-pet}"
 SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-motion.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -18,6 +19,7 @@ STOP_SERVICES=(
   robot-camera.service
   robot-voice.service
   robot-sensors.service
+  robot-motion.service
   robot-telemetry.service
   robot-brain.service
 )
@@ -25,6 +27,7 @@ START_SERVICES=(
   robot-brain.service
   robot-telemetry.service
   robot-sensors.service
+  robot-motion.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -58,8 +61,12 @@ plan_service_restarts() {
       src/robot_camera.py)
         want_restart robot-camera.service
         ;;
+      src/robot_motion.py)
+        want_restart robot-motion.service
+        ;;
       src/gamepad_teleop.py | src/control/*)
         want_restart gamepad-teleop.service
+        want_restart robot-motion.service
         ;;
       src/robot_vision.py)
         want_restart robot-vision.service
@@ -78,6 +85,7 @@ plan_service_restarts() {
         ;;
       src/drivers/motor.py | src/drivers/controller.py | src/drivers/__init__.py)
         want_restart robot-brain.service
+        want_restart robot-motion.service
         want_restart gamepad-teleop.service
         ;;
       src/drivers/camera.py)
@@ -96,6 +104,10 @@ plan_service_restarts() {
         want_restart robot-camera.service
         want_restart robot-vision.service
         want_restart robot-voice.service
+        ;;
+      src/config/sensors.py)
+        want_restart robot-sensors.service
+        want_restart robot-motion.service
         ;;
       src/config/*)
         want_restart gamepad-teleop.service
@@ -185,7 +197,7 @@ if [[ "$systemd_changed" -eq 1 ]]; then
     [[ "$path" == systemd/* ]] || continue
     service="$(basename "$path")"
     sudo install -m 0644 "$REPO_DIR/$path" "/etc/systemd/system/$service"
-    if [[ "$service" == robot-vision.service || "$service" == robot-voice.service || "$service" == robot-sensors.service ]]; then
+    if [[ "$service" == robot-vision.service || "$service" == robot-voice.service || "$service" == robot-sensors.service || "$service" == robot-motion.service ]]; then
       echo "enabling $service"
       sudo systemctl enable "$service"
     fi

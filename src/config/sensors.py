@@ -18,6 +18,7 @@ MIN_POLL_RATE_HZ = 0.5
 MAX_POLL_RATE_HZ = 20.0
 
 SUPPORTED_KINDS = frozenset({"vl53l0x", "vl53l1x"})
+SENSOR_ROLES = frozenset({"cliff", "forward"})
 
 
 class SensorsConfigError(ValueError):
@@ -29,15 +30,32 @@ def clamp(value: float, minimum: float, maximum: float) -> float:
 
 
 @dataclass(frozen=True)
+class SafetyConfig:
+    """Motion gating thresholds for robot-motion (Phase 3)."""
+
+    enabled: bool = False
+    cliff_trip_above_mm: int = 200
+    forward_stop_below_mm: int = 150
+
+
+@dataclass(frozen=True)
 class SensorEntry:
     name: str
     kind: str
     mux_channel: int
+    role: str | None = None
+    trip_above_mm: int | None = None
+    stop_below_mm: int | None = None
 
 
 def _default_sensor_entries() -> tuple[SensorEntry, ...]:
     return tuple(
-        SensorEntry(name=config.name, kind=config.kind, mux_channel=config.channel)
+        SensorEntry(
+            name=config.name,
+            kind=config.kind,
+            mux_channel=config.channel,
+            role="cliff",
+        )
         for config in DEFAULT_SENSORS
     )
 
@@ -49,12 +67,13 @@ DEFAULT_SENSOR_ENTRIES = _default_sensor_entries()
 class SensorsConfig:
     enabled: bool = True
     poll_rate_hz: float = 10.0
+    safety: SafetyConfig = SafetyConfig()
     sensors: tuple[SensorEntry, ...] = DEFAULT_SENSOR_ENTRIES
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "SensorsConfig":
         defaults = cls()
-        sensors = _parse_sensors(values.get("sensors"))
+        sensors = _parse_sensors(values.get("sensors"), defaults.safety)
         if sensors is None:
             sensors = defaults.sensors
         return cls(
@@ -64,6 +83,7 @@ class SensorsConfig:
                 MIN_POLL_RATE_HZ,
                 MAX_POLL_RATE_HZ,
             ),
+            safety=_parse_safety(values.get("safety")),
             sensors=sensors,
         )
 
@@ -71,7 +91,8 @@ class SensorsConfig:
         return {
             "enabled": self.enabled,
             "poll_rate_hz": self.poll_rate_hz,
-            "sensors": [asdict(entry) for entry in self.sensors],
+            "safety": asdict(self.safety),
+            "sensors": [_sensor_entry_to_dict(entry) for entry in self.sensors],
         }
 
     def driver_sensors(self) -> list[RangeSensorConfig]:
@@ -81,7 +102,59 @@ class SensorsConfig:
         ]
 
 
-def _parse_sensors(raw: Any) -> tuple[SensorEntry, ...] | None:
+def _parse_safety(raw: Any) -> SafetyConfig:
+    defaults = SafetyConfig()
+    if raw is None:
+        return defaults
+    if not isinstance(raw, dict):
+        raise TypeError("safety must be an object")
+    return SafetyConfig(
+        enabled=bool(raw.get("enabled", defaults.enabled)),
+        cliff_trip_above_mm=_parse_positive_mm(
+            raw.get("cliff_trip_above_mm", defaults.cliff_trip_above_mm),
+            "safety.cliff_trip_above_mm",
+        ),
+        forward_stop_below_mm=_parse_positive_mm(
+            raw.get("forward_stop_below_mm", defaults.forward_stop_below_mm),
+            "safety.forward_stop_below_mm",
+        ),
+    )
+
+
+def _parse_positive_mm(value: Any, field: str) -> int:
+    if not isinstance(value, int) or value <= 0:
+        raise TypeError(f"{field} must be a positive integer")
+    return value
+
+
+def _sensor_entry_to_dict(entry: SensorEntry) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "name": entry.name,
+        "kind": entry.kind,
+        "mux_channel": entry.mux_channel,
+    }
+    if entry.role is not None:
+        data["role"] = entry.role
+    if entry.trip_above_mm is not None:
+        data["trip_above_mm"] = entry.trip_above_mm
+    if entry.stop_below_mm is not None:
+        data["stop_below_mm"] = entry.stop_below_mm
+    return data
+
+
+def cliff_trip_mm(entry: SensorEntry, safety: SafetyConfig) -> int | None:
+    if entry.role != "cliff":
+        return None
+    return entry.trip_above_mm if entry.trip_above_mm is not None else safety.cliff_trip_above_mm
+
+
+def forward_stop_mm(entry: SensorEntry, safety: SafetyConfig) -> int | None:
+    if entry.role != "forward":
+        return None
+    return entry.stop_below_mm if entry.stop_below_mm is not None else safety.forward_stop_below_mm
+
+
+def _parse_sensors(raw: Any, safety: SafetyConfig) -> tuple[SensorEntry, ...] | None:
     if raw is None:
         return None
     if not isinstance(raw, list):
@@ -99,7 +172,31 @@ def _parse_sensors(raw: Any) -> tuple[SensorEntry, ...] | None:
             raise TypeError(f"sensors[{index}].kind must be one of {sorted(SUPPORTED_KINDS)}")
         if not isinstance(mux_channel, int) or mux_channel < 0 or mux_channel > 7:
             raise TypeError(f"sensors[{index}].mux_channel must be an integer from 0 to 7")
-        entries.append(SensorEntry(name=name, kind=kind, mux_channel=mux_channel))
+        role = item.get("role")
+        if role is not None and role not in SENSOR_ROLES:
+            raise TypeError(f"sensors[{index}].role must be one of {sorted(SENSOR_ROLES)}")
+        trip_above_mm = item.get("trip_above_mm")
+        stop_below_mm = item.get("stop_below_mm")
+        if trip_above_mm is not None:
+            trip_above_mm = _parse_positive_mm(trip_above_mm, f"sensors[{index}].trip_above_mm")
+        if stop_below_mm is not None:
+            stop_below_mm = _parse_positive_mm(stop_below_mm, f"sensors[{index}].stop_below_mm")
+        if role == "cliff" and stop_below_mm is not None:
+            raise TypeError(f"sensors[{index}].stop_below_mm is only valid for forward sensors")
+        if role == "forward" and trip_above_mm is not None:
+            raise TypeError(f"sensors[{index}].trip_above_mm is only valid for cliff sensors")
+        if role is None and (trip_above_mm is not None or stop_below_mm is not None):
+            raise TypeError(f"sensors[{index}] distance overrides require role")
+        entries.append(
+            SensorEntry(
+                name=name,
+                kind=kind,
+                mux_channel=mux_channel,
+                role=role,
+                trip_above_mm=trip_above_mm,
+                stop_below_mm=stop_below_mm,
+            )
+        )
     if not entries:
         raise TypeError("sensors must contain at least one entry")
     return tuple(entries)

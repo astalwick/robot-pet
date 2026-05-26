@@ -151,10 +151,30 @@ Keep the first implementation boring and direct:
 Same shape as `vision.py` / `teleop.py`:
 
 - Path: `/home/pi/.config/robot-pet/sensors.json`
-- Fields: `enabled`, `poll_rate_hz`, `sensors: [{ "name", "kind", "mux_channel" }]`
+- Fields:
+  - `enabled` — `robot-sensors` polling on/off
+  - `poll_rate_hz`
+  - `safety` — motion gating for `robot-motion` (Phase 3)
+  - `sensors: [{ "name", "kind", "mux_channel", "role?", "trip_above_mm?", "stop_below_mm?" }]`
 - Driver constructor accepts plain dataclasses; services load config at the boundary so tests do not touch the filesystem.
 
-No safety thresholds in v1 config — those belong in `robot-motion` when it exists.
+**Two enable flags (on purpose):**
+
+| Flag | Service | Effect |
+|------|---------|--------|
+| `enabled` | `robot-sensors` | Poll hardware and publish telemetry |
+| `safety.enabled` | `robot-motion` | Apply cliff/forward distance rules to motion intents |
+
+You can poll sensors with safety off while tuning thresholds.
+
+**Distance rules (Phase 3, all from config — no hardcoded mm in code):**
+
+| Role | Trip when | Default field |
+|------|-----------|----------------|
+| `cliff` | reading **above** threshold (floor gone / out of range) | `safety.cliff_trip_above_mm` |
+| `forward` | reading **below** threshold (obstacle too close) | `safety.forward_stop_below_mm` |
+
+Per-sensor overrides: `trip_above_mm` on cliff entries, `stop_below_mm` on forward entries.
 
 **Suggested default for the current robot:**
 
@@ -162,13 +182,20 @@ No safety thresholds in v1 config — those belong in `robot-motion` when it exi
 {
   "enabled": true,
   "poll_rate_hz": 10,
+  "safety": {
+    "enabled": false,
+    "cliff_trip_above_mm": 200,
+    "forward_stop_below_mm": 150
+  },
   "sensors": [
-    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0 },
-    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1 },
-    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2 }
+    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "role": "cliff" },
+    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1, "role": "cliff" },
+    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2, "role": "cliff" }
   ]
 }
 ```
+
+See `config/examples/sensors.json`.
 
 ## OS / Setup (one-time)
 
@@ -214,11 +241,15 @@ No tests that require real I2C in CI.
 
 ### Phase 3 — Safety (Body Phase 2)
 
-- `robot-motion` owns `MotorDriver` + reads sensor snapshot
-- Simple rules: any cliff below threshold → refuse forward / command stop
-- `gamepad-teleop` publishes intents to motion instead of driving RoboClaw directly
+- `robot-motion` owns `MotorDriver`, subscribes to latest sensor telemetry, loads `sensors.json` for `safety` + per-sensor roles/thresholds
+- When `safety.enabled` is true:
+  - any **cliff** sensor with `ok` and `distance_mm > trip_above_mm` → hold / refuse forward
+  - any **forward** sensor with `ok` and `distance_mm < stop_below_mm` → hold / refuse forward
+  - failed reads (`ok: false`) do not trip (avoid false stops from wiring glitches)
+- `gamepad-teleop` publishes wheel intents to `robot-motion` instead of driving RoboClaw directly
+- Voice motion intents go through the same chokepoint
 
-Range driver unchanged in Phase 3.
+Range driver and `robot-sensors` unchanged in Phase 3; only `robot-motion` + teleop wiring change.
 
 ## ROS2 Migration
 

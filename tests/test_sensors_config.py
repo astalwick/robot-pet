@@ -7,9 +7,12 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import (
+    SafetyConfig,
     SensorEntry,
     SensorsConfig,
     SensorsConfigError,
+    cliff_trip_mm,
+    forward_stop_mm,
     load_sensors_config,
     save_sensors_config,
 )
@@ -79,6 +82,61 @@ class SensorsConfigTest(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_safety_defaults_off_without_block(self):
+        config = SensorsConfig()
+
+        self.assertFalse(config.safety.enabled)
+        self.assertEqual(config.safety.cliff_trip_above_mm, 200)
+
+    def test_safety_and_per_sensor_thresholds(self):
+        config = SensorsConfig.from_dict(
+            {
+                "safety": {
+                    "enabled": True,
+                    "cliff_trip_above_mm": 180,
+                    "forward_stop_below_mm": 120,
+                },
+                "sensors": [
+                    {
+                        "name": "cliff_left",
+                        "kind": "vl53l0x",
+                        "mux_channel": 0,
+                        "role": "cliff",
+                        "trip_above_mm": 160,
+                    },
+                    {
+                        "name": "forward_center",
+                        "kind": "vl53l1x",
+                        "mux_channel": 3,
+                        "role": "forward",
+                        "stop_below_mm": 100,
+                    },
+                ],
+            }
+        )
+
+        self.assertTrue(config.safety.enabled)
+        self.assertEqual(cliff_trip_mm(config.sensors[0], config.safety), 160)
+        self.assertEqual(forward_stop_mm(config.sensors[1], config.safety), 100)
+        self.assertIsNone(forward_stop_mm(config.sensors[0], config.safety))
+
+    def test_save_round_trip_includes_safety(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "sensors.json")
+            config = SensorsConfig(
+                safety=SafetyConfig(enabled=True, cliff_trip_above_mm=175, forward_stop_below_mm=140),
+                sensors=(
+                    SensorEntry("cliff_left", "vl53l0x", 0, role="cliff"),
+                ),
+            )
+            save_sensors_config(config, path)
+
+            loaded = load_sensors_config(path)
+
+        self.assertTrue(loaded.safety.enabled)
+        self.assertEqual(loaded.safety.cliff_trip_above_mm, 175)
+        self.assertEqual(loaded.sensors[0].role, "cliff")
 
 
 if __name__ == "__main__":

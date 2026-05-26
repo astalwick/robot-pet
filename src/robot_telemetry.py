@@ -211,6 +211,8 @@ class TelemetryHub:
         vision_data = vision["data"] if vision else None
         voice = self.latest.get("voice")
         voice_data = voice["data"] if voice else None
+        sensors = self.latest.get("sensors")
+        sensors_data = sensors["data"] if sensors else None
 
         return {
             "type": "snapshot",
@@ -219,6 +221,7 @@ class TelemetryHub:
                 "gamepad_teleop": self._source_status(gamepad, now),
                 "vision": self._source_status(vision, now),
                 "voice": self._source_status(voice, now),
+                "sensors": self._source_status(sensors, now),
                 "system": self._system_status(now),
             },
             "controller": gamepad_data.get("controller"),
@@ -229,6 +232,7 @@ class TelemetryHub:
             "drive_status": gamepad_data.get("drive_status"),
             "vision": vision_data,
             "voice": voice_data,
+            "sensors": sensors_data,
             "pi": self.system_health,
         }
 

@@ -18,6 +18,7 @@ from telemetry.messages import (
     motor_battery_message,
     motor_battery_status,
     stale_label,
+    sensors_update,
     vision_update,
     voice_update,
     wheel_message,
@@ -91,6 +92,26 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["last_good_read_age_seconds"], 0.4)
         self.assertEqual(message["telemetry_latency_ms"], 8.5)
         self.assertEqual(message["command_loop_hz"], 20.0)
+
+    def test_sensors_update_carries_readings(self):
+        message = sensors_update(
+            enabled=True,
+            status="polling",
+            readings=[
+                {
+                    "name": "cliff_left",
+                    "kind": "vl53l0x",
+                    "channel": 0,
+                    "distance_mm": 120,
+                    "ok": True,
+                }
+            ],
+            poll_rate_hz=10.0,
+            now=2000.0,
+        )
+
+        self.assertEqual(message["source"], "sensors")
+        self.assertEqual(message["readings"][0]["distance_mm"], 120)
 
     def test_vision_update_carries_faces_and_metadata(self):
         message = vision_update(

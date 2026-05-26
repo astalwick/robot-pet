@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "poll_rate_hz": 10,
+  "sensors": [
+    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0 },
+    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1 },
+    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2 }
+  ]
+}

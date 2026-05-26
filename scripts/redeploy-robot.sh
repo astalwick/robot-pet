@@ -9,6 +9,7 @@ SERVICES=(
   gamepad-teleop.service
   robot-vision.service
   robot-voice.service
+  robot-sensors.service
   robot-web-dashboard.service
 )
 STOP_SERVICES=(
@@ -16,12 +17,14 @@ STOP_SERVICES=(
   gamepad-teleop.service
   robot-camera.service
   robot-voice.service
+  robot-sensors.service
   robot-telemetry.service
   robot-brain.service
 )
 START_SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-sensors.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -61,6 +64,9 @@ plan_service_restarts() {
       src/robot_vision.py)
         want_restart robot-vision.service
         ;;
+      src/robot_sensors.py)
+        want_restart robot-sensors.service
+        ;;
       src/robot_voice.py | src/voice/*)
         want_restart robot-voice.service
         ;;
@@ -78,6 +84,9 @@ plan_service_restarts() {
         want_restart robot-camera.service
         want_restart robot-vision.service
         ;;
+      src/drivers/range.py)
+        want_restart robot-sensors.service
+        ;;
       src/drivers/respeaker.py)
         want_restart robot-voice.service
         ;;
@@ -92,6 +101,7 @@ plan_service_restarts() {
         want_restart gamepad-teleop.service
         want_restart robot-vision.service
         want_restart robot-voice.service
+        want_restart robot-sensors.service
         ;;
       systemd/*)
         want_restart "$(basename "$path")"
@@ -175,7 +185,7 @@ if [[ "$systemd_changed" -eq 1 ]]; then
     [[ "$path" == systemd/* ]] || continue
     service="$(basename "$path")"
     sudo install -m 0644 "$REPO_DIR/$path" "/etc/systemd/system/$service"
-    if [[ "$service" == robot-vision.service || "$service" == robot-voice.service ]]; then
+    if [[ "$service" == robot-vision.service || "$service" == robot-voice.service || "$service" == robot-sensors.service ]]; then
       echo "enabling $service"
       sudo systemctl enable "$service"
     fi

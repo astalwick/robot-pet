@@ -9,7 +9,13 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
-from telemetry.messages import decode_json_line, gamepad_teleop_update, vision_update, voice_update
+from telemetry.messages import (
+    decode_json_line,
+    gamepad_teleop_update,
+    sensors_update,
+    vision_update,
+    voice_update,
+)
 from telemetry.socket_client import publish_message
 
 
@@ -109,6 +115,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["sources"]["vision"]["stale"])
         self.assertIsNone(snapshot["vision"])
 
+    async def test_snapshot_lists_sensors_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("sensors", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["sensors"]["stale"])
+        self.assertIsNone(snapshot["sensors"])
+
     async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()
 
@@ -139,6 +152,33 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["vision"]["faces"][0]["width"], 0.3)
         self.assertEqual(snapshot["vision"]["image_width"], 1280)
         self.assertFalse(snapshot["sources"]["vision"]["stale"])
+
+    async def test_sensors_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        message = sensors_update(
+            enabled=True,
+            status="polling",
+            readings=[
+                {
+                    "name": "cliff_left",
+                    "kind": "vl53l0x",
+                    "channel": 0,
+                    "distance_mm": 88,
+                    "ok": True,
+                }
+            ],
+            poll_rate_hz=10.0,
+        )
+
+        self.assertTrue(publish_message(self.publish_socket, message))
+        snapshot = await self._read_until(reader, lambda item: item.get("sensors") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["sensors"]["readings"][0]["distance_mm"], 88)
+        self.assertFalse(snapshot["sources"]["sensors"]["stale"])
 
     async def test_voice_update_appears_in_subscriber_snapshot(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

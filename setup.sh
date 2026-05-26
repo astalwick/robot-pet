@@ -148,24 +148,28 @@ cat >"$SUDOERS_TMP" <<SUDOERS
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-voice.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-sensors.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-voice.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-sensors.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-voice.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-sensors.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-voice.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-sensors.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
@@ -224,6 +228,7 @@ for service in \
   robot-camera.service \
   robot-vision.service \
   robot-voice.service \
+  robot-sensors.service \
   robot-web-dashboard.service
 do
   echo "    enabling $service"
@@ -236,7 +241,8 @@ for service in \
   robot-voice.service \
   robot-telemetry.service \
   robot-web-dashboard.service \
-  robot-brain.service
+  robot-brain.service \
+  robot-sensors.service
 do
   echo "    stopping $service"
   sudo systemctl stop "$service"
@@ -248,6 +254,7 @@ for service in \
   gamepad-teleop.service \
   robot-vision.service \
   robot-voice.service \
+  robot-sensors.service \
   robot-web-dashboard.service
 do
   echo "    starting $service"

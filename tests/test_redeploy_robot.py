@@ -14,6 +14,7 @@ ALL_SERVICES = {
     "gamepad-teleop.service",
     "robot-vision.service",
     "robot-voice.service",
+    "robot-sensors.service",
     "robot-web-dashboard.service",
 }
 
@@ -41,6 +42,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("gamepad-teleop.service")
         elif path == "src/robot_vision.py":
             want("robot-vision.service")
+        elif path == "src/robot_sensors.py":
+            want("robot-sensors.service")
         elif path == "src/robot_voice.py" or path.startswith("src/voice/"):
             want("robot-voice.service")
         elif path == "src/robot_web_dashboard.py" or path.startswith("src/web_dashboard_static/"):
@@ -57,6 +60,8 @@ def planned_services(paths: list[str]) -> set[str]:
         elif path == "src/drivers/camera.py":
             want("robot-camera.service")
             want("robot-vision.service")
+        elif path == "src/drivers/range.py":
+            want("robot-sensors.service")
         elif path == "src/drivers/respeaker.py":
             want("robot-voice.service")
         elif path.startswith("src/drivers/"):
@@ -69,6 +74,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("gamepad-teleop.service")
             want("robot-vision.service")
             want("robot-voice.service")
+            want("robot-sensors.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 

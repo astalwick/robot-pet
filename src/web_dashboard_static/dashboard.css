@@ -309,6 +309,10 @@ button.armed.timeline-paused {
   background: rgba(0, 212, 255, 0.14);
 }
 
+.panel.hidden {
+  display: none;
+}
+
 .panel {
   background: var(--bg-panel);
   border: 1px solid var(--border);

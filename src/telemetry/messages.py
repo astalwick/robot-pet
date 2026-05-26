@@ -157,6 +157,36 @@ def drive_status_message(
     }
 
 
+def sensors_update(
+    enabled: bool,
+    status: str,
+    readings: list[dict[str, Any]],
+    poll_rate_hz: float,
+    error: str | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "sensors",
+        "time": now if now is not None else time.time(),
+        "enabled": enabled,
+        "status": status,
+        "readings": readings,
+        "poll_rate_hz": poll_rate_hz,
+        "error": error,
+    }
+
+
+def reading_to_dict(reading: Any) -> dict[str, Any]:
+    return {
+        "name": reading.name,
+        "kind": reading.kind,
+        "channel": reading.channel,
+        "distance_mm": reading.distance_mm,
+        "ok": reading.ok,
+    }
+
+
 def vision_update(
     enabled: bool,
     status: str,

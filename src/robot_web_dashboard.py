@@ -73,6 +73,8 @@ LOG_COMMAND = [
     "-u",
     "robot-vision",
     "-u",
+    "robot-sensors",
+    "-u",
     "robot-voice",
     "-u",
     "robot-web-dashboard",

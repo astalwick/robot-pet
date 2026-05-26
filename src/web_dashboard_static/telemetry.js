@@ -65,6 +65,7 @@ function render(snapshot) {
   renderWheels(wheels);
   renderLink(linkLoop, driveStatusPayload);
   renderVoice(snapshot, sources);
+  renderSensors(snapshot, sources);
   updateVoiceTimeline((snapshot.voice || {}).timeline);
   updateVoiceTurnStats((snapshot.voice || {}).timeline);
   renderFaceOverlay(snapshot, sources);
@@ -267,6 +268,33 @@ function renderLink(linkLoop, driveStatusPayload) {
     row('pub drops', '', publishFailures != null ? publishFailures : '--', publishFailures > 0 ? 'warn' : ''),
     row('last pub', '', publishOk === true ? 'ok' : (publishOk === false ? 'fail' : '--'), publishOk === true ? 'ok' : (publishOk === false ? 'warn' : '')),
   ]);
+}
+
+function renderSensors(snapshot, sources) {
+  const panel = document.getElementById('sensors-panel');
+  if (!panel) return;
+
+  const sensors = snapshot.sensors;
+  const source = sources.sensors || {};
+  const readings = sensors?.readings || [];
+  const hasLiveReadings = source.stale === false
+    && sensors?.status === 'polling'
+    && readings.some((reading) => reading.ok);
+
+  if (!hasLiveReadings) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  panel.classList.remove('hidden');
+  const rows = readings.map((reading) => {
+    const label = reading.name || '--';
+    const value = reading.ok ? `${reading.distance_mm} mm` : 'FAIL';
+    const cls = reading.ok ? 'ok' : 'err';
+    return row(label, '', value, cls);
+  });
+  rows.unshift(row('status', '', sensors.status || '--', 'ok'));
+  setRows('sensors-rows', rows);
 }
 
 function fixWraparound(value) {

@@ -156,7 +156,6 @@ plan_service_restarts <<< "$changed_files"
 if [[ "$need_pip" -eq 1 ]]; then
   echo "Installing Python package metadata and dependencies..."
   "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR"
-  "$REPO_DIR/.venv/bin/python" -m pip install -e "$REPO_DIR[pi-range]"
   echo ""
 fi
 

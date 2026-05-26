@@ -197,7 +197,6 @@ echo "[11/14] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 python -m pip install -e "$REPO_DIR"
-python -m pip install -e "$REPO_DIR[pi-range]"
 # openwakeword: install separately with --no-deps because it hard-requires
 # tflite-runtime on Linux (no Py 3.13 wheel) and we only use the ONNX backend.
 # --ignore-requires-python bypasses its python_requires<3.12 gate, which would

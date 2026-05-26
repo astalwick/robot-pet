@@ -45,7 +45,11 @@ def main():
     args = parser.parse_args()
 
     interval = 1.0 / args.rate
-    driver = RangeDriver(DEFAULT_SENSORS)
+    try:
+        driver = RangeDriver(DEFAULT_SENSORS)
+    except RuntimeError as error:
+        print(f"ERROR: {error}")
+        sys.exit(1)
 
     print("=== I2C ToF range (TCA9548A + VL53L0X) ===")
     print(f"Channels 0–2 (cliff left / center / right), {args.rate:.1f} Hz")

@@ -18,19 +18,13 @@ dependencies = [
     "pyusb",
     "rich",
     "smbus2; sys_platform == 'linux'",
+    "adafruit-blinka; sys_platform == 'linux'",
+    "adafruit-circuitpython-tca9548a; sys_platform == 'linux'",
+    "adafruit-circuitpython-vl53l0x; sys_platform == 'linux'",
     "certifi",
     "sounddevice",
     "textual",
     "websockets",
-]
-
-# Pi-only range sensor stack (Blinka + mux + VL53). Installed on the robot via
-# setup.sh; kept out of default deps so Mac dev venvs stay lean.
-[project.optional-dependencies]
-pi-range = [
-    "adafruit-blinka; sys_platform == 'linux'",
-    "adafruit-circuitpython-tca9548a; sys_platform == 'linux'",
-    "adafruit-circuitpython-vl53l0x; sys_platform == 'linux'",
 ]
 
 [tool.setuptools]

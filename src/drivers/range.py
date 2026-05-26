@@ -41,7 +41,12 @@ DEFAULT_SENSORS = [
 
 
 def _default_i2c_factory() -> Any:
-    import board
+    try:
+        import board
+    except ImportError as exc:
+        raise RuntimeError(
+            "adafruit-blinka not installed (run: pip install -e . from the repo venv on the Pi)"
+        ) from exc
 
     return board.I2C()
 

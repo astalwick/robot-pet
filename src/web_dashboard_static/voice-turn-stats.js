@@ -6,6 +6,9 @@ const finalizedRows = [];
 
 let listEl = null;
 let tallyEl = null;
+let lastEventT = -1;
+let highestTurnId = 0;
+let sessionEpoch = 0;
 
 export function initVoiceTurnStats() {
   listEl = document.getElementById('voice-turn-stats-list');
@@ -17,22 +20,38 @@ export function updateVoiceTurnStats(timeline) {
   const ref = Number(timeline.ref) || 0;
   const events = Array.isArray(timeline.events) ? timeline.events : [];
 
+  // Server process restart: monotonic ref jumped backwards.
+  if (lastEventT > 0 && ref + 1 < lastEventT) {
+    resetAll();
+  }
+
   for (const event of events) {
-    ingestEvent(event);
+    const t = Number(event.t) || 0;
+    if (t <= lastEventT) continue;
+    lastEventT = t;
+    ingestEvent(event, t);
   }
 
   expirePending(ref);
   render();
 }
 
-function ingestEvent(event) {
+function ingestEvent(event, t) {
   const turnId = event.turn_id;
   if (turnId == null) return;
-  const t = Number(event.t) || 0;
-  let record = records.get(turnId);
+
+  if (event.type === 'turn_start' && turnId <= highestTurnId) {
+    beginNewSession();
+  }
+  if (event.type === 'turn_start') {
+    highestTurnId = turnId;
+  }
+
+  const key = `${sessionEpoch}:${turnId}`;
+  let record = records.get(key);
   if (!record) {
-    record = { turnId, finalized: false };
-    records.set(turnId, record);
+    record = { key, turnId, finalized: false };
+    records.set(key, record);
   }
   if (record.finalized) return;
 
@@ -63,9 +82,26 @@ function ingestEvent(event) {
   }
 }
 
+function beginNewSession() {
+  sessionEpoch++;
+  highestTurnId = 0;
+  pushRow({ outcome: 'separator' });
+}
+
+function resetAll() {
+  records.clear();
+  finalizedRows.length = 0;
+  highestTurnId = 0;
+  sessionEpoch = 0;
+  lastEventT = -1;
+}
+
 function finalize(record) {
   record.finalized = true;
-  const row = classify(record);
+  pushRow(classify(record));
+}
+
+function pushRow(row) {
   finalizedRows.unshift(row);
   if (finalizedRows.length > MAX_ROWS) finalizedRows.length = MAX_ROWS;
 }
@@ -82,24 +118,27 @@ function classify(record) {
     return { turnId, outcome: 'absent', savings_ms: 0 };
   }
   if (cancelled_t != null && speculative) {
-    const cost_ms = first_token_t != null ? Math.round((cancelled_t - first_token_t) * 1000) : null;
-    return { turnId, outcome: 'replaced', savings_ms: null, cost_ms, reason: cancel_reason };
+    if (first_token_t == null) {
+      return { turnId, outcome: 'replaced', cost_ms: 0, no_audible: true, reason: cancel_reason };
+    }
+    return { turnId, outcome: 'replaced', cost_ms: Math.round((cancelled_t - first_token_t) * 1000), reason: cancel_reason };
   }
-  return { turnId, outcome: 'cancelled', savings_ms: null, reason: cancel_reason };
+  return { turnId, outcome: 'cancelled', reason: cancel_reason };
 }
 
 function expirePending(now) {
-  for (const [turnId, record] of records) {
+  for (const [key, record] of records) {
     if (record.finalized) continue;
     const anchor = record.start_t ?? record.first_token_t ?? 0;
-    if (anchor && now - anchor > PENDING_TTL_SECS) records.delete(turnId);
+    if (anchor && now - anchor > PENDING_TTL_SECS) records.delete(key);
   }
 }
 
 function render() {
-  const kept = finalizedRows.filter((row) => row.outcome === 'kept');
-  const replaced = finalizedRows.filter((row) => row.outcome === 'replaced');
-  const absent = finalizedRows.filter((row) => row.outcome === 'absent');
+  const visibleRows = finalizedRows.filter((row) => row.outcome !== 'separator');
+  const kept = visibleRows.filter((row) => row.outcome === 'kept');
+  const replaced = visibleRows.filter((row) => row.outcome === 'replaced');
+  const absent = visibleRows.filter((row) => row.outcome === 'absent');
   const keptMedian = median(kept.map((row) => row.savings_ms));
   const replacedMedian = median(replaced.map((row) => row.cost_ms).filter((value) => value != null));
 
@@ -108,13 +147,18 @@ function render() {
     `replaced ${replaced.length}${replacedMedian != null ? ` (median ${replacedMedian}ms cost)` : ''}`,
     `absent ${absent.length}`,
   ];
-  tallyEl.textContent = tallyParts.join(' · ');
+  tallyEl.textContent = visibleRows.length ? tallyParts.join(' · ') : 'no turns yet';
 
   listEl.innerHTML = '';
   for (const row of finalizedRows) {
     const line = document.createElement('div');
-    line.className = `turn-stat-row turn-stat-${row.outcome}`;
-    line.textContent = formatRow(row);
+    if (row.outcome === 'separator') {
+      line.className = 'turn-stat-separator';
+      line.textContent = '— new session —';
+    } else {
+      line.className = `turn-stat-row turn-stat-${row.outcome}`;
+      line.textContent = formatRow(row);
+    }
     listEl.appendChild(line);
   }
 }
@@ -125,7 +169,7 @@ function formatRow(row) {
   if (row.outcome === 'kept') return `${id}  ${outcome}  saved ${row.savings_ms}ms`;
   if (row.outcome === 'absent') return `${id}  ${outcome}  —`;
   if (row.outcome === 'replaced') {
-    const cost = row.cost_ms != null ? `cost ${row.cost_ms}ms` : 'cost ?';
+    const cost = row.no_audible ? 'no audible cost' : `cost ${row.cost_ms}ms`;
     return `${id}  ${outcome}  ${cost}${row.reason ? ` (${row.reason})` : ''}`;
   }
   return `${id}  ${outcome}${row.reason ? `  (${row.reason})` : ''}`;

@@ -202,6 +202,16 @@ main {
 .turn-stat-absent { color: var(--text-dim); }
 .turn-stat-cancelled { color: var(--text-dim); }
 
+.turn-stat-separator {
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.15em;
+  font-size: 0.65rem;
+  margin: 0.25rem 0;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.2rem;
+}
+
 #logs-section {
   grid-column: 2 / -1;
   min-height: 0;

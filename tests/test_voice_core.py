@@ -13,8 +13,10 @@ from voice.assistant import (
     END_SESSION_TOOL_NAME,
     ActiveTurn,
     AudioLevels,
+    TurnRuntimeState,
     VoiceState,
     VoiceSwitch,
+    decide_barge_in_during_playback,
     handle_scribe_events,
     note_mic_chunk,
     refresh_barge_in_gate,
@@ -205,6 +207,109 @@ class TurnPolicyTest(unittest.TestCase):
         )
         self.assertFalse(should_barge_in)
         self.assertEqual(reason, "not_sustained")
+
+
+class DecideBargeInDuringPlaybackTest(unittest.TestCase):
+    def _fake_turn(self, *, streamed: str = "", speech_started_at: float = 0.0):
+        return SimpleNamespace(
+            assistant_streamed_text=lambda: streamed,
+            speech_elapsed_secs=lambda now: now - speech_started_at,
+        )
+
+    def test_uses_recent_barge_in_inputs_within_window(self):
+        policy = TurnPolicy(barge_in_min_rms=500, local_speech_window_secs=1.0)
+        state = TurnRuntimeState(
+            last_local_speech_rms=100,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_mic_rms=1200,
+            recent_barge_in_gate_open=True,
+            recent_barge_in_gate_reason="substantial_partial",
+            recent_barge_in_audio_at=0.5,
+        )
+        levels = AudioLevels(playback_rms=400, playback_at=1.0)
+
+        outcome = decide_barge_in_during_playback(
+            "tell me another story please",
+            now=1.0,
+            active_turn=self._fake_turn(),
+            state=state,
+            levels=levels,
+            policy=policy,
+        )
+
+        self.assertTrue(outcome.accepted)
+        self.assertEqual(outcome.reason, "substantial_partial")
+        self.assertEqual(outcome.mic_rms, 1200)
+        self.assertTrue(outcome.gate_open)
+        self.assertEqual(outcome.playback_rms, 400)
+
+    def test_falls_back_to_current_inputs_after_window_expires(self):
+        policy = TurnPolicy(barge_in_min_rms=500, local_speech_window_secs=0.5)
+        state = TurnRuntimeState(
+            last_local_speech_rms=100,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_mic_rms=1200,
+            recent_barge_in_gate_open=True,
+            recent_barge_in_gate_reason="substantial_partial",
+            recent_barge_in_audio_at=0.0,
+        )
+
+        outcome = decide_barge_in_during_playback(
+            "tell me another story please",
+            now=10.0,
+            active_turn=self._fake_turn(),
+            state=state,
+            levels=AudioLevels(),
+            policy=policy,
+        )
+
+        self.assertFalse(outcome.accepted)
+        self.assertEqual(outcome.reason, "low_rms")
+        self.assertEqual(outcome.mic_rms, 100)
+        self.assertFalse(outcome.gate_open)
+
+    def test_explicit_interrupt_accepted_even_with_closed_gate(self):
+        policy = TurnPolicy(barge_in_min_rms=700, local_speech_window_secs=0.5)
+        state = TurnRuntimeState(
+            last_local_speech_rms=200,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_audio_at=0.0,
+        )
+
+        outcome = decide_barge_in_during_playback(
+            "wait",
+            now=10.0,
+            active_turn=self._fake_turn(),
+            state=state,
+            levels=AudioLevels(),
+            policy=policy,
+        )
+
+        self.assertTrue(outcome.accepted)
+        self.assertEqual(outcome.reason, "explicit_interrupt")
+
+    def test_assistant_echo_is_rejected(self):
+        policy = TurnPolicy(barge_in_min_rms=500)
+        state = TurnRuntimeState(
+            last_local_speech_rms=900,
+            gate_open=True,
+            gate_last_reason="substantial_partial",
+        )
+
+        outcome = decide_barge_in_during_playback(
+            "Sure, here's a tiny one.",
+            now=1.0,
+            active_turn=self._fake_turn(streamed="Sure, here's a tiny one: a small light can matter a lot."),
+            state=state,
+            levels=AudioLevels(),
+            policy=policy,
+        )
+
+        self.assertFalse(outcome.accepted)
+        self.assertEqual(outcome.reason, "assistant_echo")
 
 
 class ActiveTurnTest(unittest.TestCase):

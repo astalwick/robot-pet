@@ -29,7 +29,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
     "You have a web_search tool for questions that need fresh or external information. "
     "Before you call web_search, first say a brief out-loud heads up like 'let me look that up' or 'one sec, checking the web' "
-    "so the user knows you're searching. Only then call the tool, and answer once the results come back. "
+    "so the user knows you're searching. Only then call the tool, and answer once the results come back. Do not include references in your response."
     "When the user is clearly done talking for now (goodbye, stop listening, that's all, etc.), "
     "first say a brief sign-off out loud, then call end_session as your final action for that turn. "
     "Do not say anything after calling end_session — the session ends immediately. "
@@ -313,6 +313,48 @@ class TurnRuntimeState:
     barge_in_hearing_reported: bool = False
 
 
+@dataclass
+class BargeInOutcome:
+    accepted: bool
+    reason: str
+    mic_rms: int
+    gate_open: bool
+    playback_rms: int
+
+
+def decide_barge_in_during_playback(
+    text: str,
+    now: float,
+    active_turn: ActiveTurn,
+    state: TurnRuntimeState,
+    levels: AudioLevels,
+    policy: TurnPolicy,
+) -> BargeInOutcome:
+    mic_rms = state.last_local_speech_rms
+    gate_open = state.gate_open
+    gate_reason = state.gate_last_reason
+    if now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs:
+        mic_rms = state.recent_barge_in_mic_rms
+        gate_open = state.recent_barge_in_gate_open
+        gate_reason = state.recent_barge_in_gate_reason
+    accepted, reason = policy.barge_in_decision(
+        text,
+        assistant_speaking=True,
+        gate_open=gate_open,
+        assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
+        mic_rms=mic_rms,
+        gate_reason=gate_reason,
+        assistant_text=active_turn.assistant_streamed_text(),
+    )
+    return BargeInOutcome(
+        accepted=accepted,
+        reason=reason,
+        mic_rms=mic_rms,
+        gate_open=gate_open,
+        playback_rms=effective_playback_rms(levels, now),
+    )
+
+
 async def stream_openai_words(
     openai_input: list[dict[str, str]],
     openai_client: Any,
@@ -557,6 +599,28 @@ async def handle_scribe_events(
             )
         )
 
+    def report_barge_in(source: str, outcome: BargeInOutcome) -> None:
+        state.gate_last_reason = outcome.reason
+        emit(
+            "barge_in_considered",
+            source=source,
+            accepted=outcome.accepted,
+            reason=outcome.reason,
+            mic=outcome.mic_rms,
+            playback=outcome.playback_rms,
+            threshold=policy.barge_in_min_rms,
+        )
+        status(
+            **barge_in_telemetry(
+                policy,
+                outcome.mic_rms,
+                outcome.playback_rms,
+                policy.barge_in_min_rms,
+                outcome.gate_open,
+                outcome.reason,
+            )
+        )
+
     def publish_barge_in_event(source: str, reason: str) -> None:
         state.barge_in_event_count += 1
         status(
@@ -729,48 +793,14 @@ async def handle_scribe_events(
             active_turn.mark_speech_started(now)
             publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
-            playback_rms = effective_playback_rms(levels, now)
-            decision_mic_rms = state.last_local_speech_rms
-            decision_gate_open = state.gate_open
-            decision_gate_reason = state.gate_last_reason
-            if now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs:
-                decision_mic_rms = state.recent_barge_in_mic_rms
-                decision_gate_open = state.recent_barge_in_gate_open
-                decision_gate_reason = state.recent_barge_in_gate_reason
-            should_barge_in, state.gate_last_reason = policy.barge_in_decision(
-                text,
-                assistant_speaking=True,
-                gate_open=decision_gate_open,
-                assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
-                mic_rms=decision_mic_rms,
-                gate_reason=decision_gate_reason,
-                assistant_text=active_turn.assistant_streamed_text(),
-            )
-            emit(
-                "barge_in_considered",
-                source="partial",
-                accepted=should_barge_in,
-                reason=state.gate_last_reason,
-                mic=decision_mic_rms,
-                playback=playback_rms,
-                threshold=policy.barge_in_min_rms,
-            )
-            status(
-                **barge_in_telemetry(
-                    policy,
-                    decision_mic_rms,
-                    playback_rms,
-                    policy.barge_in_min_rms,
-                    decision_gate_open,
-                    state.gate_last_reason,
-                )
-            )
-            if should_barge_in:
-                publish_barge_in_event("partial", state.gate_last_reason)
+            outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
+            report_barge_in("partial", outcome)
+            if outcome.accepted:
+                publish_barge_in_event("partial", outcome.reason)
                 await cancel_active_turn("barge_in")
                 await cancel_task(state.debounce_task)
                 state.debounce_task = None
-                if state.gate_last_reason == "explicit_interrupt":
+                if outcome.reason == "explicit_interrupt":
                     status(status="listening", partial_transcript=None)
                 else:
                     state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
@@ -823,48 +853,14 @@ async def handle_scribe_events(
             active_turn.mark_speech_started(now)
             publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
-            playback_rms = effective_playback_rms(levels, now)
-            decision_mic_rms = state.last_local_speech_rms
-            decision_gate_open = state.gate_open
-            decision_gate_reason = state.gate_last_reason
-            if now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs:
-                decision_mic_rms = state.recent_barge_in_mic_rms
-                decision_gate_open = state.recent_barge_in_gate_open
-                decision_gate_reason = state.recent_barge_in_gate_reason
-            should_barge_in, state.gate_last_reason = policy.barge_in_decision(
-                text,
-                assistant_speaking=True,
-                gate_open=decision_gate_open,
-                assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
-                mic_rms=decision_mic_rms,
-                gate_reason=decision_gate_reason,
-                assistant_text=active_turn.assistant_streamed_text(),
-            )
-            emit(
-                "barge_in_considered",
-                source="commit",
-                accepted=should_barge_in,
-                reason=state.gate_last_reason,
-                mic=decision_mic_rms,
-                playback=playback_rms,
-                threshold=policy.barge_in_min_rms,
-            )
-            status(
-                **barge_in_telemetry(
-                    policy,
-                    decision_mic_rms,
-                    playback_rms,
-                    policy.barge_in_min_rms,
-                    decision_gate_open,
-                    state.gate_last_reason,
-                )
-            )
-            if not should_barge_in:
+            outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
+            report_barge_in("commit", outcome)
+            if not outcome.accepted:
                 return
 
-            publish_barge_in_event("commit", state.gate_last_reason)
+            publish_barge_in_event("commit", outcome.reason)
             await cancel_active_turn("barge_in_commit")
-            if state.gate_last_reason == "explicit_interrupt" or not should_start_from_commit:
+            if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
                 status(status="listening", partial_transcript=None, last_committed_transcript=text)
                 return
             status(status="thinking", partial_transcript=None, last_committed_transcript=text)

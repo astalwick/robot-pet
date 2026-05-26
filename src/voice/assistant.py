@@ -21,7 +21,7 @@ OPENAI_MODEL = "gpt-5.4-mini"
 DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a voice assistant named Bloop running on a small robot pet. "
+    "You are a voice assistant named Bloop running on a small robot pet. You are in Longueuil, Quebec."
     "Keep responses brief. Answer naturally in one or two sentences. "
     "Avoid markdown unless the user explicitly asks for it. "
     "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "

@@ -37,6 +37,13 @@ from config.vision import (
     load_vision_config,
     save_vision_config,
 )
+from config.sensors import (
+    DEFAULT_CONFIG_PATH as DEFAULT_SENSORS_CONFIG_PATH,
+    SensorsConfig,
+    SensorsConfigError,
+    load_sensors_config,
+    save_sensors_config,
+)
 from config.voice import (
     DEFAULT_CONFIG_PATH as DEFAULT_VOICE_CONFIG_PATH,
     VoiceConfig,
@@ -287,6 +294,48 @@ VOICE_FIELDS = (
     },
 )
 
+SENSORS_FIELDS = (
+    {
+        "key": "enabled",
+        "label": "Poll sensors",
+        "type": "boolean",
+        "help": "robot-sensors reads ToF hardware and publishes telemetry",
+    },
+    {
+        "key": "poll_rate_hz",
+        "label": "Poll rate (Hz)",
+        "type": "number",
+        "help": "0.5 .. 20.0",
+        "min": 0.5,
+        "max": 20.0,
+        "step": 0.5,
+    },
+    {
+        "key": "safety_enabled",
+        "label": "Safety gating",
+        "type": "boolean",
+        "help": "robot-motion blocks forward drive when cliff or forward rules trip",
+    },
+    {
+        "key": "cliff_trip_above_mm",
+        "label": "Cliff trip above (mm)",
+        "type": "number",
+        "help": "Cliff sensor trips when distance is above this (floor gone / out of range)",
+        "min": 1,
+        "max": 4000,
+        "step": 1,
+    },
+    {
+        "key": "forward_stop_below_mm",
+        "label": "Forward stop below (mm)",
+        "type": "number",
+        "help": "Forward sensor trips when distance is below this (obstacle too close)",
+        "min": 1,
+        "max": 4000,
+        "step": 1,
+    },
+)
+
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
@@ -440,6 +489,26 @@ def restart_gamepad_teleop() -> subprocess.CompletedProcess[str]:
     )
 
 
+def restart_robot_sensors() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "robot-sensors.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def restart_robot_motion() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "robot-motion.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
 def restart_web_dashboard() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["sudo", "systemctl", "restart", "--no-block", "robot-web-dashboard.service"],
@@ -472,6 +541,7 @@ class WebDashboardState:
         vision_config_path: str,
         voice_config_path: str,
         voice_command_socket: str,
+        sensors_config_path: str = DEFAULT_SENSORS_CONFIG_PATH,
         redeploy_status_path: str = DEFAULT_REDEPLOY_STATUS_PATH,
     ):
         self.loop = loop
@@ -481,6 +551,7 @@ class WebDashboardState:
         self.vision_config_path = vision_config_path
         self.voice_config_path = voice_config_path
         self.voice_command_socket = voice_command_socket
+        self.sensors_config_path = sensors_config_path
         self.redeploy_status_path = redeploy_status_path
         self.log_hub = BroadcastHub(loop)
         self._lock = threading.Lock()
@@ -773,6 +844,40 @@ def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
     }
 
 
+def sensors_form_values(config: SensorsConfig) -> dict[str, Any]:
+    return {
+        "enabled": config.enabled,
+        "poll_rate_hz": config.poll_rate_hz,
+        "safety_enabled": config.safety.enabled,
+        "cliff_trip_above_mm": config.safety.cliff_trip_above_mm,
+        "forward_stop_below_mm": config.safety.forward_stop_below_mm,
+    }
+
+
+def sensors_config_payload(config: SensorsConfig) -> dict[str, Any]:
+    return {
+        "values": sensors_form_values(config),
+        "fields": [dict(field) for field in SENSORS_FIELDS],
+    }
+
+
+def merge_sensors_form_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(current)
+    if "enabled" in patch:
+        merged["enabled"] = bool(patch["enabled"])
+    if "poll_rate_hz" in patch:
+        merged["poll_rate_hz"] = patch["poll_rate_hz"]
+    safety = dict(merged.get("safety", {}))
+    if "safety_enabled" in patch:
+        safety["enabled"] = bool(patch["safety_enabled"])
+    if "cliff_trip_above_mm" in patch:
+        safety["cliff_trip_above_mm"] = int(patch["cliff_trip_above_mm"])
+    if "forward_stop_below_mm" in patch:
+        safety["forward_stop_below_mm"] = int(patch["forward_stop_below_mm"])
+    merged["safety"] = safety
+    return merged
+
+
 CONFIGS: dict[str, dict[str, Any]] = {
     "drive": {
         "path_attr": "teleop_config_path",
@@ -803,6 +908,16 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "error": VoiceConfigError,
         "payload": voice_config_payload,
         "saved_log": "Voice config saved.",
+    },
+    "sensors": {
+        "path_attr": "sensors_config_path",
+        "load": load_sensors_config,
+        "save": save_sensors_config,
+        "from_dict": SensorsConfig.from_dict,
+        "default": SensorsConfig,
+        "error": SensorsConfigError,
+        "payload": sensors_config_payload,
+        "saved_log": "Sensors config saved.",
     },
 }
 
@@ -858,8 +973,12 @@ async def config_apply(request: web.Request) -> web.Response:
     except spec["error"]:
         current = spec["default"]()
 
+    merge_base = current.to_dict()
+    if name == "sensors":
+        merge_base = merge_sensors_form_patch(merge_base, patch)
+        patch = {}
     try:
-        config = spec["from_dict"]({**current.to_dict(), **patch})
+        config = spec["from_dict"]({**merge_base, **patch})
     except (TypeError, ValueError) as exc:
         return web.json_response({"error": f"Invalid {name} config: {exc}"}, status=400)
 
@@ -885,6 +1004,28 @@ async def config_apply(request: web.Request) -> web.Response:
         output = (result.stderr or result.stdout).strip()
         state.log_hub.publish(f"Drive tuning saved, but restart failed: {output}")
         return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+
+    if name == "sensors":
+        state.log_hub.publish("Saving sensors config and restarting robot-sensors and robot-motion...")
+        try:
+            await asyncio.to_thread(spec["save"], config, path)
+            sensors_result = await asyncio.to_thread(restart_robot_sensors)
+            motion_result = await asyncio.to_thread(restart_robot_motion)
+        except Exception as exc:
+            state.log_hub.publish(f"Sensors config apply failed: {exc}")
+            return web.json_response({"error": str(exc)}, status=500)
+
+        if sensors_result.returncode != 0:
+            output = (sensors_result.stderr or sensors_result.stdout).strip()
+            state.log_hub.publish(f"Sensors config saved, but robot-sensors restart failed: {output}")
+            return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+        if motion_result.returncode != 0:
+            output = (motion_result.stderr or motion_result.stdout).strip()
+            state.log_hub.publish(f"Sensors config saved, but robot-motion restart failed: {output}")
+            return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+
+        state.log_hub.publish("Sensors config saved. robot-sensors and robot-motion restarted.")
+        return web.json_response({"ok": True, **spec["payload"](config)})
 
     try:
         await asyncio.to_thread(spec["save"], config, path)
@@ -940,6 +1081,7 @@ async def run_service(args: argparse.Namespace) -> None:
         args.vision_config,
         args.voice_config,
         args.voice_command_socket,
+        args.sensors_config,
     )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
@@ -971,6 +1113,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
     parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
+    parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)
     parser.add_argument("--voice-command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--static-dir", default=str(STATIC_DIR))
     return parser

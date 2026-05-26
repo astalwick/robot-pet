@@ -89,6 +89,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.teleop_config_path = os.path.join(self.tmpdir.name, "teleop.json")
         self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
         self.voice_config_path = os.path.join(self.tmpdir.name, "voice.json")
+        self.sensors_config_path = os.path.join(self.tmpdir.name, "sensors.json")
         self.voice_command_socket = os.path.join(self.tmpdir.name, "voice-command.sock")
         self.redeploy_status_path = os.path.join(self.tmpdir.name, "redeploy-status.json")
         self.store = SnapshotStore(asyncio.get_running_loop())
@@ -100,6 +101,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.vision_config_path,
             self.voice_config_path,
             self.voice_command_socket,
+            self.sensors_config_path,
             self.redeploy_status_path,
         )
         self.client = TestClient(TestServer(build_app(self.state)))
@@ -310,6 +312,81 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(saved["enabled"])
         self.assertFalse(saved["wake_word_enabled"])
 
+    async def test_get_config_sensors_returns_fields_and_default_values(self):
+        async with self.client.get("/config/sensors") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+
+        keys = {field["key"] for field in payload["fields"]}
+        self.assertEqual(
+            keys,
+            {
+                "enabled",
+                "poll_rate_hz",
+                "safety_enabled",
+                "cliff_trip_above_mm",
+                "forward_stop_below_mm",
+            },
+        )
+        self.assertFalse(payload["values"]["safety_enabled"])
+        self.assertEqual(payload["values"]["cliff_trip_above_mm"], 200)
+
+    async def test_post_config_sensors_writes_nested_safety_to_disk(self):
+        body = {
+            "enabled": True,
+            "poll_rate_hz": 8.0,
+            "safety_enabled": True,
+            "cliff_trip_above_mm": 180,
+            "forward_stop_below_mm": 120,
+        }
+        with (
+            mock.patch("robot_web_dashboard.restart_robot_sensors") as restart_sensors,
+            mock.patch("robot_web_dashboard.restart_robot_motion") as restart_motion,
+        ):
+            restart_sensors.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            restart_motion.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            async with self.client.post("/config/sensors", json=body) as resp:
+                self.assertEqual(resp.status, 200)
+                payload = await resp.json()
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["values"]["safety_enabled"])
+        with open(self.sensors_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertTrue(saved["safety"]["enabled"])
+        self.assertEqual(saved["safety"]["cliff_trip_above_mm"], 180)
+        self.assertEqual(saved["poll_rate_hz"], 8.0)
+        restart_sensors.assert_called_once()
+        restart_motion.assert_called_once()
+
+    async def test_post_config_sensors_partial_merge_preserves_sensor_list(self):
+        with open(self.sensors_config_path, "w") as file_obj:
+            json.dump(
+                {
+                    "enabled": False,
+                    "poll_rate_hz": 5.0,
+                    "safety": {"enabled": False, "cliff_trip_above_mm": 200, "forward_stop_below_mm": 150},
+                    "sensors": [
+                        {"name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "role": "cliff"},
+                    ],
+                },
+                file_obj,
+            )
+
+        with (
+            mock.patch("robot_web_dashboard.restart_robot_sensors") as restart_sensors,
+            mock.patch("robot_web_dashboard.restart_robot_motion") as restart_motion,
+        ):
+            restart_sensors.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            restart_motion.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            async with self.client.post("/config/sensors", json={"safety_enabled": True}) as resp:
+                self.assertEqual(resp.status, 200)
+
+        with open(self.sensors_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertTrue(saved["safety"]["enabled"])
+        self.assertEqual(len(saved["sensors"]), 1)
+
     async def test_config_unknown_name_returns_404(self):
         async with self.client.get("/config/nope") as resp:
             self.assertEqual(resp.status, 404)
@@ -363,6 +440,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             self.vision_config_path,
             self.voice_config_path,
             self.voice_command_socket,
+            self.sensors_config_path,
             self.redeploy_status_path,
         )
 

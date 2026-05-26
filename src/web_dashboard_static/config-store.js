@@ -139,6 +139,7 @@ export const configStore = {
   drive: createSection('drive'),
   vision: createSection('vision'),
   voice: createSection('voice'),
+  sensors: createSection('sensors'),
 };
 
 export async function loadAll() {
@@ -146,6 +147,7 @@ export async function loadAll() {
     configStore.drive.load(),
     configStore.vision.load(),
     configStore.voice.load(),
+    configStore.sensors.load(),
   ]);
   return results;
 }

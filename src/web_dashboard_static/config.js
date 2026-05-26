@@ -47,6 +47,7 @@ function renderConfigFields() {
   const driveHtml = configStore.drive.fields.map((field) => fieldHtml(field, configStore.drive.server, 'drive')).join('');
   const visionHtml = configStore.vision.fields.map((field) => fieldHtml(field, configStore.vision.server, 'vision')).join('');
   const voiceHtml = configStore.voice.fields.map((field) => fieldHtml(field, configStore.voice.server, 'voice')).join('');
+  const sensorsHtml = configStore.sensors.fields.map((field) => fieldHtml(field, configStore.sensors.server, 'sensors')).join('');
   document.getElementById('config-fields').innerHTML = `
       <h3 class="config-section">Drive</h3>
       ${driveHtml}
@@ -54,6 +55,8 @@ function renderConfigFields() {
       ${visionHtml}
       <h3 class="config-section">Voice</h3>
       ${voiceHtml}
+      <h3 class="config-section">Sensors &amp; safety</h3>
+      ${sensorsHtml}
     `;
 }
 
@@ -72,6 +75,7 @@ async function openConfig() {
   if (results[0].error) messages.push(`Drive: ${results[0].error}`);
   if (results[1].error) messages.push(`Vision: ${results[1].error}`);
   if (results[2].error) messages.push(`Voice: ${results[2].error}`);
+  if (results[3].error) messages.push(`Sensors: ${results[3].error}`);
   error.textContent = messages.join('\n');
 
   renderConfigFields();
@@ -85,8 +89,12 @@ async function applyConfig(event) {
   const driveValues = {};
   const visionValues = {};
   const voiceValues = {};
+  const sensorsValues = {};
   event.currentTarget.querySelectorAll('input[data-section]').forEach((input) => {
-    const target = input.dataset.section === 'drive' ? driveValues : (input.dataset.section === 'vision' ? visionValues : voiceValues);
+    let target = voiceValues;
+    if (input.dataset.section === 'drive') target = driveValues;
+    else if (input.dataset.section === 'vision') target = visionValues;
+    else if (input.dataset.section === 'sensors') target = sensorsValues;
     if (input.type === 'checkbox') {
       target[input.dataset.key] = input.checked;
     } else if (input.type === 'text') {
@@ -103,6 +111,8 @@ async function applyConfig(event) {
   if (!voiceResult.ok) messages.push(`Voice: ${voiceResult.error}`);
   const driveResult = await configStore.drive.apply(driveValues);
   if (!driveResult.ok) messages.push(`Drive: ${driveResult.error}`);
+  const sensorsResult = await configStore.sensors.apply(sensorsValues);
+  if (!sensorsResult.ok) messages.push(`Sensors: ${sensorsResult.error}`);
 
   if (messages.length) {
     error.textContent = messages.join('\n');

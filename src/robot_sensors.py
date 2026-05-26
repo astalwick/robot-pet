@@ -30,6 +30,10 @@ DISABLED_PUBLISH_INTERVAL = 1.0
 log = setup_logging("robot-sensors")
 
 
+def _sensor_signature(config: SensorsConfig) -> tuple[tuple[str, str, int], ...]:
+    return tuple((entry.name, entry.kind, entry.mux_channel) for entry in config.sensors)
+
+
 class SensorsService:
     """Poll range sensors and publish readings through telemetry."""
 
@@ -104,9 +108,7 @@ class SensorsService:
         return min(max(self._next_poll_time - now, 0.0), CONFIG_POLL_INTERVAL)
 
     def _ensure_driver(self) -> bool:
-        signature = tuple(
-            (entry.name, entry.kind, entry.mux_channel) for entry in self.config.sensors
-        )
+        signature = _sensor_signature(self.config)
         if self._driver is not None and signature == self._driver_signature:
             return True
 
@@ -160,7 +162,11 @@ class SensorsService:
             return
 
         try:
-            self.config = load_sensors_config(self.config_path)
+            new_config = load_sensors_config(self.config_path)
+            new_signature = _sensor_signature(new_config)
+            if new_signature != _sensor_signature(self.config):
+                self._release_driver()
+            self.config = new_config
             self._config_error = None
             self._next_poll_time = None
             self._driver_signature = None

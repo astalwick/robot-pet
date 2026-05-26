@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -18,8 +19,9 @@ def write_config(path: str, values: dict) -> None:
 
 
 def bump_mtime(path: str, seconds: float = 2.0) -> None:
-    stat = os.stat(path)
-    os.utime(path, (stat.st_atime, stat.st_mtime + seconds))
+    """Use wall time so Pi filesystems with 1s mtime resolution still see a change."""
+    now = time.time()
+    os.utime(path, (now, now + seconds))
 
 
 class FakeClock:

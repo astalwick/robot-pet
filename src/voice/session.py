@@ -12,6 +12,7 @@ from voice.assistant import (
     ALTERNATE_VOICE_ID,
     DEFAULT_SYSTEM_PROMPT,
     DEFAULT_VOICE_ID,
+    AudioLevels,
     VoiceState,
     handle_scribe_events,
     run_assistant_turn,
@@ -62,15 +63,7 @@ class VoiceSession:
         )
         self.history = ConversationHistory()
         self.policy = turn_policy_from_config(config)
-        self.audio_levels: dict[str, float | int] = {
-            "mic_rms": 0,
-            "mic_peak": 0,
-            "mic_last": 0,
-            "playback_rms": 0,
-            "playback_at": 0.0,
-            "threshold_rms": 0,
-            "gate_open": 0,
-        }
+        self.audio_levels = AudioLevels()
 
     async def start(self) -> None:
         self.stop_event.clear()
@@ -137,8 +130,8 @@ class VoiceSession:
 
     def stop_playback_now(self) -> None:
         self.audio.stop_playback_now()
-        self.audio_levels["playback_rms"] = 0
-        self.audio_levels["playback_at"] = 0.0
+        self.audio_levels.playback_rms = 0
+        self.audio_levels.playback_at = 0.0
 
     async def _speak(self, text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event, turn_id):
         from voice.elevenlabs_io import speak_with_eleven_flash
@@ -148,8 +141,8 @@ class VoiceSession:
         def on_playback_rms(rms: int) -> None:
             nonlocal speaking_started
             loop = asyncio.get_running_loop()
-            self.audio_levels["playback_rms"] = playback_rms_with_gain(rms, self.config.output_gain)
-            self.audio_levels["playback_at"] = loop.time()
+            self.audio_levels.playback_rms = playback_rms_with_gain(rms, self.config.output_gain)
+            self.audio_levels.playback_at = loop.time()
             if not speaking_started:
                 speaking_started = True
                 now = time.monotonic()

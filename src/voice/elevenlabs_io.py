@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from urllib.parse import urlencode
 
-from voice.assistant import VoiceSwitch
+from voice.assistant import AudioLevels, VoiceSwitch
 from voice.assistant import note_mic_chunk
 from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pcm16_rms
 
@@ -52,7 +52,7 @@ async def stream_audio_to_scribe(
     elevenlabs_api_key: str,
     sample_rate: int = SAMPLE_RATE,
     policy=DEFAULT_TURN_POLICY,
-    audio_levels: dict[str, float | int] | None = None,
+    audio_levels: AudioLevels | None = None,
 ) -> None:
     import websockets
 
@@ -87,7 +87,7 @@ async def stream_audio_to_scribe(
                 gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
                 if audio_levels is not None:
                     note_mic_chunk(audio_levels, rms)
-                    audio_levels["scribe_gate_open"] = 1 if gate_open else 0
+                    audio_levels.scribe_gate_open = gate_open
                 if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
                     await scribe_events.put({"type": "audio_activity", "rms": rms})
                     last_activity_log_at = now

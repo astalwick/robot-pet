@@ -11,7 +11,7 @@ echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
 echo "[1/13] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[2/13] Adding $USER to dialout group..."

@@ -537,8 +537,8 @@ class RobotVoiceService:
                 continue
             levels = session.audio_levels
             now = time.monotonic()
-            mic = int(levels.get("mic_peak", 0))
-            levels["mic_peak"] = 0
+            mic = levels.mic_peak
+            levels.mic_peak = 0
             assistant_speaking = bool(self.status.get("assistant_speaking"))
             refresh_barge_in_gate(
                 levels,
@@ -547,15 +547,14 @@ class RobotVoiceService:
                 assistant_speaking,
                 mic,
             )
-            playback_at = float(levels.get("playback_at", 0.0))
-            playback_rms = int(levels.get("playback_rms", 0)) if now - playback_at <= PLAYBACK_RMS_STALE_SECS else 0
+            playback_rms = levels.playback_rms if now - levels.playback_at <= PLAYBACK_RMS_STALE_SECS else 0
             self.timeline.add_sample(
                 now,
                 mic,
                 playback_rms,
-                int(levels.get("threshold_rms", 0)),
-                int(levels.get("gate_open", 0)),
-                int(levels.get("scribe_gate_open", 0)),
+                levels.threshold_rms,
+                int(levels.gate_open),
+                int(levels.scribe_gate_open),
             )
             self.timeline.trim(now)
 

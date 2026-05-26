@@ -17,6 +17,7 @@ dependencies = [
     "pyserial",
     "pyusb",
     "rich",
+    "smbus2; sys_platform == 'linux'",
     "certifi",
     "sounddevice",
     "textual",

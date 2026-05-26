@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from voice.assistant import (
     END_SESSION_TOOL_NAME,
     ActiveTurn,
+    AudioLevels,
     VoiceState,
     VoiceSwitch,
     handle_scribe_events,
@@ -171,21 +172,21 @@ class TurnPolicyTest(unittest.TestCase):
         self.assertIsNone(last_above)
 
     def test_note_mic_chunk_tracks_peak(self):
-        levels: dict[str, float | int] = {"mic_peak": 0, "mic_last": 0}
+        levels = AudioLevels()
         note_mic_chunk(levels, 120)
         note_mic_chunk(levels, 450)
         note_mic_chunk(levels, 200)
-        self.assertEqual(levels["mic_peak"], 450)
-        self.assertEqual(levels["mic_last"], 200)
+        self.assertEqual(levels.mic_peak, 450)
+        self.assertEqual(levels.mic_last, 200)
 
     def test_refresh_barge_in_gate_writes_threshold_and_gate(self):
         policy = TurnPolicy(barge_in_min_rms=500)
-        levels = {"playback_rms": 0, "playback_at": 0.0}
+        levels = AudioLevels()
         _, gate_open, threshold, reason = refresh_barge_in_gate(levels, 0.0, policy, False, 100)
         self.assertFalse(gate_open)
         self.assertEqual(threshold, 500)
         self.assertEqual(reason, "assistant_not_speaking")
-        self.assertEqual(levels["threshold_rms"], 500)
+        self.assertEqual(levels.threshold_rms, 500)
 
     def test_single_loud_spike_does_not_open_gate_without_sustain(self):
         policy = TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=350)
@@ -1310,7 +1311,7 @@ class AssistantStreamingTest(unittest.TestCase):
     def test_effective_playback_rms_decays_when_stale(self):
         from voice.assistant import effective_playback_rms
 
-        levels = {"playback_rms": 900, "playback_at": 0.0}
+        levels = AudioLevels(playback_rms=900, playback_at=0.0)
         self.assertEqual(effective_playback_rms(levels, 0.1), 900)
         self.assertEqual(effective_playback_rms(levels, 1.0), 0)
 

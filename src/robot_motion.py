@@ -297,7 +297,11 @@ class MotionRunner:
                     speed_scale=tuning.speed_scale,
                     turbo_scale=tuning.turbo_scale,
                 )
-                wheels = intent_mixer.mix(intent_command)
+                mixed_wheels = intent_mixer.mix(intent_command)
+                wheels = {
+                    "left_command": mixed_wheels.left,
+                    "right_command": mixed_wheels.right,
+                }
                 intent_target = intent_mixer.to_wheel_speeds(
                     intent_command,
                     turbo=drive.controller.get("buttons", {}).get("lb", False),

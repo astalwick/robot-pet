@@ -129,6 +129,36 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertTrue(any(left > 0 and right > 0 for left, right in motor.commands))
 
+    def test_motion_intent_publishes_telemetry_and_completes(self):
+        motor = FakeMotor()
+        completed = []
+        published = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.1
+            if current_time > 0.8:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, telemetry_interval=0.1),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        runner.intent_executor.start("wiggle", now=0.0)
+        runner.pending_intent_complete = completed.append
+
+        runner._run_motor_loop(motor)
+
+        self.assertIn({"ok": True, "result": "completed"}, completed)
+        self.assertTrue(published)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -174,6 +174,9 @@ class VoiceSession:
         except asyncio.CancelledError:
             cancelled = True
             raise
+        except Exception as exc:
+            log.exception("tts failed: personality=%s voice=%s turn=%s: %s", self.personality_name, voice_id, turn_id, exc)
+            raise
         finally:
             await self.audio.end_playback(playback_id, drain=not cancelled)
             if speaking_started:

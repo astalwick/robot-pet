@@ -694,6 +694,7 @@ async def handle_scribe_events(
         except asyncio.CancelledError:
             return
         except Exception as exc:
+            log.exception("assistant turn failed: %s", exc)
             status(status="error", last_error=str(exc))
             return
         turn.assistant_text = assistant_text

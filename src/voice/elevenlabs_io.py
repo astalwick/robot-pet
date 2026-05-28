@@ -26,6 +26,10 @@ MIC_SCRIBE_SEND_RMS_MIN = USER_ACTIVE_RMS_THRESHOLD
 MIC_SCRIBE_GATE_HOLD_SECS = 1
 
 
+class ElevenLabsTtsError(RuntimeError):
+    pass
+
+
 def update_scribe_upload_gate(
     now: float,
     rms: int,
@@ -131,6 +135,8 @@ async def speak_with_eleven_flash(
 
     ws = None
     play_task: asyncio.Task[None] | None = None
+    socket_opened = False
+    audio_received = False
 
     async def write_audio(audio: bytes) -> None:
         if not speaking_event.is_set():
@@ -143,10 +149,11 @@ async def speak_with_eleven_flash(
                 await result
 
     async def open_socket() -> None:
-        nonlocal ws, play_task
+        nonlocal ws, play_task, socket_opened
         query = urlencode({"model_id": ELEVEN_FLASH_MODEL, "output_format": "pcm_16000"})
         url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?{query}"
         ws = await websockets.connect(url, ssl=ssl_context(), close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
+        socket_opened = True
         await ws.send(
             json.dumps(
                 {
@@ -164,6 +171,7 @@ async def speak_with_eleven_flash(
         play_task = asyncio.create_task(play_audio(ws))
 
     async def play_audio(active_ws) -> None:
+        nonlocal audio_received
         pending_audio: list[bytes] = []
         final_received = False
 
@@ -180,13 +188,20 @@ async def speak_with_eleven_flash(
                 message = await asyncio.wait_for(active_ws.recv(), timeout=0.05)
             except TimeoutError:
                 continue
-            except websockets.exceptions.ConnectionClosedOK:
+            except websockets.exceptions.ConnectionClosedOK as exc:
+                if not audio_received:
+                    raise ElevenLabsTtsError(f"ElevenLabs TTS closed before audio for voice {voice_id}: {exc}")
                 break
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as exc:
+                if not audio_received:
+                    raise ElevenLabsTtsError(f"ElevenLabs TTS connection closed before audio for voice {voice_id}: {exc}")
                 break
 
             data = json.loads(message)
+            if data.get("error") or (data.get("message") and not data.get("audio") and not data.get("isFinal")):
+                raise ElevenLabsTtsError(f"ElevenLabs TTS error for voice {voice_id}: {data.get('error') or data.get('message')}")
             if data.get("audio"):
+                audio_received = True
                 audio = base64.b64decode(data["audio"])
                 if playback_event.is_set():
                     await write_audio(audio)
@@ -210,7 +225,7 @@ async def speak_with_eleven_flash(
         if play_task:
             if not play_task.done():
                 play_task.cancel()
-            with suppress(asyncio.CancelledError, websockets.exceptions.ConnectionClosed):
+            with suppress(asyncio.CancelledError, websockets.exceptions.ConnectionClosed, ElevenLabsTtsError):
                 await play_task
         if ws:
             with suppress(TimeoutError):
@@ -226,6 +241,8 @@ async def speak_with_eleven_flash(
             await ws.send(json.dumps({"text": chunk, "try_trigger_generation": True}))
 
         await finish_socket()
+        if socket_opened and not audio_received:
+            raise ElevenLabsTtsError(f"ElevenLabs TTS produced no audio for voice {voice_id}")
     except asyncio.CancelledError:
         await cancel_socket()
         raise

@@ -116,8 +116,11 @@ src/
 | `robot-web-dashboard` | Browser dashboard with live camera, telemetry, logs, redeploy, and drive tuning | Active |
 | `robot-dashboard` | Foreground SSH TUI for telemetry, logs, and drive tuning | Manual tool |
 | `robot-motion` | RoboClaw owner, range-sensor safety, voice motion intents | Active |
+| `robot-battery` | MOSFET motor-rail power policy (GPIO only; see Body Phase 2) | Planned |
 
 `robot-motion` owns `MotorDriver` / RoboClaw, subscribes to sensor telemetry for safety gating, accepts drive commands on `/run/robot-pet/motion-drive.sock`, and hosts voice motion intents on `/run/robot-pet/motion-intent.sock`. Thresholds come from `sensors.json` (`safety.enabled`, cliff/forward mm limits, per-sensor `role`).
+
+`robot-battery` (Body Phase 2, planned) would own the high-side MOSFET on the LiPo motor rail. It would stay running when the rail is off, subscribe to telemetry, and apply a power policy still under design in [body-phase-2.md](phases/body-phase-2.md#robot-battery--motor-rail-power) (brainstorm table — not spec). It would not open RoboClaw serial; that stays `robot-motion` once power is applied.
 
 `robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/teleop.json` and restart `gamepad-teleop.service`; it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 

@@ -64,7 +64,7 @@ class SafetyGateTest(unittest.TestCase):
 
         self.assertFalse(state.blocked)
 
-    def test_apply_safety_zeros_forward_qpps_only(self):
+    def test_apply_safety_clamps_each_forward_wheel(self):
         blocked = SafetyState(blocked=True, reason="test")
 
         left, right = apply_safety_to_qpps(200, 200, blocked)
@@ -73,7 +73,11 @@ class SafetyGateTest(unittest.TestCase):
 
         left, right = apply_safety_to_qpps(-200, 200, blocked)
 
-        self.assertEqual((left, right), (-200, 200))
+        self.assertEqual((left, right), (-200, 0))
+
+        left, right = apply_safety_to_qpps(-200, -200, blocked)
+
+        self.assertEqual((left, right), (-200, -200))
 
 
 if __name__ == "__main__":

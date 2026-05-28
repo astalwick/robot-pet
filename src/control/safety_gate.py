@@ -54,6 +54,6 @@ def apply_safety_to_qpps(
     right_qpps: int,
     safety: SafetyState,
 ) -> tuple[int, int]:
-    if not safety.blocked or not is_forward_motion(left_qpps, right_qpps):
+    if not safety.blocked:
         return left_qpps, right_qpps
-    return 0, 0
+    return min(left_qpps, 0), min(right_qpps, 0)

@@ -185,7 +185,9 @@ export function renderVoice(snapshot, sources) {
   const voiceSource = sources.voice || {};
   const voice = snapshot.voice || {};
   latestVoice = voice;
-  configStore.voice.ingestServer(voice);
+  const configFields = { ...voice };
+  delete configFields.personality;
+  configStore.voice.ingestServer(configFields);
 
   const prevTelemetry = voiceTelemetryEnabled;
   voiceTelemetryEnabled = !!voice.wake_word_enabled;

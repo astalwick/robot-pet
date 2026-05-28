@@ -59,6 +59,7 @@ from telemetry.paths import (
     DEFAULT_WEB_DASHBOARD_PORT,
 )
 from telemetry.socket_client import publish_message, subscribe
+from voice.personality import load_personalities
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "web_dashboard_static"
@@ -205,8 +206,8 @@ VOICE_FIELDS = (
     {
         "key": "personality",
         "label": "Personality",
-        "type": "text",
-        "help": "Character card name from config/personality/ (e.g. default, stoic, scientist)",
+        "type": "select",
+        "help": "Character card from config/personality/",
     },
     {
         "key": "barge_in_enabled",
@@ -832,9 +833,16 @@ def vision_config_payload(config: VisionConfig) -> dict[str, Any]:
 
 
 def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
+    fields = [dict(field) for field in VOICE_FIELDS]
+    for field in fields:
+        if field["key"] == "personality":
+            options = sorted(load_personalities().keys())
+            if config.personality not in options:
+                options = [config.personality, *options]
+            field["options"] = options
     return {
         "values": config.to_dict(),
-        "fields": [dict(field) for field in VOICE_FIELDS],
+        "fields": fields,
     }
 
 

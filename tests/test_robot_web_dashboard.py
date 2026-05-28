@@ -222,6 +222,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("capture_channel_index", keys)
         self.assertIn("input_gain", keys)
         self.assertIn("output_gain", keys)
+        self.assertIn("personality", keys)
         self.assertIn("barge_in_enabled", keys)
         self.assertIn("barge_in_min_rms", keys)
         self.assertIn("barge_in_sustain_ms", keys)
@@ -232,10 +233,14 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types["capture_channel_index"], "number")
         self.assertEqual(types["input_gain"], "number")
         self.assertEqual(types["output_gain"], "number")
+        self.assertEqual(types["personality"], "select")
+        personality_field = next(field for field in payload["fields"] if field["key"] == "personality")
+        self.assertIn("default", personality_field["options"])
         self.assertFalse(payload["values"]["enabled"])
         self.assertFalse(payload["values"]["wake_word_enabled"])
         self.assertEqual(payload["values"]["wake_threshold"], 0.5)
         self.assertEqual(payload["values"]["input_device"], "XVF3800")
+        self.assertEqual(payload["values"]["personality"], "default")
         self.assertTrue(payload["values"]["barge_in_enabled"])
         self.assertEqual(payload["values"]["barge_in_min_rms"], 700)
 
@@ -752,6 +757,12 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("configStore.voice.apply", self.config_js)
         self.assertIn("loadAll", self.config_js)
         self.assertNotIn("fetchVoiceValues", self.voice_js)
+
+    def test_config_renderer_supports_select_fields(self):
+        self.assertIn("field.type === 'select'", self.config_js)
+        self.assertIn("<select", self.config_js)
+        self.assertIn("select[data-section]", self.config_js)
+        self.assertIn("input.tagName === 'SELECT'", self.config_js)
 
     def test_config_modal_fields_scroll_inside_viewport(self):
         self.assertIn("max-height: calc(100vh - 2rem)", self.dashboard_css)

@@ -37,6 +37,7 @@ class VoiceSession:
         event_callback: Callable[[dict[str, object]], None] | None = None,
         motion_intent_caller: Callable[[str], Any] | None = None,
         session_end_caller: Callable[[], Any] | None = None,
+        camera_snapshot_caller: Callable[[], bytes] | None = None,
         personalities: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self.config = config
@@ -48,6 +49,7 @@ class VoiceSession:
         self.scribe_streamer = scribe_streamer
         self.motion_intent_caller = motion_intent_caller
         self.session_end_caller = session_end_caller
+        self.camera_snapshot_caller = camera_snapshot_caller
         self.stop_event = asyncio.Event()
         self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
@@ -110,6 +112,7 @@ class VoiceSession:
                     assistant_runner=assistant_runner,
                     motion_intent_caller=self.motion_intent_caller,
                     session_end_caller=self.session_end_caller,
+                    camera_snapshot_caller=self.camera_snapshot_caller,
                     stop_playback_now=self.stop_playback_now,
                 )
             ),

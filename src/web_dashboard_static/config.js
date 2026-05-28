@@ -34,6 +34,21 @@ function fieldHtml(field, values, section) {
         </div>
       `;
   }
+  if (field.type === 'select') {
+    const options = (field.options || []).map((option) => {
+      const selected = option === value ? ' selected' : '';
+      return `<option value="${escapeHtml(option)}"${selected}>${escapeHtml(option)}</option>`;
+    }).join('');
+    return `
+        <div class="field">
+          <label for="${inputId}">${escapeHtml(field.label)}</label>
+          <select id="${inputId}" data-section="${section}" data-key="${field.key}">
+            ${options}
+          </select>
+          <span class="help">${escapeHtml(field.help)}</span>
+        </div>
+      `;
+  }
   return `
       <div class="field">
         <label for="${inputId}">${escapeHtml(field.label)}</label>
@@ -90,14 +105,14 @@ async function applyConfig(event) {
   const visionValues = {};
   const voiceValues = {};
   const sensorsValues = {};
-  event.currentTarget.querySelectorAll('input[data-section]').forEach((input) => {
+  event.currentTarget.querySelectorAll('input[data-section], select[data-section]').forEach((input) => {
     let target = voiceValues;
     if (input.dataset.section === 'drive') target = driveValues;
     else if (input.dataset.section === 'vision') target = visionValues;
     else if (input.dataset.section === 'sensors') target = sensorsValues;
     if (input.type === 'checkbox') {
       target[input.dataset.key] = input.checked;
-    } else if (input.type === 'text') {
+    } else if (input.type === 'text' || input.tagName === 'SELECT') {
       target[input.dataset.key] = input.value;
     } else {
       target[input.dataset.key] = Number(input.value);

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 import time
@@ -22,6 +23,7 @@ OPERATIONAL_SYSTEM_PROMPT = (
     "Keep responses brief. Answer naturally in one or two sentences. "
     "Avoid markdown unless the user explicitly asks for it. "
     "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
+    "You can use the look_around tool to take a current camera snapshot when the user asks what you see or asks about the robot's surroundings. "
     "You have a web_search tool for questions that need fresh or external information. "
     "Before you call web_search, first say a brief out-loud heads up like 'let me look that up' or 'one sec, checking the web' "
     "so the user knows you're searching. Only then call the tool, and answer once the results come back. Do not include references in your response. "
@@ -35,6 +37,7 @@ OPERATIONAL_SYSTEM_PROMPT = (
 END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
+LOOK_AROUND_TOOL_NAME = "look_around"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 
@@ -175,10 +178,24 @@ END_SESSION_TOOL = {
 }
 
 
+LOOK_AROUND_TOOL = {
+    "type": "function",
+    "name": LOOK_AROUND_TOOL_NAME,
+    "description": "Capture a current JPEG snapshot from the robot camera so you can answer questions about what the robot sees right now.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
-ASSISTANT_TOOLS = [END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, WEB_SEARCH_TOOL]
+ASSISTANT_TOOLS = [END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, LOOK_AROUND_TOOL, WEB_SEARCH_TOOL]
 
 
 @dataclass
@@ -325,10 +342,11 @@ def decide_barge_in_during_playback(
 
 
 async def stream_openai_words(
-    openai_input: list[dict[str, str]],
+    openai_input: list[dict[str, Any]],
     openai_client: Any,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
+    camera_snapshot_caller: Callable[[], bytes] | None = None,
 ) -> AsyncIterator[str]:
     pending = ""
     word_buffer: list[str] = []
@@ -393,6 +411,7 @@ async def stream_openai_words(
             return
 
         tool_outputs: list[dict[str, str]] = []
+        image_messages: list[dict[str, Any]] = []
         for function_call in function_calls:
             call_id = getattr(function_call, "call_id", "")
             name = getattr(function_call, "name", "")
@@ -409,6 +428,29 @@ async def stream_openai_words(
                     result = {"ok": False, "error": "motion_caller_missing"}
                 else:
                     result = await asyncio.to_thread(motion_intent_caller, name)
+            elif name == LOOK_AROUND_TOOL_NAME:
+                if camera_snapshot_caller is None:
+                    result = {"ok": False, "error": "camera_snapshot_unavailable"}
+                else:
+                    try:
+                        jpeg = await asyncio.to_thread(camera_snapshot_caller)
+                    except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
+                        result = {"ok": False, "error": str(exc)}
+                    else:
+                        data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+                        image_messages.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "input_text",
+                                        "text": "Here is the current camera snapshot from the robot.",
+                                    },
+                                    {"type": "input_image", "image_url": data_url},
+                                ],
+                            }
+                        )
+                        result = {"ok": True, "image_attached": True}
             else:
                 result = {"ok": False, "error": "unsupported tool"}
 
@@ -426,12 +468,12 @@ async def stream_openai_words(
                 log.info("tool call %s ok", name)
 
         previous_response_id = response_id
-        response_input = tool_outputs
+        response_input = [*tool_outputs, *image_messages]
 
 
 async def run_assistant_turn(
     turn_id: int,
-    openai_input: list[dict[str, str]],
+    openai_input: list[dict[str, Any]],
     playback_event: asyncio.Event,
     speaking_event: asyncio.Event,
     openai_client: Any,
@@ -441,6 +483,7 @@ async def run_assistant_turn(
     tts_speaker: Callable[..., Any] | None = None,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
+    camera_snapshot_caller: Callable[[], bytes] | None = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -452,6 +495,7 @@ async def run_assistant_turn(
             openai_client,
             motion_intent_caller,
             session_end_caller,
+            camera_snapshot_caller,
         ):
             assistant_chunks.append(chunk)
             if on_assistant_chunk:
@@ -484,6 +528,7 @@ async def handle_scribe_events(
     assistant_runner: Callable[..., Any] = run_assistant_turn,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
+    camera_snapshot_caller: Callable[[], bytes] | None = None,
     stop_playback_now: Callable[[], Any] | None = None,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
@@ -694,6 +739,7 @@ async def handle_scribe_events(
                 on_assistant_chunk=on_assistant_chunk,
                 motion_intent_caller=motion_intent_caller,
                 session_end_caller=session_end_caller,
+                camera_snapshot_caller=camera_snapshot_caller,
             )
         )
         turn = ActiveTurn(

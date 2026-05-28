@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import (
     END_SESSION_TOOL_NAME,
+    LOOK_AROUND_TOOL_NAME,
     ActiveTurn,
     AudioLevels,
     TurnRuntimeState,
@@ -393,6 +394,60 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(chunks, ["Bye."])
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output, {"ok": True, "ended": True})
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_attaches_camera_snapshot_for_look_tool(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=LOOK_AROUND_TOOL_NAME,
+                                    call_id="call_look",
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="I see you."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "What do you see?"}],
+                    SimpleNamespace(responses=fake_responses),
+                    camera_snapshot_caller=lambda: b"jpeg-bytes",
+                )
+            ]
+
+            self.assertEqual(chunks, ["I see you."])
+            next_input = fake_responses.calls[1]["input"]
+            tool_output = json.loads(next_input[0]["output"])
+            self.assertEqual(tool_output, {"ok": True, "image_attached": True})
+            self.assertEqual(next_input[1]["role"], "user")
+            self.assertEqual(next_input[1]["content"][0]["type"], "input_text")
+            self.assertEqual(next_input[1]["content"][1]["type"], "input_image")
+            self.assertTrue(next_input[1]["content"][1]["image_url"].startswith("data:image/jpeg;base64,"))
 
         asyncio.run(run())
 

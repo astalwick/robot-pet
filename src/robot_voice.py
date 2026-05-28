@@ -9,6 +9,7 @@ import json
 import os
 import signal
 import time
+import urllib.request
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
@@ -18,7 +19,7 @@ from control.motion_intent import request_motion_intent
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
-from telemetry.paths import DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
+from telemetry.paths import DEFAULT_CAMERA_PORT, DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.personality import load_personalities
@@ -34,6 +35,7 @@ TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
 PLAYBACK_RMS_STALE_SECS = 0.25
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
+DEFAULT_CAMERA_SNAPSHOT_URL = f"http://127.0.0.1:{DEFAULT_CAMERA_PORT}/snapshot.jpg"
 
 log = setup_logging("robot-voice")
 
@@ -95,12 +97,14 @@ class RobotVoiceService:
         command_socket: str = DEFAULT_VOICE_COMMAND_SOCKET,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
         motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET,
+        camera_url: str = DEFAULT_CAMERA_SNAPSHOT_URL,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
         self.command_socket = command_socket
         self.poll_seconds = poll_seconds
         self.motion_intent_socket = motion_intent_socket
+        self.camera_url = camera_url
         self.session: VoiceSession | None = None
         self.audio: ReSpeakerAudio | None = None
         self._io_stop_event: asyncio.Event | None = None
@@ -371,6 +375,7 @@ class RobotVoiceService:
             event_callback=self.timeline.add_event,
             motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
             session_end_caller=self.request_end_session,
+            camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             personalities=self.personalities,
         )
         try:
@@ -655,12 +660,18 @@ def optional_float(value: object) -> float | None:
     return float(value)
 
 
+def fetch_camera_snapshot(camera_url: str, timeout: float = 5.0) -> bytes:
+    with urllib.request.urlopen(camera_url, timeout=timeout) as response:
+        return response.read()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot voice assistant service.")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
+    parser.add_argument("--camera-url", default=DEFAULT_CAMERA_SNAPSHOT_URL)
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     return parser
 
@@ -676,6 +687,7 @@ async def run_service(args: argparse.Namespace) -> None:
         command_socket=args.command_socket,
         poll_seconds=args.poll_seconds,
         motion_intent_socket=args.motion_intent_socket,
+        camera_url=args.camera_url,
     )
     await service.run(stop_event)
 

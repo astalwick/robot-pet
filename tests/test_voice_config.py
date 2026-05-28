@@ -17,7 +17,7 @@ class VoiceConfigTest(unittest.TestCase):
 
         self.assertEqual(config, VoiceConfig())
 
-    def test_save_load_round_trip_preserves_optional_strings(self):
+    def test_save_load_round_trip_preserves_personality(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "voice.json")
             config = VoiceConfig(
@@ -100,6 +100,18 @@ class VoiceConfigTest(unittest.TestCase):
             )
             save_voice_config(config, path)
             self.assertEqual(load_voice_config(path), config)
+
+    def test_legacy_voice_id_fields_are_ignored(self):
+        config = VoiceConfig.from_dict(
+            {
+                "voice_id": "legacy-voice",
+                "alternate_voice_id": "legacy-alt",
+                "personality": "stoic",
+            }
+        )
+        self.assertEqual(config.personality, "stoic")
+        self.assertNotIn("voice_id", config.to_dict())
+        self.assertNotIn("alternate_voice_id", config.to_dict())
 
     def test_explicit_interrupt_words_parse_from_config_string(self):
         from voice.turn_policy import turn_policy_from_config

@@ -79,6 +79,7 @@ function ensureVoiceRows() {
   document.getElementById('voice-rows').innerHTML = [
     voiceActivityRow(),
     voiceValueRow('listen'),
+    voiceValueRow('personality'),
     voiceValueRow('input'),
     voiceValueRow('output'),
     voiceValueRow('channel'),
@@ -210,6 +211,8 @@ export function renderVoice(snapshot, sources) {
   ensureVoiceRows();
   setVoiceValue('status', cardStatus.text, cardStatus.cls);
   setVoiceValue('listen', wakeOn ? 'wake on' : 'wake off', wakeOn ? 'ok' : 'muted');
+  const personality = voice.personality || '--';
+  setVoiceValue('personality', personality, personality === '--' ? 'muted' : '');
   setVoiceValue('input', voice.input_device || '--');
   setVoiceValue('output', voice.output_device || '--');
   setVoiceValue('channel', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--');

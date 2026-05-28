@@ -131,7 +131,6 @@ async def speak_with_eleven_flash(
 
     ws = None
     play_task: asyncio.Task[None] | None = None
-    current_voice_id = voice_id
 
     async def write_audio(audio: bytes) -> None:
         if not speaking_event.is_set():
@@ -143,11 +142,12 @@ async def speak_with_eleven_flash(
             if asyncio.iscoroutine(result):
                 await result
 
-    async def open_voice_socket(next_voice_id: str):
+    async def open_socket() -> None:
+        nonlocal ws, play_task
         query = urlencode({"model_id": ELEVEN_FLASH_MODEL, "output_format": "pcm_16000"})
-        url = f"wss://api.elevenlabs.io/v1/text-to-speech/{next_voice_id}/stream-input?{query}"
-        next_ws = await websockets.connect(url, ssl=ssl_context(), close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
-        await next_ws.send(
+        url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?{query}"
+        ws = await websockets.connect(url, ssl=ssl_context(), close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
+        await ws.send(
             json.dumps(
                 {
                     "text": " ",
@@ -161,7 +161,7 @@ async def speak_with_eleven_flash(
                 }
             )
         )
-        return next_ws
+        play_task = asyncio.create_task(play_audio(ws))
 
     async def play_audio(active_ws) -> None:
         pending_audio: list[bytes] = []
@@ -195,16 +195,7 @@ async def speak_with_eleven_flash(
             if data.get("isFinal"):
                 final_received = True
 
-    async def start_voice_socket(next_voice_id: str) -> None:
-        nonlocal play_task, ws
-        ws = await open_voice_socket(next_voice_id)
-        play_task = asyncio.create_task(play_audio(ws))
-
-    async def ensure_voice_socket() -> None:
-        if ws is None:
-            await start_voice_socket(current_voice_id)
-
-    async def finish_voice_socket() -> None:
+    async def finish_socket() -> None:
         nonlocal play_task, ws
         if ws is None:
             return
@@ -214,7 +205,7 @@ async def speak_with_eleven_flash(
         play_task = None
         ws = None
 
-    async def cancel_voice_socket() -> None:
+    async def cancel_socket() -> None:
         nonlocal play_task, ws
         if play_task:
             if not play_task.done():
@@ -230,15 +221,16 @@ async def speak_with_eleven_flash(
 
     try:
         async for chunk in text_chunks:
-            await ensure_voice_socket()
+            if ws is None:
+                await open_socket()
             await ws.send(json.dumps({"text": chunk, "try_trigger_generation": True}))
 
-        await finish_voice_socket()
+        await finish_socket()
     except asyncio.CancelledError:
-        await cancel_voice_socket()
+        await cancel_socket()
         raise
     except Exception:
-        await cancel_voice_socket()
+        await cancel_socket()
         raise
     finally:
         speaking_event.clear()

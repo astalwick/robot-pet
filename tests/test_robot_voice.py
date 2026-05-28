@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -166,6 +167,39 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(log.error.call_count, 2)
 
+    async def test_activate_session_reloads_personality_cards(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.active_config = service_config(personality="cal")
+        service.audio = mock.Mock()
+        service.audio.stop_io = mock.AsyncMock()
+
+        captured = {}
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                captured["personalities"] = kwargs["personalities"]
+                self.history = mock.Mock()
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+        openai = types.SimpleNamespace(AsyncOpenAI=lambda api_key: mock.Mock())
+        cards = {"cal": ("voice-id", "Cal card")}
+        with (
+            mock.patch.dict(sys.modules, {"openai": openai}),
+            mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "eleven", "OPENAI_API_KEY": "openai"}),
+            mock.patch("robot_voice.load_personalities", return_value=cards),
+            mock.patch("robot_voice.VoiceSession", FakeSession),
+            mock.patch("robot_voice.publish_message", return_value=True),
+        ):
+            self.assertTrue(await service._activate_session())
+            await service.stop_all()
+
+        self.assertIs(captured["personalities"], cards)
+
 
 class TimelineBufferTest(unittest.TestCase):
     def test_partial_flood_does_not_evict_signal_events(self):
@@ -200,10 +234,10 @@ class TimelineBufferTest(unittest.TestCase):
         self.assertEqual(times, sorted(times))
 
 
-def service_config():
+def service_config(**kwargs):
     from config.voice import VoiceConfig
 
-    return VoiceConfig()
+    return VoiceConfig(**kwargs)
 
 
 if __name__ == "__main__":

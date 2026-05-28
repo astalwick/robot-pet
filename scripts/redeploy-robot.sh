@@ -181,12 +181,6 @@ if [[ "$need_pip" -eq 1 ]]; then
   echo ""
 fi
 
-# openwakeword lives outside pyproject.toml (see setup.sh comment). Idempotent
-# when already at the right version; cheap enough to run every redeploy.
-echo "Ensuring openwakeword>=0.6.0 is installed..."
-"$REPO_DIR/.venv/bin/python" -m pip install --no-deps --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
-echo ""
-
 echo "Running tests..."
 "$REPO_DIR/.venv/bin/python" -m unittest discover tests
 echo ""

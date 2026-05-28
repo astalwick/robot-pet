@@ -22,7 +22,7 @@ from control.motion_intent import (
     MotionIntentExecutor,
     request_motion_intent,
 )
-from voice.assistant import VoiceState, stream_openai_words
+from voice.assistant import stream_openai_words
 
 
 class MotionIntentExecutorTest(unittest.TestCase):
@@ -223,14 +223,12 @@ class MotionToolDispatchTest(unittest.TestCase):
                     return stream()
 
             fake_responses = FakeResponses()
-            voice_state = VoiceState("default-voice", "alternate-voice", "default-voice")
 
             chunks = [
                 chunk
                 async for chunk in stream_openai_words(
                     [{"role": "user", "content": "Wiggle please"}],
                     SimpleNamespace(responses=fake_responses),
-                    voice_state,
                     motion_intent_caller=fake_caller,
                 )
             ]
@@ -286,14 +284,12 @@ class MotionToolDispatchTest(unittest.TestCase):
                     return stream()
 
             fake_responses = FakeResponses()
-            voice_state = VoiceState("default-voice", "alternate-voice", "default-voice")
 
             chunks = [
                 chunk
                 async for chunk in stream_openai_words(
                     [{"role": "user", "content": "Move forward"}],
                     SimpleNamespace(responses=fake_responses),
-                    voice_state,
                 )
             ]
 

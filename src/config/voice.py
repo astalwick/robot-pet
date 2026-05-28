@@ -33,8 +33,7 @@ class VoiceConfig:
     output_channels: int = 1
     input_gain: float = 1.0
     output_gain: float = 1.0
-    voice_id: str | None = None
-    alternate_voice_id: str | None = None
+    personality: str = "default"
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
     barge_in_min_chars: int = 12
@@ -66,8 +65,7 @@ class VoiceConfig:
             output_channels=int(values.get("output_channels", defaults.output_channels)),
             input_gain=clamp(float(values.get("input_gain", defaults.input_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             output_gain=clamp(float(values.get("output_gain", defaults.output_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
-            voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
-            alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
+            personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
             barge_in_enabled=bool(values.get("barge_in_enabled", defaults.barge_in_enabled)),
             barge_in_min_words=int(values.get("barge_in_min_words", defaults.barge_in_min_words)),
             barge_in_min_chars=int(values.get("barge_in_min_chars", defaults.barge_in_min_chars)),

@@ -250,6 +250,7 @@ def voice_update(
     wake_last_score: float | None = None,
     wake_fire_count: int | None = None,
     wake_last_fire_at: float | None = None,
+    personality: str | None = None,
     timeline: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
@@ -302,6 +303,8 @@ def voice_update(
         payload["wake_fire_count"] = wake_fire_count
     if wake_last_fire_at is not None:
         payload["wake_last_fire_at"] = wake_last_fire_at
+    if personality is not None:
+        payload["personality"] = personality
     if timeline is not None:
         payload["timeline"] = timeline
     return payload

@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from urllib.parse import urlencode
 
-from voice.assistant import AudioLevels, VoiceSwitch
+from voice.assistant import AudioLevels
 from voice.assistant import note_mic_chunk
 from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pcm16_rms
 
@@ -119,7 +119,7 @@ async def stream_audio_to_scribe(
 
 
 async def speak_with_eleven_flash(
-    text_chunks: AsyncIterator[str | VoiceSwitch],
+    text_chunks: AsyncIterator[str],
     elevenlabs_api_key: str,
     voice_id: str,
     playback_event: asyncio.Event,
@@ -230,11 +230,6 @@ async def speak_with_eleven_flash(
 
     try:
         async for chunk in text_chunks:
-            if isinstance(chunk, VoiceSwitch):
-                await finish_voice_socket()
-                current_voice_id = chunk.voice_id
-                continue
-
             await ensure_voice_socket()
             await ws.send(json.dumps({"text": chunk, "try_trigger_generation": True}))
 

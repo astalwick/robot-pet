@@ -203,16 +203,10 @@ VOICE_FIELDS = (
         "step": 0.1,
     },
     {
-        "key": "voice_id",
-        "label": "Voice ID",
+        "key": "personality",
+        "label": "Personality",
         "type": "text",
-        "help": "Optional ElevenLabs voice ID",
-    },
-    {
-        "key": "alternate_voice_id",
-        "label": "Alt voice ID",
-        "type": "text",
-        "help": "Optional switch_voice target",
+        "help": "Character card name from config/personality/ (e.g. default, stoic, scientist)",
     },
     {
         "key": "barge_in_enabled",

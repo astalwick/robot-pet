@@ -27,8 +27,7 @@ class VoiceConfigTest(unittest.TestCase):
                 capture_channel_index=0,
                 input_gain=1.5,
                 output_gain=0.7,
-                voice_id="voice-a",
-                alternate_voice_id="voice-b",
+                personality="stoic",
             )
 
             save_voice_config(config, path)

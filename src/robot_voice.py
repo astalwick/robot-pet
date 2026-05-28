@@ -21,6 +21,7 @@ from telemetry.messages import voice_update
 from telemetry.paths import DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
+from voice.personality import load_personalities
 from voice.session import VoiceSession
 from voice.wakeword import WakeWordDetector
 
@@ -126,6 +127,7 @@ class RobotVoiceService:
             "wake_last_score": None,
             "wake_fire_count": None,
             "wake_last_fire_at": None,
+            "personality": None,
         }
         self.last_logged_error: str | None = None
         self.timeline = TimelineBuffer()
@@ -133,6 +135,7 @@ class RobotVoiceService:
         self._wake_task: asyncio.Task[None] | None = None
         self._orchestrator_task: asyncio.Task[None] | None = None
         self._detector: WakeWordDetector | None = None
+        self.personalities = load_personalities()
 
     async def run(self, stop_event: asyncio.Event) -> None:
         command_server = await self._start_command_server()
@@ -368,6 +371,7 @@ class RobotVoiceService:
             event_callback=self.timeline.add_event,
             motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
             session_end_caller=self.request_end_session,
+            personalities=self.personalities,
         )
         try:
             await self.session.start()
@@ -617,6 +621,7 @@ class RobotVoiceService:
                 wake_last_score=optional_float(self.status["wake_last_score"]),
                 wake_fire_count=optional_int(self.status["wake_fire_count"]),
                 wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
+                personality=optional_text(self.status["personality"]),
                 timeline=self.timeline.snapshot(now),
             ),
         )

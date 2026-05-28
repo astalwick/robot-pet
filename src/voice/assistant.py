@@ -18,31 +18,29 @@ log = setup_logging("robot-voice")
 
 
 OPENAI_MODEL = "gpt-5.4-mini"
-DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
-ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a voice assistant named Bloop running on a small robot pet. You are in Longueuil, Quebec."
+OPERATIONAL_SYSTEM_PROMPT = (
     "Keep responses brief. Answer naturally in one or two sentences. "
     "Avoid markdown unless the user explicitly asks for it. "
-    "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "
-    "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices. "
     "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
     "You have a web_search tool for questions that need fresh or external information. "
     "Before you call web_search, first say a brief out-loud heads up like 'let me look that up' or 'one sec, checking the web' "
-    "so the user knows you're searching. Only then call the tool, and answer once the results come back. Do not include references in your response."
+    "so the user knows you're searching. Only then call the tool, and answer once the results come back. Do not include references in your response. "
     "When the user is clearly done talking for now (goodbye, stop listening, that's all, etc.), "
     "first say a brief sign-off out loud, then call end_session as your final action for that turn. "
     "Do not say anything after calling end_session — the session ends immediately. "
     "If a tool call comes back with an error, briefly tell the user what happened in a friendly way "
-    "(for example, 'I tried, but the gamepad cut me off' or 'my body isn't responding right now')."
-    "You can speak in English or French. The vast majority of the time, you should speak in English - only speak French when the user speaks french. "
+    "(for example, 'I tried, but the gamepad cut me off' or 'my body isn't responding right now'). "
+    "You can speak in English or French. The vast majority of the time, you should speak in English - only speak French when the user speaks french."
 )
-VOICE_SWITCH_TOOL_NAME = "switch_voice"
 END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
+
+
+def compose_system_prompt(character_prose: str) -> str:
+    return f"{character_prose.strip()}\n\n{OPERATIONAL_SYSTEM_PROMPT}"
 
 
 @dataclass
@@ -132,20 +130,6 @@ def barge_in_telemetry(
     }
 
 
-VOICE_SWITCH_TOOL = {
-    "type": "function",
-    "name": VOICE_SWITCH_TOOL_NAME,
-    "description": "Toggle between the default and alternate speaking voices. Only use when the user explicitly asks to switch voices.",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
-
-
 WIGGLE_TOOL = {
     "type": "function",
     "name": WIGGLE_TOOL_NAME,
@@ -194,27 +178,12 @@ END_SESSION_TOOL = {
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
-ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, WEB_SEARCH_TOOL]
-
-
-@dataclass(frozen=True)
-class VoiceSwitch:
-    voice_id: str
-    voice_name: str
+ASSISTANT_TOOLS = [END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, WEB_SEARCH_TOOL]
 
 
 @dataclass
 class VoiceState:
-    default_voice_id: str
-    alternate_voice_id: str
-    current_voice_id: str
-
-    def toggle(self) -> VoiceSwitch:
-        if self.current_voice_id == self.default_voice_id:
-            self.current_voice_id = self.alternate_voice_id
-            return VoiceSwitch(voice_id=self.current_voice_id, voice_name="alternate")
-        self.current_voice_id = self.default_voice_id
-        return VoiceSwitch(voice_id=self.current_voice_id, voice_name="default")
+    voice_id: str
 
 
 async def cancel_task(task: asyncio.Task[Any] | None) -> None:
@@ -358,10 +327,9 @@ def decide_barge_in_during_playback(
 async def stream_openai_words(
     openai_input: list[dict[str, str]],
     openai_client: Any,
-    voice_state: VoiceState,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
-) -> AsyncIterator[str | VoiceSwitch]:
+) -> AsyncIterator[str]:
     pending = ""
     word_buffer: list[str] = []
     response_input: object = openai_input
@@ -429,15 +397,8 @@ async def stream_openai_words(
             call_id = getattr(function_call, "call_id", "")
             name = getattr(function_call, "name", "")
             log.info("tool call: %s", name)
-            voice_switch = None
 
-            if name == VOICE_SWITCH_TOOL_NAME:
-                voice_switch = voice_state.toggle()
-                result: dict[str, Any] = {
-                    "voice": voice_switch.voice_name,
-                    "voice_id": voice_switch.voice_id,
-                }
-            elif name == END_SESSION_TOOL_NAME:
+            if name == END_SESSION_TOOL_NAME:
                 if session_end_caller is None:
                     result = {"ok": False, "error": "session_end_unavailable"}
                 else:
@@ -450,9 +411,6 @@ async def stream_openai_words(
                     result = await asyncio.to_thread(motion_intent_caller, name)
             else:
                 result = {"ok": False, "error": "unsupported tool"}
-
-            if voice_switch is not None:
-                yield voice_switch
 
             tool_outputs.append(
                 {
@@ -488,25 +446,23 @@ async def run_assistant_turn(
 
     assistant_chunks: list[str] = []
 
-    async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
+    async def captured_openai_words() -> AsyncIterator[str]:
         async for chunk in stream_openai_words(
             openai_input,
             openai_client,
-            voice_state,
             motion_intent_caller,
             session_end_caller,
         ):
-            if isinstance(chunk, str):
-                assistant_chunks.append(chunk)
-                if on_assistant_chunk:
-                    on_assistant_chunk(chunk)
+            assistant_chunks.append(chunk)
+            if on_assistant_chunk:
+                on_assistant_chunk(chunk)
             yield chunk
 
     speaker = tts_speaker or speak_with_eleven_flash
     await speaker(
         captured_openai_words(),
         elevenlabs_api_key,
-        voice_state.current_voice_id,
+        voice_state.voice_id,
         playback_event,
         speaking_event,
     )
@@ -519,10 +475,10 @@ async def handle_scribe_events(
     elevenlabs_api_key: str,
     voice_state: VoiceState,
     stop_event: asyncio.Event,
+    system_prompt: str,
     policy: TurnPolicy = DEFAULT_TURN_POLICY,
     audio_levels: AudioLevels | None = None,
     conversation_history: ConversationHistory | None = None,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     on_status: Callable[[dict[str, object]], None] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     assistant_runner: Callable[..., Any] = run_assistant_turn,

@@ -15,7 +15,6 @@ from voice.assistant import (
     AudioLevels,
     TurnRuntimeState,
     VoiceState,
-    VoiceSwitch,
     decide_barge_in_during_playback,
     handle_scribe_events,
     note_mic_chunk,
@@ -345,54 +344,6 @@ class ActiveTurnTest(unittest.TestCase):
 
 
 class AssistantStreamingTest(unittest.TestCase):
-    def test_stream_openai_words_yields_voice_switch_for_tool_call(self):
-        async def run():
-            class FakeResponses:
-                def __init__(self):
-                    self.calls = []
-
-                async def create(self, **kwargs):
-                    self.calls.append(kwargs)
-                    if len(self.calls) == 1:
-                        events = [
-                            SimpleNamespace(type="response.output_text.delta", delta="Switching "),
-                            SimpleNamespace(
-                                type="response.output_item.done",
-                                item=SimpleNamespace(type="function_call", name="switch_voice", call_id="call_1"),
-                            ),
-                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
-                        ]
-                    else:
-                        events = [
-                            SimpleNamespace(type="response.output_text.delta", delta="voices."),
-                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
-                        ]
-
-                    async def stream():
-                        for event in events:
-                            yield event
-
-                    return stream()
-
-            fake_responses = FakeResponses()
-            voice_state = VoiceState("default-voice", "alternate-voice", "default-voice")
-
-            chunks = [
-                chunk
-                async for chunk in stream_openai_words(
-                    [{"role": "user", "content": "Switch voices"}],
-                    SimpleNamespace(responses=fake_responses),
-                    voice_state,
-                )
-            ]
-
-            self.assertEqual(chunks[0], "Switching ")
-            self.assertEqual(chunks[1], VoiceSwitch(voice_id="alternate-voice", voice_name="alternate"))
-            self.assertEqual(chunks[2], "voices.")
-            self.assertEqual(fake_responses.calls[1]["previous_response_id"], "resp_1")
-
-        asyncio.run(run())
-
     def test_stream_openai_words_calls_session_end_caller_for_tool(self):
         async def run():
             ended = []
@@ -428,14 +379,12 @@ class AssistantStreamingTest(unittest.TestCase):
                     return stream()
 
             fake_responses = FakeResponses()
-            voice_state = VoiceState("default-voice", "alternate-voice", "default-voice")
 
             chunks = [
                 chunk
                 async for chunk in stream_openai_words(
                     [{"role": "user", "content": "Goodbye"}],
                     SimpleNamespace(responses=fake_responses),
-                    voice_state,
                     session_end_caller=lambda: ended.append(True),
                 )
             ]
@@ -474,11 +423,11 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     conversation_history=history,
-                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                 )
             )
@@ -542,8 +491,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                 )
@@ -590,8 +540,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                 )
@@ -648,8 +599,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                 )
@@ -697,8 +649,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                 )
             )
@@ -745,8 +698,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                 )
@@ -797,8 +751,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                 )
@@ -831,8 +786,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     on_event=events.append,
                     assistant_runner=idle_forever,
                 )
@@ -895,8 +851,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
                 )
@@ -950,8 +907,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
                 )
@@ -1021,8 +979,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
                     stop_playback_now=stop_playback_now,
@@ -1083,8 +1042,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                     stop_playback_now=lambda: None,
@@ -1152,8 +1112,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     policy=policy,
                     assistant_runner=fake_run_assistant_turn,
                     stop_playback_now=stop_playback_now,
@@ -1207,8 +1168,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 scribe_events,
                 openai_client=object(),
                 elevenlabs_api_key="test-key",
-                voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                voice_state=VoiceState("test-voice"),
                 stop_event=stop_event,
+                    system_prompt="test system prompt",
                 assistant_runner=fake_run_assistant_turn,
                 on_status=statuses.append,
                 stop_playback_now=stop_playback_now,
@@ -1262,8 +1224,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 scribe_events,
                 openai_client=object(),
                 elevenlabs_api_key="test-key",
-                voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                voice_state=VoiceState("test-voice"),
                 stop_event=stop_event,
+                    system_prompt="test system prompt",
                 assistant_runner=fake_run_assistant_turn,
                 on_status=statuses.append,
                 stop_playback_now=stop_playback_now,
@@ -1324,8 +1287,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
                     stop_playback_now=stop_playback_now,
@@ -1383,8 +1347,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                     on_status=statuses.append,
                 )
@@ -1466,8 +1431,9 @@ class AssistantStreamingTest(unittest.TestCase):
                     scribe_events,
                     openai_client=object(),
                     elevenlabs_api_key="test-key",
-                    voice_state=VoiceState("test-voice", "alternate-test-voice", "test-voice"),
+                    voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
+                    system_prompt="test system prompt",
                     assistant_runner=fake_run_assistant_turn,
                 )
             )

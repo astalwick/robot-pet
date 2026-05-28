@@ -249,8 +249,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             "capture_channel_index": 0,
             "input_gain": 1.4,
             "output_gain": 0.8,
-            "voice_id": "voice-a",
-            "alternate_voice_id": "voice-b",
+            "personality": "scientist",
         }
         async with self.client.post("/config/voice", json=body) as resp:
             self.assertEqual(resp.status, 200)
@@ -267,8 +266,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["capture_channel_index"], 0)
         self.assertEqual(saved["input_gain"], 1.4)
         self.assertEqual(saved["output_gain"], 0.8)
-        self.assertEqual(saved["voice_id"], "voice-a")
-        self.assertEqual(saved["alternate_voice_id"], "voice-b")
+        self.assertEqual(saved["personality"], "scientist")
 
     async def test_post_config_voice_partial_merge_preserves_other_keys(self):
         with open(self.voice_config_path, "w") as file_obj:

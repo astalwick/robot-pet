@@ -8,19 +8,15 @@ from typing import Any
 
 from config.voice import VoiceConfig
 from drivers.respeaker import ReSpeakerAudio
-from voice.assistant import (
-    ALTERNATE_VOICE_ID,
-    DEFAULT_SYSTEM_PROMPT,
-    DEFAULT_VOICE_ID,
-    AudioLevels,
-    VoiceState,
-    handle_scribe_events,
-    run_assistant_turn,
-)
+from lib.log import setup_logging
+from voice.assistant import AudioLevels, VoiceState, compose_system_prompt, handle_scribe_events, run_assistant_turn
 from voice.conversation import ConversationHistory
 from voice.elevenlabs_io import stream_audio_to_scribe
+from voice.personality import load_personalities, lookup_personality
 from voice.turn_policy import turn_policy_from_config
 
+
+log = setup_logging("robot-voice")
 
 StatusCallback = Callable[[dict[str, object]], None]
 
@@ -41,6 +37,7 @@ class VoiceSession:
         event_callback: Callable[[dict[str, object]], None] | None = None,
         motion_intent_caller: Callable[[str], Any] | None = None,
         session_end_caller: Callable[[], Any] | None = None,
+        personalities: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -55,19 +52,27 @@ class VoiceSession:
         self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
         self.scribe_events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
-        voice_id = config.voice_id or DEFAULT_VOICE_ID
-        self.voice_state = VoiceState(
-            default_voice_id=voice_id,
-            alternate_voice_id=config.alternate_voice_id or ALTERNATE_VOICE_ID,
-            current_voice_id=voice_id,
-        )
+
+        card_map = personalities if personalities is not None else load_personalities()
+        self.personality_name, voice_id, prose = lookup_personality(config.personality, card_map)
+        self.system_prompt = compose_system_prompt(prose)
+        self.voice_state = VoiceState(voice_id=voice_id)
+        log.info("personality: %s (voice %s)", self.personality_name, voice_id)
+
         self.history = ConversationHistory()
         self.policy = turn_policy_from_config(config)
         self.audio_levels = AudioLevels()
 
     async def start(self) -> None:
         self.stop_event.clear()
-        self.status_callback({"status": "starting", "assistant_speaking": False, "last_error": None})
+        self.status_callback(
+            {
+                "status": "starting",
+                "assistant_speaking": False,
+                "last_error": None,
+                "personality": self.personality_name,
+            }
+        )
         self._mic_frames = self.audio.mic_frames(self.stop_event)
 
         async def assistant_runner(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
@@ -96,10 +101,10 @@ class VoiceSession:
                     self.elevenlabs_api_key,
                     self.voice_state,
                     self.stop_event,
+                    self.system_prompt,
                     policy=self.policy,
                     audio_levels=self.audio_levels,
                     conversation_history=self.history,
-                    system_prompt=DEFAULT_SYSTEM_PROMPT,
                     on_status=self.status_callback,
                     on_event=self.event_callback,
                     assistant_runner=assistant_runner,

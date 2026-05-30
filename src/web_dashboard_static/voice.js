@@ -14,7 +14,9 @@ let voiceHydrated = false;
 let lastVoiceDbgKey = '';
 let lastVoiceButtonLabel = '';
 let lastTalkButtonLabel = '';
+let lastTalkButtonState = '';
 let personalitiesLoaded = false;
+let pendingPersonality = null;
 
 const VOICE_SESSION_STATUSES = new Set(['starting', 'listening', 'hearing', 'thinking', 'speaking']);
 
@@ -164,11 +166,15 @@ function updateTalkNowButton(voice) {
     title = 'End the conversation and return to wake word';
     cls = 'warn';
   }
-  button.disabled = !canUse;
-  button.textContent = text;
-  button.className = cls;
-  button.title = title;
-  button.setAttribute('aria-label', text);
+  const nextDisabled = !canUse;
+  const stateLabel = `${text}|${cls}|${nextDisabled}|${title}`;
+  if (stateLabel === lastTalkButtonState) return;
+  lastTalkButtonState = stateLabel;
+  if (button.disabled !== nextDisabled) button.disabled = nextDisabled;
+  if (button.textContent !== text) button.textContent = text;
+  if (button.className !== cls) button.className = cls;
+  if (button.title !== title) button.title = title;
+  if (button.getAttribute('aria-label') !== text) button.setAttribute('aria-label', text);
   if (text !== lastTalkButtonLabel) {
     lastTalkButtonLabel = text;
     voiceDbg('talk-button', { label: text, inSession, canUse });
@@ -285,6 +291,11 @@ function syncPersonalitySelect(personality) {
   const select = document.getElementById('voice-personality-select');
   if (!select || !personality || personality === '--') return;
   if (document.activeElement === select) return;
+  if (pendingPersonality !== null) {
+    if (personality !== pendingPersonality) return;
+    pendingPersonality = null;
+  }
+  if (select.value === personality) return;
   if ([...select.options].some((option) => option.value === personality)) {
     select.value = personality;
   }
@@ -293,6 +304,7 @@ function syncPersonalitySelect(personality) {
 async function onPersonalityChange(event) {
   const name = event.target.value;
   if (!name) return;
+  pendingPersonality = name;
   try {
     const response = await fetch('/voice/command', {
       method: 'POST',
@@ -300,11 +312,15 @@ async function onPersonalityChange(event) {
       body: JSON.stringify({ cmd: 'set_personality', name }),
     });
     if (!response.ok) {
+      pendingPersonality = null;
       const body = await response.json().catch(() => ({}));
       appendLog(`set personality failed: ${body.error || response.statusText}`);
+      if (latestVoice && latestVoice.personality) syncPersonalitySelect(latestVoice.personality);
     }
   } catch (exc) {
+    pendingPersonality = null;
     appendLog(`set personality failed: ${exc}`);
+    if (latestVoice && latestVoice.personality) syncPersonalitySelect(latestVoice.personality);
   }
 }
 

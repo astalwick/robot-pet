@@ -722,6 +722,9 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("querySelectorAll('.voice-toggle')", self.voice_js)
         self.assertIn("if (button.className !== nextClassName) button.className = nextClassName", self.voice_js)
         self.assertIn("if (label && label.textContent !== text) label.textContent = text", self.voice_js)
+        self.assertIn("lastTalkButtonState", self.voice_js)
+        self.assertIn("if (stateLabel === lastTalkButtonState) return", self.voice_js)
+        self.assertIn("pendingPersonality", self.voice_js)
         self.assertIn("if (button.textContent !== text) button.textContent = text", self.redeploy_js)
         self.assertIn("scheduleRedeployDisarm", self.redeploy_js)
 

@@ -8,11 +8,14 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from urllib.parse import urlencode
 
+from lib.log import setup_logging
 from voice.assistant import AudioLevels
 from voice.assistant import VoiceSwitch
 from voice.assistant import note_mic_chunk
 from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pcm16_rms
 
+
+log = setup_logging("robot-voice")
 
 SAMPLE_RATE = 16000
 SCRIBE_MODEL = "scribe_v2_realtime"
@@ -37,6 +40,17 @@ def update_scribe_upload_gate(
     if last_above_at is not None and (now - last_above_at) < MIC_SCRIBE_GATE_HOLD_SECS:
         return True, last_above_at
     return False, None
+
+
+def log_elevenlabs_payload(data: object, context: str) -> None:
+    if not isinstance(data, dict):
+        return
+    message_type = data.get("message_type", "")
+    if message_type in {"error", "auth_error", "quota_exceeded", "input_error"}:
+        log.warning("elevenlabs %s: %s", context, data)
+        return
+    if data.get("error") or data.get("detail"):
+        log.warning("elevenlabs %s: %s", context, data)
 
 
 def ssl_context() -> ssl.SSLContext:
@@ -70,53 +84,59 @@ async def stream_audio_to_scribe(
     )
     url = f"wss://api.elevenlabs.io/v1/speech-to-text/realtime?{query}"
 
-    async with websockets.connect(
-        url,
-        additional_headers={"xi-api-key": elevenlabs_api_key},
-        ssl=ssl_context(),
-    ) as ws:
-        await ws.recv()
+    try:
+        async with websockets.connect(
+            url,
+            additional_headers={"xi-api-key": elevenlabs_api_key},
+            ssl=ssl_context(),
+        ) as ws:
+            session_message = json.loads(await ws.recv())
+            log_elevenlabs_payload(session_message, "scribe session")
 
-        async def send_audio() -> None:
-            last_activity_log_at = 0.0
-            last_above_at: float | None = None
-            loop = asyncio.get_running_loop()
+            async def send_audio() -> None:
+                last_activity_log_at = 0.0
+                last_above_at: float | None = None
+                loop = asyncio.get_running_loop()
 
-            async for chunk in audio_chunks:
-                rms = pcm16_rms(chunk)
-                now = loop.time()
-                gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
-                if audio_levels is not None:
-                    note_mic_chunk(audio_levels, rms)
-                    audio_levels.scribe_gate_open = gate_open
-                if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
-                    await scribe_events.put({"type": "audio_activity", "rms": rms})
-                    last_activity_log_at = now
+                async for chunk in audio_chunks:
+                    rms = pcm16_rms(chunk)
+                    now = loop.time()
+                    gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
+                    if audio_levels is not None:
+                        note_mic_chunk(audio_levels, rms)
+                        audio_levels.scribe_gate_open = gate_open
+                    if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
+                        await scribe_events.put({"type": "audio_activity", "rms": rms})
+                        last_activity_log_at = now
 
-                upload = chunk if gate_open else b"\x00" * len(chunk)
-                await ws.send(
-                    json.dumps(
-                        {
-                            "message_type": "input_audio_chunk",
-                            "audio_base_64": base64.b64encode(upload).decode("ascii"),
-                            "commit": False,
-                            "sample_rate": sample_rate,
-                        }
+                    upload = chunk if gate_open else b"\x00" * len(chunk)
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "message_type": "input_audio_chunk",
+                                "audio_base_64": base64.b64encode(upload).decode("ascii"),
+                                "commit": False,
+                                "sample_rate": sample_rate,
+                            }
+                        )
                     )
-                )
 
-        async def receive_transcripts() -> None:
-            async for message in ws:
-                data = json.loads(message)
-                message_type = data.get("message_type")
-                text = (data.get("text") or "").strip()
+            async def receive_transcripts() -> None:
+                async for message in ws:
+                    data = json.loads(message)
+                    log_elevenlabs_payload(data, "scribe")
+                    message_type = data.get("message_type")
+                    text = (data.get("text") or "").strip()
 
-                if message_type == "partial_transcript" and text:
-                    await scribe_events.put({"type": "partial", "text": text})
-                elif message_type in {"committed_transcript", "committed_transcript_with_timestamps"} and text:
-                    await scribe_events.put({"type": "commit", "text": text})
+                    if message_type == "partial_transcript" and text:
+                        await scribe_events.put({"type": "partial", "text": text})
+                    elif message_type in {"committed_transcript", "committed_transcript_with_timestamps"} and text:
+                        await scribe_events.put({"type": "commit", "text": text})
 
-        await asyncio.gather(send_audio(), receive_transcripts())
+            await asyncio.gather(send_audio(), receive_transcripts())
+    except Exception as exc:
+        log.warning("elevenlabs scribe failed: %s", exc)
+        raise
 
 
 async def speak_with_eleven_flash(
@@ -183,10 +203,12 @@ async def speak_with_eleven_flash(
                 continue
             except websockets.exceptions.ConnectionClosedOK:
                 break
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as exc:
+                log.warning("elevenlabs tts connection closed: code=%s reason=%s", exc.code, exc.reason)
                 break
 
             data = json.loads(message)
+            log_elevenlabs_payload(data, "tts")
             if data.get("audio"):
                 audio = base64.b64decode(data["audio"])
                 if playback_event.is_set():
@@ -243,7 +265,8 @@ async def speak_with_eleven_flash(
     except asyncio.CancelledError:
         await cancel_voice_socket()
         raise
-    except Exception:
+    except Exception as exc:
+        log.warning("elevenlabs tts failed: %s", exc)
         await cancel_voice_socket()
         raise
     finally:

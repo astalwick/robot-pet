@@ -112,11 +112,13 @@ class HaarFaceDetector:
         self._cv2 = cv2
         self._numpy = numpy
         self._cascade = cascade
+        self.last_profile: dict[str, float] = {}
 
     def __call__(self, frame: CameraFrame) -> DetectorResult:
         cv2 = self._cv2
         numpy = self._numpy
 
+        prep_started = time.perf_counter()
         if isinstance(frame, GrayFrame):
             gray = numpy.frombuffer(frame.data, dtype=numpy.uint8).reshape((frame.height, frame.width))
             width = frame.width
@@ -127,23 +129,29 @@ class HaarFaceDetector:
             if gray is None:
                 raise CameraFetchError("could not decode jpeg")
             height, width = gray.shape[:2]
+        prep_seconds = time.perf_counter() - prep_started
 
         detect_gray = gray
         scale = 1.0
+        resize_seconds = 0.0
         if width > DETECTION_MAX_WIDTH:
+            resize_started = time.perf_counter()
             scale = DETECTION_MAX_WIDTH / width
             detect_gray = cv2.resize(
                 gray,
                 (DETECTION_MAX_WIDTH, max(1, int(height * scale))),
                 interpolation=cv2.INTER_AREA,
             )
+            resize_seconds = time.perf_counter() - resize_started
 
+        detect_started = time.perf_counter()
         rects = self._cascade.detectMultiScale(
             detect_gray,
             scaleFactor=1.1,
             minNeighbors=4,
             minSize=(24, 24),
         )
+        detect_seconds = time.perf_counter() - detect_started
         faces = []
         for x, y, w, h in rects:
             faces.append(
@@ -154,6 +162,11 @@ class HaarFaceDetector:
                     int(h / scale),
                 )
             )
+        self.last_profile = {
+            "prep": prep_seconds,
+            "resize": resize_seconds,
+            "detect": detect_seconds,
+        }
         return faces, width, height
 
 
@@ -169,6 +182,7 @@ class VisionService:
         fetch_snapshot: Callable[[str], CameraFrame],
         detector_factory: Callable[[], Detector],
         time_fn: Callable[[], float] = time.time,
+        profile_every: int = 0,
     ):
         self.config_path = config_path
         self.camera_url = camera_url
@@ -176,6 +190,7 @@ class VisionService:
         self.fetch_snapshot = fetch_snapshot
         self.detector_factory = detector_factory
         self.time_fn = time_fn
+        self.profile_every = profile_every
 
         self.config = VisionConfig()
         self._config_mtime: float | None = None
@@ -185,6 +200,7 @@ class VisionService:
         self._last_detection_time: float | None = None
         self._last_disabled_publish: float | None = None
         self._next_detection_time: float | None = None
+        self._profile_count = 0
 
     def tick(self) -> float:
         """Run one iteration. Returns the recommended sleep before the next tick.
@@ -226,14 +242,18 @@ class VisionService:
 
         self._next_detection_time = now + self._detection_period()
 
+        tick_started = time.perf_counter()
+        fetch_started = time.perf_counter()
         try:
-            jpeg = self.fetch_snapshot(self.camera_url)
+            frame = self.fetch_snapshot(self.camera_url)
         except CameraFetchError as exc:
             self._publish_status("camera_unavailable", error=str(exc))
             return self._next_sleep(now)
+        fetch_seconds = time.perf_counter() - fetch_started
 
+        detector_started = time.perf_counter()
         try:
-            faces_pixels, image_width, image_height = self._detector(jpeg)
+            faces_pixels, image_width, image_height = self._detector(frame)
         except CameraFetchError as exc:
             self._publish_status("camera_unavailable", error=str(exc))
             return self._next_sleep(now)
@@ -243,11 +263,13 @@ class VisionService:
             log.warning("face detector failed: %s", exc)
             self._publish_status("detector_unavailable", error=self._detector_error)
             return self._next_sleep(now)
+        detector_seconds = time.perf_counter() - detector_started
 
         faces = [normalize_box(box, image_width, image_height) for box in faces_pixels]
         if faces:
             log.info("detected %d face(s) in %dx%d image", len(faces), image_width, image_height)
         self._last_detection_time = now
+        publish_started = time.perf_counter()
         self.publish(
             vision_update(
                 enabled=True,
@@ -259,7 +281,51 @@ class VisionService:
                 last_detection_time=self._last_detection_time,
             )
         )
+        publish_seconds = time.perf_counter() - publish_started
+        self._maybe_log_profile(
+            image_width,
+            image_height,
+            len(faces),
+            fetch_seconds,
+            detector_seconds,
+            publish_seconds,
+            time.perf_counter() - tick_started,
+        )
         return self._next_sleep(now)
+
+    def _maybe_log_profile(
+        self,
+        image_width: int,
+        image_height: int,
+        face_count: int,
+        fetch_seconds: float,
+        detector_seconds: float,
+        publish_seconds: float,
+        total_seconds: float,
+    ) -> None:
+        if self.profile_every <= 0:
+            return
+        self._profile_count += 1
+        if self._profile_count % self.profile_every != 0:
+            return
+        detector_profile = getattr(self._detector, "last_profile", {}) or {}
+        prep_seconds = float(detector_profile.get("prep", 0.0))
+        resize_seconds = float(detector_profile.get("resize", 0.0))
+        detect_seconds = float(detector_profile.get("detect", detector_seconds))
+        other_detector_seconds = max(0.0, detector_seconds - prep_seconds - resize_seconds - detect_seconds)
+        log.info(
+            "vision profile: image=%dx%d faces=%d fetch=%.1fms prep=%.1fms resize=%.1fms detect=%.1fms detector_other=%.1fms publish=%.1fms total=%.1fms",
+            image_width,
+            image_height,
+            face_count,
+            fetch_seconds * 1000,
+            prep_seconds * 1000,
+            resize_seconds * 1000,
+            detect_seconds * 1000,
+            other_detector_seconds * 1000,
+            publish_seconds * 1000,
+            total_seconds * 1000,
+        )
 
     def _detection_period(self) -> float:
         return 1.0 / self.config.detection_rate_hz
@@ -328,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--camera-url", default=DEFAULT_CAMERA_URL)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
+    parser.add_argument("--profile-every", type=int, default=0, help="Log vision stage timings every N detections")
     return parser
 
 
@@ -339,6 +406,7 @@ def main() -> None:
         publish=lambda message: publish_message(args.telemetry_socket, message),
         fetch_snapshot=fetch_snapshot_http,
         detector_factory=HaarFaceDetector,
+        profile_every=args.profile_every,
     )
 
     stop = threading.Event()

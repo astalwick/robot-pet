@@ -48,6 +48,7 @@ def make_service(
     fetch_snapshot=None,
     detector_factory=None,
     clock=None,
+    profile_every=0,
 ):
     published: list[dict] = []
     fetched_urls: list[str] = []
@@ -69,6 +70,7 @@ def make_service(
         fetch_snapshot=fetch_snapshot or default_fetch,
         detector_factory=detector_factory or default_factory,
         time_fn=clock or FakeClock(),
+        profile_every=profile_every,
     )
     return service, published, fetched_urls
 
@@ -310,6 +312,35 @@ class VisionServiceTest(unittest.TestCase):
                 service.tick()
 
         self.assertIn("detected 1 face(s)", "\n".join(logs.output))
+
+    def test_profile_logs_stage_timings_when_enabled(self):
+        class ProfilingDetector:
+            last_profile = {"prep": 0.001, "resize": 0.002, "detect": 0.003}
+
+            def __call__(self, _frame):
+                return [(100, 200, 50, 80)], 1000, 800
+
+        def factory():
+            return ProfilingDetector()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "vision.json")
+            write_config(config_path, {"enabled": True, "detection_rate_hz": 2.0})
+
+            service, _published, _fetched = make_service(
+                config_path,
+                detector_factory=factory,
+                profile_every=1,
+            )
+            with self.assertLogs("robot-vision", level="INFO") as logs:
+                service.tick()
+
+        output = "\n".join(logs.output)
+        self.assertIn("vision profile:", output)
+        self.assertIn("fetch=", output)
+        self.assertIn("prep=", output)
+        self.assertIn("resize=", output)
+        self.assertIn("detect=", output)
 
     def test_camera_fetch_failure_publishes_camera_unavailable(self):
         def failing_fetch(_url):

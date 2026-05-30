@@ -54,6 +54,16 @@ class DriveTuning:
         return asdict(self)
 
 
+TUNING_FIELDS = (
+    ("speed_scale", "Normal speed", "0.25 = 25%"),
+    ("turbo_scale", "Turbo speed", "0.75 = 75%"),
+    ("turn_scale", "Turn scale", "1.0 = full turn"),
+    ("left_stick_deadzone", "Left stick deadzone", "0.15"),
+    ("right_stick_deadzone", "Right stick deadzone", "0.15"),
+    ("qpps_slew_limit", "QPPS slew", "encoder counts/sec/sec"),
+)
+
+
 def load_drive_tuning(path: str = DEFAULT_CONFIG_PATH) -> DriveTuning:
     config_path = Path(path)
     try:

@@ -202,6 +202,49 @@ def _parse_sensors(raw: Any, safety: SafetyConfig) -> tuple[SensorEntry, ...] | 
     return tuple(entries)
 
 
+SENSORS_FIELDS = (
+    {
+        "key": "enabled",
+        "label": "Poll sensors",
+        "type": "boolean",
+        "help": "robot-sensors reads ToF hardware and publishes telemetry",
+    },
+    {
+        "key": "poll_rate_hz",
+        "label": "Poll rate (Hz)",
+        "type": "number",
+        "help": "0.5 .. 20.0",
+        "min": 0.5,
+        "max": 20.0,
+        "step": 0.5,
+    },
+    {
+        "key": "safety_enabled",
+        "label": "Safety gating",
+        "type": "boolean",
+        "help": "robot-motion blocks forward drive when cliff or forward rules trip",
+    },
+    {
+        "key": "cliff_trip_above_mm",
+        "label": "Cliff trip above (mm)",
+        "type": "number",
+        "help": "Cliff sensor trips when distance is above this (floor gone / out of range)",
+        "min": 1,
+        "max": 4000,
+        "step": 1,
+    },
+    {
+        "key": "forward_stop_below_mm",
+        "label": "Forward stop below (mm)",
+        "type": "number",
+        "help": "Forward sensor trips when distance is below this (obstacle too close)",
+        "min": 1,
+        "max": 4000,
+        "step": 1,
+    },
+)
+
+
 def load_sensors_config(path: str = DEFAULT_CONFIG_PATH) -> SensorsConfig:
     config_path = Path(path)
     try:

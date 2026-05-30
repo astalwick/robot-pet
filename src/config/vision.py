@@ -45,6 +45,25 @@ class VisionConfig:
         return asdict(self)
 
 
+VISION_FIELDS = (
+    {
+        "key": "enabled",
+        "label": "Vision enabled",
+        "type": "boolean",
+        "help": "Run face detection on the camera feed",
+    },
+    {
+        "key": "detection_rate_hz",
+        "label": "Detection rate (Hz)",
+        "type": "number",
+        "help": "0.2 .. 10.0",
+        "min": 0.2,
+        "max": 10.0,
+        "step": 0.1,
+    },
+)
+
+
 def load_vision_config(path: str = DEFAULT_CONFIG_PATH) -> VisionConfig:
     config_path = Path(path)
     try:

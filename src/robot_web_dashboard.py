@@ -25,6 +25,7 @@ from aiohttp import web
 
 from config.teleop import (
     DEFAULT_CONFIG_PATH,
+    TUNING_FIELDS,
     DriveTuning,
     DriveTuningConfigError,
     load_drive_tuning,
@@ -32,6 +33,7 @@ from config.teleop import (
 )
 from config.vision import (
     DEFAULT_CONFIG_PATH as DEFAULT_VISION_CONFIG_PATH,
+    VISION_FIELDS,
     VisionConfig,
     VisionConfigError,
     load_vision_config,
@@ -39,6 +41,7 @@ from config.vision import (
 )
 from config.sensors import (
     DEFAULT_CONFIG_PATH as DEFAULT_SENSORS_CONFIG_PATH,
+    SENSORS_FIELDS,
     SensorsConfig,
     SensorsConfigError,
     load_sensors_config,
@@ -46,6 +49,7 @@ from config.sensors import (
 )
 from config.voice import (
     DEFAULT_CONFIG_PATH as DEFAULT_VOICE_CONFIG_PATH,
+    VOICE_FIELDS,
     VoiceConfig,
     VoiceConfigError,
     load_voice_config,
@@ -90,240 +94,6 @@ LOG_COMMAND = [
     "-n",
     "100",
 ]
-
-TUNING_FIELDS = (
-    ("speed_scale", "Normal speed", "0.25 = 25%"),
-    ("turbo_scale", "Turbo speed", "0.75 = 75%"),
-    ("turn_scale", "Turn scale", "1.0 = full turn"),
-    ("left_stick_deadzone", "Left stick deadzone", "0.15"),
-    ("right_stick_deadzone", "Right stick deadzone", "0.15"),
-    ("qpps_slew_limit", "QPPS slew", "encoder counts/sec/sec"),
-)
-
-VISION_FIELDS = (
-    {
-        "key": "enabled",
-        "label": "Vision enabled",
-        "type": "boolean",
-        "help": "Run face detection on the camera feed",
-    },
-    {
-        "key": "detection_rate_hz",
-        "label": "Detection rate (Hz)",
-        "type": "number",
-        "help": "0.2 .. 10.0",
-        "min": 0.2,
-        "max": 10.0,
-        "step": 0.1,
-    },
-)
-
-VOICE_FIELDS = (
-    {
-        "key": "wake_word_enabled",
-        "label": "Voice on",
-        "type": "boolean",
-        "help": "Hey Bloop wakes the assistant. Talk now starts active listening.",
-    },
-    {
-        "key": "session_idle_secs",
-        "label": "Session idle (s)",
-        "type": "number",
-        "help": "0 disables. After user and robot speech are quiet, return to wake listening.",
-        "min": 0.0,
-        "max": 600.0,
-        "step": 5.0,
-    },
-    {
-        "key": "wake_threshold",
-        "label": "Wake threshold",
-        "type": "number",
-        "help": "0.0 .. 1.0 openWakeWord score to fire",
-        "min": 0.0,
-        "max": 1.0,
-        "step": 0.05,
-    },
-    {
-        "key": "wake_debounce_secs",
-        "label": "Wake debounce (s)",
-        "type": "number",
-        "help": "0.0 .. 10.0 minimum seconds between wake chimes",
-        "min": 0.0,
-        "max": 10.0,
-        "step": 0.5,
-    },
-    {
-        "key": "wake_word_model_path",
-        "label": "Wake model path",
-        "type": "text",
-        "help": "ONNX model on the Pi, e.g. /home/pi/robot-pet/models/wake/Hey_Bloop.onnx",
-    },
-    {
-        "key": "wake_chime_path",
-        "label": "Wake chime path",
-        "type": "text",
-        "help": "16 kHz mono WAV played on wake",
-    },
-    {
-        "key": "input_device",
-        "label": "Input device",
-        "type": "text",
-        "help": "ALSA capture device, e.g. hw:0,0",
-    },
-    {
-        "key": "output_device",
-        "label": "Output device",
-        "type": "text",
-        "help": "ALSA playback device, e.g. plughw:0,0",
-    },
-    {
-        "key": "capture_channel_index",
-        "label": "Capture channel",
-        "type": "number",
-        "help": "0 .. 5",
-        "min": 0,
-        "max": 5,
-        "step": 1,
-    },
-    {
-        "key": "input_gain",
-        "label": "Mic gain",
-        "type": "number",
-        "help": "0.0 mute, 1.0 normal, up to 3.0",
-        "min": 0.0,
-        "max": 3.0,
-        "step": 0.1,
-    },
-    {
-        "key": "output_gain",
-        "label": "Speaker volume",
-        "type": "number",
-        "help": "0.0 mute, 1.0 normal, up to 3.0",
-        "min": 0.0,
-        "max": 3.0,
-        "step": 0.1,
-    },
-    {
-        "key": "barge_in_enabled",
-        "label": "Barge-in enabled",
-        "type": "boolean",
-        "help": "Allow interrupting the assistant while it is speaking",
-    },
-    {
-        "key": "barge_in_min_rms",
-        "label": "Barge-in min RMS",
-        "type": "number",
-        "help": "100 .. 5000",
-        "min": 100,
-        "max": 5000,
-        "step": 50,
-    },
-    {
-        "key": "barge_in_sustain_ms",
-        "label": "Barge-in sustain (ms)",
-        "type": "number",
-        "help": "0 .. 1500",
-        "min": 0,
-        "max": 1500,
-        "step": 50,
-    },
-    {
-        "key": "barge_in_cooldown_secs",
-        "label": "Barge-in cooldown (s)",
-        "type": "number",
-        "help": "0.0 .. 2.0",
-        "min": 0.0,
-        "max": 2.0,
-        "step": 0.05,
-    },
-    {
-        "key": "barge_in_min_words",
-        "label": "Barge-in min words",
-        "type": "number",
-        "help": "1 .. 10",
-        "min": 1,
-        "max": 10,
-        "step": 1,
-    },
-    {
-        "key": "barge_in_min_chars",
-        "label": "Barge-in min chars",
-        "type": "number",
-        "help": "1 .. 80",
-        "min": 1,
-        "max": 80,
-        "step": 1,
-    },
-    {
-        "key": "barge_in_explicit_interrupts",
-        "label": "Explicit interrupts",
-        "type": "text",
-        "help": "Comma-separated words, e.g. stop,wait,no",
-    },
-    {
-        "key": "barge_in_explicit_requires_sustain",
-        "label": "Explicit needs sustain",
-        "type": "boolean",
-        "help": "Explicit interrupt words also require sustained near-end audio",
-    },
-    {
-        "key": "assistant_echo_enabled",
-        "label": "Echo suppression",
-        "type": "boolean",
-        "help": "Software echo suppression (off by default — rely on XVF3800 hardware AEC)",
-    },
-    {
-        "key": "assistant_echo_similarity",
-        "label": "Echo similarity",
-        "type": "number",
-        "help": "0.5 .. 1.0 (only used when echo suppression is on)",
-        "min": 0.5,
-        "max": 1.0,
-        "step": 0.05,
-    },
-)
-
-SENSORS_FIELDS = (
-    {
-        "key": "enabled",
-        "label": "Poll sensors",
-        "type": "boolean",
-        "help": "robot-sensors reads ToF hardware and publishes telemetry",
-    },
-    {
-        "key": "poll_rate_hz",
-        "label": "Poll rate (Hz)",
-        "type": "number",
-        "help": "0.5 .. 20.0",
-        "min": 0.5,
-        "max": 20.0,
-        "step": 0.5,
-    },
-    {
-        "key": "safety_enabled",
-        "label": "Safety gating",
-        "type": "boolean",
-        "help": "robot-motion blocks forward drive when cliff or forward rules trip",
-    },
-    {
-        "key": "cliff_trip_above_mm",
-        "label": "Cliff trip above (mm)",
-        "type": "number",
-        "help": "Cliff sensor trips when distance is above this (floor gone / out of range)",
-        "min": 1,
-        "max": 4000,
-        "step": 1,
-    },
-    {
-        "key": "forward_stop_below_mm",
-        "label": "Forward stop below (mm)",
-        "type": "number",
-        "help": "Forward sensor trips when distance is below this (obstacle too close)",
-        "min": 1,
-        "max": 4000,
-        "step": 1,
-    },
-)
 
 NO_CACHE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",

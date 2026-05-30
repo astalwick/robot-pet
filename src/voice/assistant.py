@@ -240,6 +240,13 @@ class VoiceState:
         self.current_voice_id = self.default_voice_id
         return VoiceSwitch(voice_id=self.current_voice_id, voice_name="default")
 
+    def set_voice(self, voice_id: str) -> VoiceSwitch:
+        # Same machinery switch_voice uses: the next turn's TTS reads current_voice_id.
+        # default tracks the new voice too, so a later toggle() stays coherent.
+        self.default_voice_id = voice_id
+        self.current_voice_id = voice_id
+        return VoiceSwitch(voice_id=voice_id, voice_name="default")
+
 
 async def cancel_task(task: asyncio.Task[Any] | None) -> None:
     if task and not task.done():
@@ -570,7 +577,7 @@ async def handle_scribe_events(
     elevenlabs_api_key: str,
     voice_state: VoiceState,
     stop_event: asyncio.Event,
-    system_prompt: str,
+    system_prompt: str | Callable[[], str],
     policy: TurnPolicy = DEFAULT_TURN_POLICY,
     audio_levels: AudioLevels | None = None,
     conversation_history: ConversationHistory | None = None,
@@ -590,6 +597,9 @@ async def handle_scribe_events(
     hearing_on = False
     thinking_on = False
     user_speech_on = False
+
+    def current_system_prompt() -> str:
+        return system_prompt() if callable(system_prompt) else system_prompt
 
     def note_user_speech() -> None:
         nonlocal user_speech_on
@@ -778,7 +788,7 @@ async def handle_scribe_events(
                 first_token_emitted = True
                 emit("turn_first_token", turn_id=new_turn_id)
 
-        openai_input = history.input_for(prompt, system_prompt)
+        openai_input = history.input_for(prompt, current_system_prompt())
         task = asyncio.create_task(
             assistant_runner(
                 new_turn_id,

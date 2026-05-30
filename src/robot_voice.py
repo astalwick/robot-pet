@@ -140,6 +140,7 @@ class RobotVoiceService:
         self._orchestrator_task: asyncio.Task[None] | None = None
         self._detector: WakeWordDetector | None = None
         self.personalities = load_personalities()
+        self.selected_personality: str | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         command_server = await self._start_command_server()
@@ -210,6 +211,17 @@ class RobotVoiceService:
                     return
                 log.info("end-session command received")
                 self.request_end_session()
+            elif cmd == "set_personality":
+                name = payload.get("name")
+                if not isinstance(name, str) or name not in self.personalities:
+                    log.warning("set-personality ignored: unknown personality %r", name)
+                    return
+                log.info("set-personality command received: %s", name)
+                self.selected_personality = name
+                if self.session is not None:
+                    self.session.set_personality(name)
+                if self.active_config is not None:
+                    self.publish(self.active_config, personality=name)
             else:
                 log.warning("voice command socket: unknown cmd %r", cmd)
         finally:
@@ -379,6 +391,8 @@ class RobotVoiceService:
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             personalities=self.personalities,
         )
+        if self.selected_personality is not None:
+            self.session.set_personality(self.selected_personality)
         try:
             await self.session.start()
         except Exception as exc:

@@ -14,6 +14,7 @@ let voiceHydrated = false;
 let lastVoiceDbgKey = '';
 let lastVoiceButtonLabel = '';
 let lastTalkButtonLabel = '';
+let personalitiesLoaded = false;
 
 const VOICE_SESSION_STATUSES = new Set(['starting', 'listening', 'hearing', 'thinking', 'speaking']);
 
@@ -215,6 +216,7 @@ export function renderVoice(snapshot, sources) {
   setVoiceValue('listen', wakeOn ? 'wake on' : 'wake off', wakeOn ? 'ok' : 'muted');
   const personality = voice.personality || '--';
   setVoiceValue('personality', personality, personality === '--' ? 'muted' : '');
+  syncPersonalitySelect(personality);
   setVoiceValue('input', voice.input_device || '--');
   setVoiceValue('output', voice.output_device || '--');
   setVoiceValue('channel', voice.capture_channel_index != null ? String(voice.capture_channel_index) : '--');
@@ -261,6 +263,51 @@ function onVoiceGainCommit(event) {
   configStore.voice.flush().then(handleSaveError);
 }
 
+async function populatePersonalitySelect() {
+  const select = document.getElementById('voice-personality-select');
+  if (!select || personalitiesLoaded) return;
+  try {
+    const response = await fetch('/voice/personalities');
+    if (!response.ok) return;
+    const body = await response.json();
+    const names = Array.isArray(body.personalities) ? body.personalities : [];
+    select.innerHTML = names
+      .map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)
+      .join('');
+    personalitiesLoaded = names.length > 0;
+    if (latestVoice && latestVoice.personality) syncPersonalitySelect(latestVoice.personality);
+  } catch (exc) {
+    voiceDbg('personalities-fetch-failed', { error: String(exc) });
+  }
+}
+
+function syncPersonalitySelect(personality) {
+  const select = document.getElementById('voice-personality-select');
+  if (!select || !personality || personality === '--') return;
+  if (document.activeElement === select) return;
+  if ([...select.options].some((option) => option.value === personality)) {
+    select.value = personality;
+  }
+}
+
+async function onPersonalityChange(event) {
+  const name = event.target.value;
+  if (!name) return;
+  try {
+    const response = await fetch('/voice/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: 'set_personality', name }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      appendLog(`set personality failed: ${body.error || response.statusText}`);
+    }
+  } catch (exc) {
+    appendLog(`set personality failed: ${exc}`);
+  }
+}
+
 async function onSessionControl() {
   if (!latestVoice || !displayWakeEnabled() || !canControlSession(latestVoice)) return;
   const inSession = latestVoice && voiceInSession(latestVoice);
@@ -284,6 +331,8 @@ export function bindVoiceHandlers(bindOn) {
   bindOn('voice-toggle-button', 'click', onVoiceToggle);
   bindOn('voice-timeline-toggle-button', 'click', onVoiceToggle);
   bindOn('voice-talk-now-button', 'click', onSessionControl);
+  bindOn('voice-personality-select', 'change', onPersonalityChange);
   bindOn('voice-rows', 'input', onVoiceGainInput);
   bindOn('voice-rows', 'change', onVoiceGainCommit);
+  populatePersonalitySelect();
 }

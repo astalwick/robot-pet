@@ -63,8 +63,8 @@ class VoiceSession:
         self.tasks: list[asyncio.Task[Any]] = []
         self.scribe_events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
-        card_map = personalities if personalities is not None else load_personalities()
-        self.personality_name, _card_voice_id, prose = lookup_personality(config.personality, card_map)
+        self.card_map = personalities if personalities is not None else load_personalities()
+        self.personality_name, _card_voice_id, prose = lookup_personality(config.personality, self.card_map)
         self.system_prompt = compose_system_prompt(prose)
         voice_id = config.voice_id or DEFAULT_VOICE_ID
         self.voice_state = VoiceState(
@@ -77,6 +77,18 @@ class VoiceSession:
         self.history = ConversationHistory()
         self.policy = turn_policy_from_config(config)
         self.audio_levels = AudioLevels()
+
+    def set_personality(self, name: str) -> None:
+        """Switch the live character: new system card + matching voice, no restart.
+
+        Both take effect on the next turn — the system prompt is rebuilt every turn,
+        and the voice is read from voice_state when the next turn speaks.
+        """
+        self.personality_name, voice_id, prose = lookup_personality(name, self.card_map)
+        self.system_prompt = compose_system_prompt(prose)
+        self.voice_state.set_voice(voice_id)
+        log.info("personality switched: %s voice=%s", self.personality_name, voice_id)
+        self.status_callback({"personality": self.personality_name})
 
     async def start(self) -> None:
         self.stop_event.clear()
@@ -116,7 +128,7 @@ class VoiceSession:
                     self.elevenlabs_api_key,
                     self.voice_state,
                     self.stop_event,
-                    self.system_prompt,
+                    lambda: self.system_prompt,
                     policy=self.policy,
                     audio_levels=self.audio_levels,
                     conversation_history=self.history,

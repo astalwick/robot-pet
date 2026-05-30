@@ -204,12 +204,6 @@ VOICE_FIELDS = (
         "step": 0.1,
     },
     {
-        "key": "personality",
-        "label": "Personality",
-        "type": "select",
-        "help": "Character card from config/personality/",
-    },
-    {
         "key": "barge_in_enabled",
         "label": "Barge-in enabled",
         "type": "boolean",
@@ -833,16 +827,9 @@ def vision_config_payload(config: VisionConfig) -> dict[str, Any]:
 
 
 def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
-    fields = [dict(field) for field in VOICE_FIELDS]
-    for field in fields:
-        if field["key"] == "personality":
-            options = sorted(load_personalities().keys())
-            if config.personality not in options:
-                options = [config.personality, *options]
-            field["options"] = options
     return {
         "values": config.to_dict(),
-        "fields": fields,
+        "fields": [dict(field) for field in VOICE_FIELDS],
     }
 
 
@@ -1047,13 +1034,24 @@ async def voice_command_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
 
     cmd = payload.get("cmd") if isinstance(payload, dict) else None
-    if cmd not in {"talk_now", "end_session"}:
+    if cmd not in {"talk_now", "end_session", "set_personality"}:
         return web.json_response({"error": f"unknown cmd: {cmd!r}"}, status=400)
 
-    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, {"cmd": cmd})
+    message: dict[str, Any] = {"cmd": cmd}
+    if cmd == "set_personality":
+        name = payload.get("name")
+        if not isinstance(name, str) or not name:
+            return web.json_response({"error": "set_personality requires a name"}, status=400)
+        message["name"] = name
+
+    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, message)
     if not sent:
         return web.json_response({"error": "voice service not reachable"}, status=503)
     return web.json_response({"ok": True})
+
+
+async def voice_personalities_handler(request: web.Request) -> web.Response:
+    return web.json_response({"personalities": sorted(load_personalities().keys())})
 
 
 def build_app(state: WebDashboardState) -> web.Application:
@@ -1068,6 +1066,7 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_get("/config/{name}", config_get)
     app.router.add_post("/config/{name}", config_apply)
     app.router.add_post("/voice/command", voice_command_handler)
+    app.router.add_get("/voice/personalities", voice_personalities_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 

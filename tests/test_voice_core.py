@@ -20,6 +20,7 @@ from voice.assistant import (
     handle_scribe_events,
     note_mic_chunk,
     refresh_barge_in_gate,
+    run_assistant_turn,
     stream_openai_words,
 )
 from voice.conversation import ConversationHistory
@@ -345,9 +346,9 @@ class ActiveTurnTest(unittest.TestCase):
 
 
 class AssistantStreamingTest(unittest.TestCase):
-    def test_stream_openai_words_calls_session_end_caller_for_tool(self):
+    def test_stream_openai_words_allows_tool_first_end_session_goodbye(self):
         async def run():
-            ended = []
+            pending = [False]
 
             class FakeResponses:
                 def __init__(self):
@@ -387,14 +388,114 @@ class AssistantStreamingTest(unittest.TestCase):
                     [{"role": "user", "content": "Goodbye"}],
                     SimpleNamespace(responses=fake_responses),
                     VoiceState("test-voice"),
-                    session_end_caller=lambda: ended.append(True),
+                    end_session_pending=pending,
                 )
             ]
 
-            self.assertEqual(ended, [True])
+            self.assertTrue(pending[0])
             self.assertEqual(chunks, ["Bye."])
+            self.assertEqual(len(fake_responses.calls), 2)
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output, {"ok": True, "ended": True})
+
+        asyncio.run(run())
+
+    def test_run_assistant_turn_defers_session_end_until_after_tts(self):
+        async def run():
+            ended = []
+            order = []
+
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    events = [
+                        SimpleNamespace(type="response.output_text.delta", delta="Bye."),
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=END_SESSION_TOOL_NAME,
+                                call_id="call_end",
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            async def fake_speaker(text_chunks, *args, **kwargs):
+                order.append("tts_start")
+                async for chunk in text_chunks:
+                    if isinstance(chunk, str):
+                        order.append(f"tts:{chunk}")
+                order.append("tts_done")
+
+            fake_responses = FakeResponses()
+            text = await run_assistant_turn(
+                1,
+                [{"role": "user", "content": "Goodbye"}],
+                asyncio.Event(),
+                asyncio.Event(),
+                SimpleNamespace(responses=fake_responses),
+                "key",
+                VoiceState("test-voice"),
+                tts_speaker=fake_speaker,
+                session_end_caller=lambda: ended.append(True),
+            )
+
+            self.assertEqual(text, "Bye.")
+            self.assertEqual(order, ["tts_start", "tts:Bye.", "tts_done"])
+            self.assertEqual(ended, [True])
+            self.assertEqual(len(fake_responses.calls), 1)
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_stops_after_end_session_followup(self):
+        async def run():
+            pending = [False]
+
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = 0
+
+                async def create(self, **kwargs):
+                    self.calls += 1
+                    events = [
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=END_SESSION_TOOL_NAME,
+                                call_id="call_end",
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake = FakeResponses()
+            async for _chunk in stream_openai_words(
+                [{"role": "user", "content": "Goodbye"}],
+                SimpleNamespace(responses=fake),
+                VoiceState("test-voice"),
+                end_session_pending=pending,
+            ):
+                pass
+
+            self.assertTrue(pending[0])
+            self.assertEqual(fake.calls, 2)
 
         asyncio.run(run())
 
@@ -1116,6 +1217,113 @@ class AssistantStreamingTest(unittest.TestCase):
 
             self.assertEqual(started_inputs, ["Tell me a story please"])
             self.assertEqual(cancelled, ["Tell me a story please"])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_rejected_partial_during_playback_restores_speaking_status(self):
+        async def run():
+            statuses = []
+            timeline_events = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_event.set()
+                await asyncio.Event().wait()
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                    on_event=timeline_events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 200})
+            await scribe_events.put({"type": "partial", "text": "hi"})
+            await asyncio.sleep(0.05)
+
+            self.assertTrue(any(event.get("type") == "barge_in_rejected" for event in timeline_events))
+            self.assertFalse(any(status.get("status") == "hearing" for status in statuses))
+            self.assertEqual(statuses[-1].get("status"), "speaking")
+            self.assertTrue(statuses[-1].get("assistant_speaking"))
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_rejected_commit_during_playback_does_not_publish_hearing(self):
+        async def run():
+            timeline_events = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_event.set()
+                await asyncio.Event().wait()
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    assistant_runner=fake_run_assistant_turn,
+                    on_event=timeline_events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 200})
+            await scribe_events.put({"type": "commit", "text": "Actually tell me about motors"})
+            await asyncio.sleep(0.05)
+
+            self.assertTrue(any(event.get("type") == "commit_rejected" for event in timeline_events))
+            self.assertFalse(
+                any(
+                    event.get("type") == "barge_in_fired" and event.get("reason") == "hearing"
+                    for event in timeline_events
+                )
+            )
 
             stop_event.set()
             handler_task.cancel()

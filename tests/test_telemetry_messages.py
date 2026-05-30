@@ -23,7 +23,7 @@ from telemetry.messages import (
     voice_update,
     wheel_message,
 )
-from telemetry.socket_client import publish_message
+from telemetry.socket_client import publish_message, send_voice_command
 
 
 class TelemetryMessagesTest(unittest.TestCase):
@@ -233,6 +233,33 @@ class SocketClientTest(unittest.TestCase):
 
     def test_publish_message_returns_false_when_unavailable(self):
         self.assertFalse(publish_message("/tmp/robot-pet-missing.sock", {"type": "test"}, timeout=0.01))
+
+    def test_send_voice_command_reads_ack_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "cmd.sock")
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(socket_path)
+            server.listen(1)
+            received = []
+            ack = {"ok": True, "accepted": True, "reason": None}
+
+            def accept_once():
+                conn, _addr = server.accept()
+                with conn:
+                    file_obj = conn.makefile("rb")
+                    line = file_obj.readline()
+                    received.append(line)
+                    conn.sendall(encode_json_line(ack))
+                server.close()
+
+            thread = threading.Thread(target=accept_once)
+            thread.start()
+
+            response = send_voice_command(socket_path, {"cmd": "talk_now"})
+            thread.join(timeout=1.0)
+
+            self.assertEqual(decode_json_line(received[0]), {"cmd": "talk_now"})
+            self.assertEqual(response, ack)
 
 
 if __name__ == "__main__":

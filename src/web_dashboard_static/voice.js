@@ -314,7 +314,8 @@ async function onPersonalityChange(event) {
     if (!response.ok) {
       pendingPersonality = null;
       const body = await response.json().catch(() => ({}));
-      appendLog(`set personality failed: ${body.error || response.statusText}`);
+      const detail = body.reason || body.error || response.statusText;
+      appendLog(`set personality failed: ${detail}`);
       if (latestVoice && latestVoice.personality) syncPersonalitySelect(latestVoice.personality);
     }
   } catch (exc) {
@@ -336,7 +337,8 @@ async function onSessionControl() {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      appendLog(`${cmd} failed: ${body.error || response.statusText}`);
+      const detail = body.reason || body.error || response.statusText;
+      appendLog(`${cmd} failed: ${detail}`);
     }
   } catch (exc) {
     appendLog(`${cmd} failed: ${exc}`);

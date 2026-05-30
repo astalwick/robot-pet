@@ -16,3 +16,5 @@ Keep code you write simple, straightforward and minimal.
 These are soft rules, but the hard rule is: if you break one of the rules above, you MUST GET APPROVAL.
 
 Our goal is simple, readable, easy to follow code. Follow existing code styles. The code should feel friendly, welcoming. It should feel like it WANTS you to understand.
+
+Run tests with `python3 -m unittest ...`; for example, `python3 -m unittest tests.test_voice_core`.

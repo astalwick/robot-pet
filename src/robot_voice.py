@@ -14,12 +14,13 @@ from collections import deque
 from contextlib import suppress
 from pathlib import Path
 
-from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config
+from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
 from control.motion_intent import request_motion_intent
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import DEFAULT_CAMERA_PORT, DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
+from telemetry.messages import encode_json_line
 from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.personality import load_personalities
@@ -141,6 +142,10 @@ class RobotVoiceService:
         self._detector: WakeWordDetector | None = None
         self.personalities = load_personalities()
         self.selected_personality: str | None = None
+        self._orchestrator_startup_latched: VoiceConfig | None = None
+        self._orchestrator_startup_error: str | None = None
+        self._config_load_error_text: str | None = None
+        self._config_load_error_config: str | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         command_server = await self._start_command_server()
@@ -149,10 +154,20 @@ class RobotVoiceService:
                 try:
                     config = load_voice_config(self.config_path)
                 except VoiceConfigError as exc:
-                    await self.stop_all()
-                    self.publish(VoiceConfig(), status="error", last_error=str(exc))
+                    error_text = str(exc)
+                    config_text = None
+                    with suppress(OSError):
+                        config_text = Path(self.config_path).read_text()
+                    if self._config_load_error_text != error_text or self._config_load_error_config != config_text:
+                        await self.stop_all()
+                        self.publish(VoiceConfig(), status="error", last_error=error_text)
+                        self._config_load_error_text = error_text
+                        self._config_load_error_config = config_text
                     await asyncio.sleep(self.poll_seconds)
                     continue
+
+                self._config_load_error_text = None
+                self._config_load_error_config = None
 
                 if not config.enabled or not config.wake_word_enabled:
                     await self.stop_all()
@@ -184,6 +199,7 @@ class RobotVoiceService:
         return server
 
     async def _handle_command(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        ack: dict[str, object] = {"ok": False, "accepted": False, "reason": "empty_request"}
         try:
             line = await reader.readline()
             if not line:
@@ -192,47 +208,81 @@ class RobotVoiceService:
                 payload = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 log.warning("voice command socket: invalid JSON")
+                ack = {"ok": True, "accepted": False, "reason": "invalid_json"}
                 return
-            if not isinstance(payload, dict):
-                return
-            cmd = payload.get("cmd")
-            if cmd == "talk_now":
-                if self._mode == "active":
-                    log.info("talk-now ignored: session already active")
-                    return
-                if self._mode != "armed":
-                    log.info("talk-now ignored: voice is not armed")
-                    return
-                log.info("talk-now command received")
-                self._wake_event.set()
-            elif cmd == "end_session":
-                if self._mode != "active":
-                    log.info("end-session ignored: no active session")
-                    return
-                log.info("end-session command received")
-                self.request_end_session()
-            elif cmd == "set_personality":
-                name = payload.get("name")
-                if not isinstance(name, str) or name not in self.personalities:
-                    log.warning("set-personality ignored: unknown personality %r", name)
-                    return
-                log.info("set-personality command received: %s", name)
-                self.selected_personality = name
-                if self.session is not None:
-                    self.session.set_personality(name)
-                if self.active_config is not None:
-                    self.publish(self.active_config, personality=name)
-            else:
-                log.warning("voice command socket: unknown cmd %r", cmd)
+            ack = self._process_command(payload)
         finally:
+            writer.write(encode_json_line(ack))
+            await writer.drain()
             writer.close()
             with suppress(Exception):
                 await writer.wait_closed()
 
+    def _process_command(self, payload: object) -> dict[str, object]:
+        if not isinstance(payload, dict):
+            return {"ok": True, "accepted": False, "reason": "invalid_payload"}
+        cmd = payload.get("cmd")
+        if cmd == "talk_now":
+            if self._mode == "active":
+                log.info("talk-now ignored: session already active")
+                return {"ok": True, "accepted": False, "reason": "session_already_active"}
+            if self._mode != "armed":
+                log.info("talk-now ignored: voice is not armed")
+                return {"ok": True, "accepted": False, "reason": "not_armed"}
+            log.info("talk-now command received")
+            self._wake_event.set()
+            return {"ok": True, "accepted": True, "reason": None}
+        if cmd == "end_session":
+            if self._mode != "active":
+                log.info("end-session ignored: no active session")
+                return {"ok": True, "accepted": False, "reason": "no_active_session"}
+            log.info("end-session command received")
+            self.request_end_session()
+            return {"ok": True, "accepted": True, "reason": None}
+        if cmd == "set_personality":
+            name = payload.get("name")
+            if not isinstance(name, str) or name not in self.personalities:
+                log.warning("set-personality ignored: unknown personality %r", name)
+                return {"ok": True, "accepted": False, "reason": "unknown_personality"}
+            log.info("set-personality command received: %s", name)
+            self.selected_personality = name
+            if self.session is not None:
+                self.session.set_personality(name)
+            if self.active_config is not None:
+                self.publish(self.active_config, personality=name)
+            self._persist_personality(name)
+            return {"ok": True, "accepted": True, "reason": None}
+        log.warning("voice command socket: unknown cmd %r", cmd)
+        return {"ok": True, "accepted": False, "reason": "unknown_cmd"}
+
+    def _persist_personality(self, name: str) -> None:
+        try:
+            config = load_voice_config(self.config_path)
+            if config.personality == name:
+                return
+            save_voice_config(VoiceConfig.from_dict({**config.to_dict(), "personality": name}), self.config_path)
+        except (VoiceConfigError, OSError) as exc:
+            log.warning("personality config save failed: %s", exc)
+
     async def _run_wake_orchestrator(self, config: VoiceConfig) -> None:
-        if self._orchestrator_task is None or self.active_config != config:
+        if self._orchestrator_startup_latched is not None and same_orchestrator_config(
+            self._orchestrator_startup_latched, config
+        ):
+            self.publish(config, status="error", last_error=self._orchestrator_startup_error)
+            await asyncio.sleep(self.poll_seconds)
+            return
+        if self._orchestrator_startup_latched is not None:
+            self._orchestrator_startup_latched = None
+            self._orchestrator_startup_error = None
+
+        if self.active_config is not None and same_orchestrator_config(self.active_config, config):
+            self.active_config = config
+
+        if self._orchestrator_task is None or not same_orchestrator_config(self.active_config, config):
             await self.stop_all()
-            await self.start_orchestrator(config)
+            if not await self.start_orchestrator(config):
+                await asyncio.sleep(self.poll_seconds)
+                return
         elif self._orchestrator_task.done():
             exc = self._orchestrator_task.exception()
             if exc is not None:
@@ -252,7 +302,21 @@ class RobotVoiceService:
         if self._mode == "active":
             self._end_session_event.set()
 
-    async def start_orchestrator(self, config: VoiceConfig) -> None:
+    def _latch_orchestrator_startup(self, config: VoiceConfig, error: str) -> None:
+        if self._orchestrator_startup_latched is not None and same_orchestrator_config(
+            self._orchestrator_startup_latched, config
+        ):
+            return
+        self._orchestrator_startup_latched = config
+        self._orchestrator_startup_error = error
+        self.publish(config, status="error", last_error=error)
+
+    async def start_orchestrator(self, config: VoiceConfig) -> bool:
+        if self._orchestrator_startup_latched is not None and same_orchestrator_config(
+            self._orchestrator_startup_latched, config
+        ):
+            return False
+
         log.info(
             "starting orchestrator: wake=%s model=%s threshold=%.2f chime=%s idle=%.1fs",
             config.wake_word_enabled,
@@ -262,9 +326,12 @@ class RobotVoiceService:
             config.session_idle_secs,
         )
         if not Path(config.wake_chime_path).is_file():
-            self.publish(config, status="error", last_error=f"Chime WAV not found: {config.wake_chime_path}")
-            return
+            error = f"Chime WAV not found: {config.wake_chime_path}"
+            self._latch_orchestrator_startup(config, error)
+            return False
 
+        self._orchestrator_startup_latched = None
+        self._orchestrator_startup_error = None
         self.publish(config, status="starting", last_error=None)
         self.active_config = config
         self.audio = ReSpeakerAudio(
@@ -284,7 +351,7 @@ class RobotVoiceService:
             log.warning("wake audio start failed: %s", exc)
             await self.stop_all()
             self.publish(config, status="error", last_error=str(exc))
-            return
+            return False
 
         try:
             detector = WakeWordDetector(
@@ -297,8 +364,8 @@ class RobotVoiceService:
         except Exception as exc:
             log.warning("wake model load failed: %s", exc)
             await self.stop_all()
-            self.publish(config, status="error", last_error=str(exc))
-            return
+            self._latch_orchestrator_startup(config, str(exc))
+            return False
         self._detector = detector
         self._wake_task = asyncio.create_task(self._run_wake_loop(config))
 
@@ -317,6 +384,7 @@ class RobotVoiceService:
             wake_fire_count=0,
             wake_last_fire_at=None,
         )
+        return True
 
     async def _run_orchestrator(self) -> None:
         while True:
@@ -551,6 +619,8 @@ class RobotVoiceService:
             self.audio = None
         self._io_stop_event = None
         self.active_config = None
+        self._orchestrator_startup_latched = None
+        self._orchestrator_startup_error = None
 
     async def _sample_timeline(self) -> None:
         interval = 1.0 / TIMELINE_SAMPLE_HZ
@@ -673,6 +743,16 @@ def optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def same_orchestrator_config(left: VoiceConfig | None, right: VoiceConfig | None) -> bool:
+    if left is None or right is None:
+        return False
+    left_values = left.to_dict()
+    right_values = right.to_dict()
+    left_values.pop("personality", None)
+    right_values.pop("personality", None)
+    return left_values == right_values
 
 
 def fetch_camera_snapshot(camera_url: str, timeout: float = 5.0) -> bytes:

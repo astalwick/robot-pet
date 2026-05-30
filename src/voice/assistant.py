@@ -45,6 +45,7 @@ MOVE_FORWARD_TOOL_NAME = "move_forward"
 LOOK_AROUND_TOOL_NAME = "look_around"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
+ASSISTANT_TURN_TIMEOUT_SECS = 120.0
 
 
 def compose_system_prompt(character_prose: str) -> str:
@@ -391,13 +392,15 @@ async def stream_openai_words(
     openai_client: Any,
     voice_state: VoiceState,
     motion_intent_caller: Callable[[str], Any] | None = None,
-    session_end_caller: Callable[[], Any] | None = None,
+    end_session_pending: list[bool] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
     response_input: object = openai_input
     previous_response_id: str | None = None
+    text_streamed = False
+    end_session_tool_output_sent = False
 
     while True:
         create_kwargs: dict[str, Any] = {
@@ -432,6 +435,7 @@ async def stream_openai_words(
 
                 word_buffer.extend(pieces)
                 while len(word_buffer) >= 3:
+                    text_streamed = True
                     yield "".join(word_buffer[:3])
                     del word_buffer[:3]
                 continue
@@ -450,6 +454,7 @@ async def stream_openai_words(
             word_buffer.append(pending)
             pending = ""
         if word_buffer:
+            text_streamed = True
             yield "".join(word_buffer)
             word_buffer.clear()
 
@@ -471,10 +476,10 @@ async def stream_openai_words(
                     "voice_id": voice_switch.voice_id,
                 }
             elif name == END_SESSION_TOOL_NAME:
-                if session_end_caller is None:
+                if end_session_pending is None:
                     result = {"ok": False, "error": "session_end_unavailable"}
                 else:
-                    session_end_caller()
+                    end_session_pending[0] = True
                     result = {"ok": True, "ended": True}
             elif name in MOTION_TOOL_NAMES:
                 if motion_intent_caller is None:
@@ -523,6 +528,12 @@ async def stream_openai_words(
             else:
                 log.info("tool call %s ok", name)
 
+        if end_session_pending and end_session_pending[0] and (text_streamed or end_session_tool_output_sent):
+            return
+
+        if end_session_pending and end_session_pending[0]:
+            end_session_tool_output_sent = True
+
         previous_response_id = response_id
         response_input = [*tool_outputs, *image_messages]
 
@@ -544,6 +555,7 @@ async def run_assistant_turn(
     from voice.elevenlabs_io import speak_with_eleven_flash
 
     assistant_chunks: list[str] = []
+    end_session_pending = [False]
 
     async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
         async for chunk in stream_openai_words(
@@ -551,7 +563,7 @@ async def run_assistant_turn(
             openai_client,
             voice_state,
             motion_intent_caller,
-            session_end_caller,
+            end_session_pending,
             camera_snapshot_caller,
         ):
             if isinstance(chunk, str):
@@ -568,6 +580,8 @@ async def run_assistant_turn(
         playback_event,
         speaking_event,
     )
+    if end_session_pending[0] and session_end_caller is not None:
+        session_end_caller()
     return "".join(assistant_chunks).strip()
 
 
@@ -789,21 +803,26 @@ async def handle_scribe_events(
                 emit("turn_first_token", turn_id=new_turn_id)
 
         openai_input = history.input_for(prompt, current_system_prompt())
-        task = asyncio.create_task(
-            assistant_runner(
-                new_turn_id,
-                openai_input,
-                playback_event,
-                speaking_event,
-                openai_client,
-                elevenlabs_api_key,
-                voice_state,
-                on_assistant_chunk=on_assistant_chunk,
-                motion_intent_caller=motion_intent_caller,
-                session_end_caller=session_end_caller,
-                camera_snapshot_caller=camera_snapshot_caller,
+
+        async def run_turn() -> str:
+            return await asyncio.wait_for(
+                assistant_runner(
+                    new_turn_id,
+                    openai_input,
+                    playback_event,
+                    speaking_event,
+                    openai_client,
+                    elevenlabs_api_key,
+                    voice_state,
+                    on_assistant_chunk=on_assistant_chunk,
+                    motion_intent_caller=motion_intent_caller,
+                    session_end_caller=session_end_caller,
+                    camera_snapshot_caller=camera_snapshot_caller,
+                ),
+                timeout=ASSISTANT_TURN_TIMEOUT_SECS,
             )
-        )
+
+        task = asyncio.create_task(run_turn())
         turn = ActiveTurn(
             turn_id=new_turn_id,
             prompt=prompt,
@@ -851,15 +870,15 @@ async def handle_scribe_events(
             status(status="listening")
             return
 
-        status(status="hearing", partial_transcript=text)
         active_turn = state.active_turn
         if active_turn and active_turn.is_playing_back():
             active_turn.mark_speech_started(now)
-            publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
             outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
             report_barge_in("partial", outcome)
             if outcome.accepted:
+                publish_barge_in_hearing("stt")
+                status(status="hearing", partial_transcript=text)
                 publish_barge_in_event("partial", outcome.reason)
                 await cancel_active_turn("barge_in")
                 await cancel_task(state.debounce_task)
@@ -868,7 +887,12 @@ async def handle_scribe_events(
                     status(status="listening", partial_transcript=None)
                 else:
                     state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
+            else:
+                emit("barge_in_rejected", source="partial", reason=outcome.reason, text=text)
+                status(status="speaking", assistant_speaking=True, partial_transcript=None)
             return
+
+        status(status="hearing", partial_transcript=text)
 
         if active_turn and active_turn.speculative and text != active_turn.prompt and policy.transcript_matches(text, active_turn.prompt):
             if policy.should_replace_speculative_prompt(text, active_turn.prompt):
@@ -915,13 +939,19 @@ async def handle_scribe_events(
             and not policy.transcript_matches(text, active_turn.prompt)
         ):
             active_turn.mark_speech_started(now)
-            publish_barge_in_hearing("stt")
             publish_barge_in_state(now)
             outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
             report_barge_in("commit", outcome)
             if not outcome.accepted:
+                emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
+                log.info(
+                    "commit rejected during playback: reason=%s text=%r",
+                    outcome.reason,
+                    text,
+                )
                 return
 
+            publish_barge_in_hearing("stt")
             publish_barge_in_event("commit", outcome.reason)
             await cancel_active_turn("barge_in_commit")
             if outcome.reason == "explicit_interrupt" or not should_start_from_commit:

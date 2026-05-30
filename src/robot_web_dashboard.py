@@ -58,7 +58,7 @@ from telemetry.paths import (
     DEFAULT_WEB_DASHBOARD_HOST,
     DEFAULT_WEB_DASHBOARD_PORT,
 )
-from telemetry.socket_client import publish_message, subscribe
+from telemetry.socket_client import publish_message, send_voice_command, subscribe
 from voice.personality import load_personalities
 
 
@@ -1044,10 +1044,15 @@ async def voice_command_handler(request: web.Request) -> web.Response:
             return web.json_response({"error": "set_personality requires a name"}, status=400)
         message["name"] = name
 
-    sent = await asyncio.to_thread(publish_message, state.voice_command_socket, message)
-    if not sent:
+    ack = await asyncio.to_thread(send_voice_command, state.voice_command_socket, message)
+    if ack is None:
         return web.json_response({"error": "voice service not reachable"}, status=503)
-    return web.json_response({"ok": True})
+    if not ack.get("ok", False):
+        return web.json_response({"error": "voice command failed", "reason": ack.get("reason")}, status=502)
+    if not ack.get("accepted", False):
+        reason = ack.get("reason") or "ignored"
+        return web.json_response({"error": reason, "reason": reason}, status=409)
+    return web.json_response({"ok": True, "accepted": True})
 
 
 async def voice_personalities_handler(request: web.Request) -> web.Response:

@@ -322,6 +322,16 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         async with self.client.post("/voice/command", json={"cmd": "set_personality"}) as resp:
             self.assertEqual(resp.status, 400)
 
+    async def test_voice_command_maps_ignored_ack_to_409(self):
+        with mock.patch(
+            "robot_web_dashboard.send_voice_command",
+            return_value={"ok": True, "accepted": False, "reason": "not_armed"},
+        ):
+            async with self.client.post("/voice/command", json={"cmd": "talk_now"}) as resp:
+                self.assertEqual(resp.status, 409)
+                payload = await resp.json()
+        self.assertEqual(payload["reason"], "not_armed")
+
     async def test_get_config_sensors_returns_fields_and_default_values(self):
         async with self.client.get("/config/sensors") as resp:
             self.assertEqual(resp.status, 200)

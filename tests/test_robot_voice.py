@@ -5,6 +5,7 @@ import sys
 import tempfile
 import types
 import unittest
+from contextlib import suppress
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -128,6 +129,99 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertIsNone(service._orchestrator_task)
             self.assertTrue(any("Chime WAV not found" in str(message.get("last_error")) for message in published))
+            config = load_voice_config(config_path)
+            self.assertEqual(service._orchestrator_startup_latched, config)
+
+            published.clear()
+            with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                await service.start_orchestrator(config)
+            self.assertEqual(len(published), 0)
+
+    async def test_orchestrator_startup_latch_skips_retry_until_config_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "voice.json")
+            with open(config_path, "w") as file_obj:
+                json.dump(
+                    {
+                        "enabled": True,
+                        "wake_word_enabled": True,
+                        "wake_chime_path": os.path.join(tmpdir, "missing.wav"),
+                    },
+                    file_obj,
+                )
+
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
+            start_calls = 0
+            config = load_voice_config(config_path)
+
+            async def counting_start(config):
+                nonlocal start_calls
+                start_calls += 1
+                return await RobotVoiceService.start_orchestrator(service, config)
+
+            with mock.patch.object(service, "start_orchestrator", side_effect=counting_start):
+                with mock.patch("robot_voice.publish_message", return_value=True):
+                    await service._run_wake_orchestrator(config)
+                    await service._run_wake_orchestrator(config)
+
+            self.assertEqual(start_calls, 1)
+
+    async def test_config_load_error_latches_until_file_changes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "voice.json")
+            with open(config_path, "w") as file_obj:
+                file_obj.write("{")
+
+            service = RobotVoiceService(
+                config_path,
+                "/tmp/missing.sock",
+                command_socket=os.path.join(tmpdir, "cmd.sock"),
+                poll_seconds=0.01,
+            )
+            stop_event = asyncio.Event()
+            published = []
+
+            async def change_config_then_stop():
+                await asyncio.sleep(0.035)
+                with open(config_path, "w") as file_obj:
+                    json.dump({"sample_rate": 8000}, file_obj)
+                await asyncio.sleep(0.035)
+                stop_event.set()
+
+            with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                await asyncio.gather(service.run(stop_event), change_config_then_stop())
+
+            errors = [message for message in published if message.get("status") == "error"]
+            self.assertEqual(len(errors), 2)
+            self.assertIn("Invalid voice config", str(errors[0].get("last_error")))
+            self.assertEqual(errors[1].get("last_error"), "sample_rate must be 16000")
+
+    async def test_personality_only_config_change_does_not_restart_orchestrator(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.active_config = service_config(enabled=True, wake_word_enabled=True, personality="default")
+        service._orchestrator_task = asyncio.create_task(asyncio.Event().wait())
+
+        try:
+            with (
+                mock.patch.object(service, "stop_all", new=mock.AsyncMock()) as stop_all,
+                mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator,
+            ):
+                await service._run_wake_orchestrator(
+                    service_config(enabled=True, wake_word_enabled=True, personality="nina")
+                )
+
+            stop_all.assert_not_called()
+            start_orchestrator.assert_not_called()
+            self.assertEqual(service.active_config.personality, "nina")
+        finally:
+            service._orchestrator_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await service._orchestrator_task
 
     async def test_wake_off_stays_disabled(self):
         with tempfile.TemporaryDirectory() as tmpdir:

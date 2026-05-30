@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_voice import ACTIVATE_FAILURE_BACKOFF_SECS, RobotVoiceService
 from config.voice import VoiceConfig
-from telemetry.socket_client import publish_message
+from telemetry.socket_client import send_voice_command
 
 
 class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
@@ -115,9 +115,8 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             server = await service._start_command_server()
             self.assertIsNotNone(server)
             try:
-                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "end_session"})
-                self.assertTrue(ok)
-                await asyncio.sleep(0.05)
+                ack = await asyncio.to_thread(send_voice_command, command_socket, {"cmd": "end_session"})
+                self.assertEqual(ack, {"ok": True, "accepted": False, "reason": "no_active_session"})
                 self.assertFalse(service._end_session_event.is_set())
             finally:
                 server.close()
@@ -132,8 +131,8 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             server = await service._start_command_server()
             self.assertIsNotNone(server)
             try:
-                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "end_session"})
-                self.assertTrue(ok)
+                ack = await asyncio.to_thread(send_voice_command, command_socket, {"cmd": "end_session"})
+                self.assertEqual(ack, {"ok": True, "accepted": True, "reason": None})
                 await asyncio.wait_for(service._end_session_event.wait(), timeout=1.0)
             finally:
                 server.close()
@@ -149,8 +148,8 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(server)
             try:
                 self.assertFalse(service._wake_event.is_set())
-                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "talk_now"})
-                self.assertTrue(ok)
+                ack = await asyncio.to_thread(send_voice_command, command_socket, {"cmd": "talk_now"})
+                self.assertEqual(ack, {"ok": True, "accepted": True, "reason": None})
                 await asyncio.wait_for(service._wake_event.wait(), timeout=1.0)
             finally:
                 server.close()
@@ -164,9 +163,8 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             server = await service._start_command_server()
             self.assertIsNotNone(server)
             try:
-                ok = await asyncio.to_thread(publish_message, command_socket, {"cmd": "do_a_barrel_roll"})
-                self.assertTrue(ok)
-                await asyncio.sleep(0.05)
+                ack = await asyncio.to_thread(send_voice_command, command_socket, {"cmd": "do_a_barrel_roll"})
+                self.assertEqual(ack, {"ok": True, "accepted": False, "reason": "unknown_cmd"})
                 self.assertFalse(service._wake_event.is_set())
             finally:
                 server.close()

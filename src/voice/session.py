@@ -47,6 +47,7 @@ class VoiceSession:
         session_end_caller: Callable[[], Any] | None = None,
         camera_snapshot_caller: Callable[[], bytes] | None = None,
         personalities: dict[str, tuple[str, str]] | None = None,
+        profile_every: int = 0,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -58,6 +59,7 @@ class VoiceSession:
         self.motion_intent_caller = motion_intent_caller
         self.session_end_caller = session_end_caller
         self.camera_snapshot_caller = camera_snapshot_caller
+        self.profile_every = profile_every
         self.stop_event = asyncio.Event()
         self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
@@ -119,6 +121,7 @@ class VoiceSession:
                     self.config.sample_rate,
                     policy=self.policy,
                     audio_levels=self.audio_levels,
+                    profile_every=self.profile_every,
                 )
             ),
             asyncio.create_task(
@@ -195,6 +198,7 @@ class VoiceSession:
                 speaking_event,
                 audio_writer=self.audio.write_output,
                 on_playback_rms=on_playback_rms,
+                profile_every=self.profile_every,
             )
         except asyncio.CancelledError:
             cancelled = True

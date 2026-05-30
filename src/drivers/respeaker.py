@@ -116,6 +116,7 @@ class ReSpeakerAudio:
         output_channels: int = 1,
         input_gain: float = 1.0,
         output_gain: float = 1.0,
+        profile_every: int = 0,
     ) -> None:
         if sample_rate != 16000:
             raise ReSpeakerError("sample_rate must be 16000")
@@ -133,6 +134,7 @@ class ReSpeakerAudio:
         self.output_channels = output_channels
         self.input_gain = input_gain
         self.output_gain = output_gain
+        self.profile_every = profile_every
         self._playback_lock = asyncio.Lock()
         self._playback_id = 0
         self._active_playback_id: int | None = None
@@ -149,6 +151,7 @@ class ReSpeakerAudio:
         self._last_playback_status_log = 0.0
         self._last_drop_warn = 0.0
         self._last_raw_drop_log = 0.0
+        self._capture_profile_count = 0
 
     async def start_io(self, stop_event: asyncio.Event) -> None:
         # One input + one output stream for the whole voice session (see robot_voice.py).
@@ -287,8 +290,15 @@ class ReSpeakerAudio:
                     interleaved = await asyncio.wait_for(raw_queue.get(), timeout=0.1)
                 except TimeoutError:
                     continue
+                started = time.perf_counter()
+                mono_started = time.perf_counter()
                 mono = extract_mono_channel(interleaved, self.capture_channels, self.capture_channel_index)
+                mono_seconds = time.perf_counter() - mono_started
+                gain_started = time.perf_counter()
                 frame = apply_pcm16_gain(mono, self.input_gain)
+                gain_seconds = time.perf_counter() - gain_started
+                fanout_started = time.perf_counter()
+                subscriber_count = len(self._subscribers)
                 for subscriber in list(self._subscribers):
                     if subscriber.queue.full():
                         if subscriber.warn_on_drop:
@@ -298,8 +308,38 @@ class ReSpeakerAudio:
                                 log.warning("mic subscriber queue full; dropping frame")
                         continue
                     subscriber.queue.put_nowait(frame)
+                fanout_seconds = time.perf_counter() - fanout_started
+                self._maybe_log_capture_profile(
+                    subscriber_count,
+                    mono_seconds,
+                    gain_seconds,
+                    fanout_seconds,
+                    time.perf_counter() - started,
+                )
         except asyncio.CancelledError:
             raise
+
+    def _maybe_log_capture_profile(
+        self,
+        subscriber_count: int,
+        mono_seconds: float,
+        gain_seconds: float,
+        fanout_seconds: float,
+        total_seconds: float,
+    ) -> None:
+        if self.profile_every <= 0:
+            return
+        self._capture_profile_count += 1
+        if self._capture_profile_count % self.profile_every != 0:
+            return
+        log.info(
+            "voice audio profile: subscribers=%d mono=%.1fms gain=%.1fms fanout=%.1fms total=%.1fms",
+            subscriber_count,
+            mono_seconds * 1000,
+            gain_seconds * 1000,
+            fanout_seconds * 1000,
+            total_seconds * 1000,
+        )
 
     # Playback contract (see docs/plans/2026-05-24 - voice-core-stabilization.md, Phase 2):
     #   begin_playback()                  -> open a new output queue, return its playback_id

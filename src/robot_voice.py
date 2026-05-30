@@ -99,6 +99,7 @@ class RobotVoiceService:
         poll_seconds: float = DEFAULT_POLL_SECONDS,
         motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET,
         camera_url: str = DEFAULT_CAMERA_SNAPSHOT_URL,
+        profile_every: int = 0,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
@@ -106,6 +107,7 @@ class RobotVoiceService:
         self.poll_seconds = poll_seconds
         self.motion_intent_socket = motion_intent_socket
         self.camera_url = camera_url
+        self.profile_every = profile_every
         self.session: VoiceSession | None = None
         self.audio: ReSpeakerAudio | None = None
         self._io_stop_event: asyncio.Event | None = None
@@ -146,6 +148,8 @@ class RobotVoiceService:
         self._orchestrator_startup_error: str | None = None
         self._config_load_error_text: str | None = None
         self._config_load_error_config: str | None = None
+        self._wake_profile_count = 0
+        self._publish_profile_count = 0
 
     async def run(self, stop_event: asyncio.Event) -> None:
         command_server = await self._start_command_server()
@@ -343,6 +347,7 @@ class RobotVoiceService:
             output_channels=config.output_channels,
             input_gain=config.input_gain,
             output_gain=config.output_gain,
+            profile_every=self.profile_every,
         )
         self._io_stop_event = asyncio.Event()
         try:
@@ -458,6 +463,7 @@ class RobotVoiceService:
             session_end_caller=self.request_end_session,
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             personalities=self.personalities,
+            profile_every=self.profile_every,
         )
         if self.selected_personality is not None:
             self.session.set_personality(self.selected_personality)
@@ -558,7 +564,10 @@ class RobotVoiceService:
         ):
             if self._mode != "armed":
                 continue
-            if not detector.check(frame):
+            started = time.perf_counter()
+            woke = detector.check(frame)
+            self._maybe_log_wake_profile(detector, time.perf_counter() - started)
+            if not woke:
                 continue
             score = detector.last_score
             log.info("wake detected score=%.4f threshold=%.2f", score, config.wake_threshold)
@@ -653,6 +662,7 @@ class RobotVoiceService:
             self.timeline.trim(now)
 
     def publish(self, config: VoiceConfig, **updates: object) -> None:
+        started = time.perf_counter()
         was_idle = (
             self._mode == "active"
             and self.status.get("status") == "listening"
@@ -674,46 +684,90 @@ class RobotVoiceService:
             self.last_logged_error = None
         now = time.monotonic()
         voice_on = config.enabled and config.wake_word_enabled
+        timeline_started = time.perf_counter()
         self.timeline.trim(now)
-        publish_message(
-            self.telemetry_socket,
-            voice_update(
-                enabled=voice_on,
-                status=str(self.status["status"]),
-                input_device=config.input_device,
-                output_device=config.output_device,
-                sample_rate=config.sample_rate,
-                capture_channels=config.capture_channels,
-                capture_channel_index=config.capture_channel_index,
-                input_gain=config.input_gain,
-                output_gain=config.output_gain,
-                assistant_speaking=bool(self.status["assistant_speaking"]),
-                partial_transcript=optional_text(self.status["partial_transcript"]),
-                last_committed_transcript=optional_text(self.status["last_committed_transcript"]),
-                last_assistant_text=optional_text(self.status["last_assistant_text"]),
-                last_error=last_error,
-                barge_in_enabled=(
-                    optional_bool(self.status["barge_in_enabled"])
-                    if self.status["barge_in_enabled"] is not None
-                    else config.barge_in_enabled
-                ),
-                barge_in_min_rms=config.barge_in_min_rms,
-                barge_in_sustain_ms=config.barge_in_sustain_ms,
-                barge_in_threshold_rms=optional_int(self.status["barge_in_threshold_rms"]),
-                barge_in_mic_rms=optional_int(self.status["barge_in_mic_rms"]),
-                barge_in_playback_rms=optional_int(self.status["barge_in_playback_rms"]),
-                barge_in_gate_open=optional_bool(self.status["barge_in_gate_open"]),
-                barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
-                barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
-                barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
-                wake_word_enabled=voice_on,
-                wake_threshold=config.wake_threshold if voice_on else None,
-                wake_last_score=optional_float(self.status["wake_last_score"]),
-                wake_fire_count=optional_int(self.status["wake_fire_count"]),
-                wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
-                personality=optional_text(self.status["personality"]),
-                timeline=self.timeline.snapshot(now),
+        timeline = self.timeline.snapshot(now)
+        timeline_seconds = time.perf_counter() - timeline_started
+        message_started = time.perf_counter()
+        message = voice_update(
+            enabled=voice_on,
+            status=str(self.status["status"]),
+            input_device=config.input_device,
+            output_device=config.output_device,
+            sample_rate=config.sample_rate,
+            capture_channels=config.capture_channels,
+            capture_channel_index=config.capture_channel_index,
+            input_gain=config.input_gain,
+            output_gain=config.output_gain,
+            assistant_speaking=bool(self.status["assistant_speaking"]),
+            partial_transcript=optional_text(self.status["partial_transcript"]),
+            last_committed_transcript=optional_text(self.status["last_committed_transcript"]),
+            last_assistant_text=optional_text(self.status["last_assistant_text"]),
+            last_error=last_error,
+            barge_in_enabled=(
+                optional_bool(self.status["barge_in_enabled"])
+                if self.status["barge_in_enabled"] is not None
+                else config.barge_in_enabled
             ),
+            barge_in_min_rms=config.barge_in_min_rms,
+            barge_in_sustain_ms=config.barge_in_sustain_ms,
+            barge_in_threshold_rms=optional_int(self.status["barge_in_threshold_rms"]),
+            barge_in_mic_rms=optional_int(self.status["barge_in_mic_rms"]),
+            barge_in_playback_rms=optional_int(self.status["barge_in_playback_rms"]),
+            barge_in_gate_open=optional_bool(self.status["barge_in_gate_open"]),
+            barge_in_last_reason=optional_text(self.status["barge_in_last_reason"]),
+            barge_in_event_count=optional_int(self.status["barge_in_event_count"]),
+            barge_in_last_event=optional_text(self.status["barge_in_last_event"]),
+            wake_word_enabled=voice_on,
+            wake_threshold=config.wake_threshold if voice_on else None,
+            wake_last_score=optional_float(self.status["wake_last_score"]),
+            wake_fire_count=optional_int(self.status["wake_fire_count"]),
+            wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
+            personality=optional_text(self.status["personality"]),
+            timeline=timeline,
+        )
+        message_seconds = time.perf_counter() - message_started
+        publish_started = time.perf_counter()
+        publish_message(self.telemetry_socket, message)
+        publish_seconds = time.perf_counter() - publish_started
+        self._maybe_log_publish_profile(
+            timeline_seconds,
+            message_seconds,
+            publish_seconds,
+            time.perf_counter() - started,
+        )
+
+    def _maybe_log_wake_profile(self, detector: WakeWordDetector, total_seconds: float) -> None:
+        if self.profile_every <= 0:
+            return
+        self._wake_profile_count += 1
+        if self._wake_profile_count % self.profile_every != 0:
+            return
+        log.info(
+            "voice wake profile: predict=%.1fms total=%.1fms score=%.4f",
+            detector.last_predict_seconds * 1000,
+            total_seconds * 1000,
+            detector.last_score,
+        )
+
+    def _maybe_log_publish_profile(
+        self,
+        timeline_seconds: float,
+        message_seconds: float,
+        publish_seconds: float,
+        total_seconds: float,
+    ) -> None:
+        if self.profile_every <= 0:
+            return
+        self._publish_profile_count += 1
+        if self._publish_profile_count % self.profile_every != 0:
+            return
+        log.info(
+            "voice publish profile: timeline=%.1fms message=%.1fms socket=%.1fms total=%.1fms",
+            timeline_seconds * 1000,
+            message_seconds * 1000,
+            publish_seconds * 1000,
+            total_seconds * 1000,
         )
 
     @staticmethod
@@ -768,6 +822,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
     parser.add_argument("--camera-url", default=DEFAULT_CAMERA_SNAPSHOT_URL)
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
+    parser.add_argument("--profile-every", type=int, default=0, help="Log voice stage timings every N frames/events")
     return parser
 
 
@@ -783,6 +838,7 @@ async def run_service(args: argparse.Namespace) -> None:
         poll_seconds=args.poll_seconds,
         motion_intent_socket=args.motion_intent_socket,
         camera_url=args.camera_url,
+        profile_every=args.profile_every,
     )
     await service.run(stop_event)
 

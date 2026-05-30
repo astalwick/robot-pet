@@ -261,6 +261,18 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(log.error.call_count, 2)
 
+    async def test_publish_profile_logs_when_enabled(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01, profile_every=1)
+
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            with self.assertLogs("robot-voice", level="INFO") as logs:
+                service.publish(service_config(), status="listening")
+
+        output = "\n".join(logs.output)
+        self.assertIn("voice publish profile:", output)
+        self.assertIn("timeline=", output)
+        self.assertIn("socket=", output)
+
     async def test_activate_session_reloads_personality_cards(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
         service.active_config = service_config(personality="cal")

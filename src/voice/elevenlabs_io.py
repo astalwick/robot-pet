@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import ssl
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from urllib.parse import urlencode
@@ -68,6 +69,7 @@ async def stream_audio_to_scribe(
     sample_rate: int = SAMPLE_RATE,
     policy=DEFAULT_TURN_POLICY,
     audio_levels: AudioLevels | None = None,
+    profile_every: int = 0,
 ) -> None:
     import websockets
 
@@ -96,9 +98,12 @@ async def stream_audio_to_scribe(
             async def send_audio() -> None:
                 last_activity_log_at = 0.0
                 last_above_at: float | None = None
+                profile_count = 0
                 loop = asyncio.get_running_loop()
 
                 async for chunk in audio_chunks:
+                    started = time.perf_counter()
+                    gate_started = time.perf_counter()
                     rms = pcm16_rms(chunk)
                     now = loop.time()
                     gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
@@ -108,18 +113,34 @@ async def stream_audio_to_scribe(
                     if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
                         await scribe_events.put({"type": "audio_activity", "rms": rms})
                         last_activity_log_at = now
+                    gate_seconds = time.perf_counter() - gate_started
 
+                    encode_started = time.perf_counter()
                     upload = chunk if gate_open else b"\x00" * len(chunk)
-                    await ws.send(
-                        json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": base64.b64encode(upload).decode("ascii"),
-                                "commit": False,
-                                "sample_rate": sample_rate,
-                            }
-                        )
+                    message = json.dumps(
+                        {
+                            "message_type": "input_audio_chunk",
+                            "audio_base_64": base64.b64encode(upload).decode("ascii"),
+                            "commit": False,
+                            "sample_rate": sample_rate,
+                        }
                     )
+                    encode_seconds = time.perf_counter() - encode_started
+
+                    send_started = time.perf_counter()
+                    await ws.send(message)
+                    send_seconds = time.perf_counter() - send_started
+                    profile_count += 1
+                    if profile_every > 0 and profile_count % profile_every == 0:
+                        log.info(
+                            "voice scribe profile: gate_open=%s rms=%d gate=%.1fms encode=%.1fms send=%.1fms total=%.1fms",
+                            gate_open,
+                            rms,
+                            gate_seconds * 1000,
+                            encode_seconds * 1000,
+                            send_seconds * 1000,
+                            (time.perf_counter() - started) * 1000,
+                        )
 
             async def receive_transcripts() -> None:
                 async for message in ws:
@@ -147,22 +168,41 @@ async def speak_with_eleven_flash(
     speaking_event: asyncio.Event,
     audio_writer: Callable[[bytes], object] | None = None,
     on_playback_rms: Callable[[int], None] | None = None,
+    profile_every: int = 0,
 ) -> None:
     import websockets
 
     ws = None
     play_task: asyncio.Task[None] | None = None
     current_voice_id = voice_id
+    audio_profile_count = 0
 
     async def write_audio(audio: bytes) -> None:
+        nonlocal audio_profile_count
+        started = time.perf_counter()
         if not speaking_event.is_set():
             speaking_event.set()
+        rms_seconds = 0.0
         if on_playback_rms:
+            rms_started = time.perf_counter()
             on_playback_rms(pcm16_rms(audio))
+            rms_seconds = time.perf_counter() - rms_started
+        write_seconds = 0.0
         if audio_writer:
+            write_started = time.perf_counter()
             result = audio_writer(audio)
             if asyncio.iscoroutine(result):
                 await result
+            write_seconds = time.perf_counter() - write_started
+        audio_profile_count += 1
+        if profile_every > 0 and audio_profile_count % profile_every == 0:
+            log.info(
+                "voice tts profile: bytes=%d rms=%.1fms write=%.1fms total=%.1fms",
+                len(audio),
+                rms_seconds * 1000,
+                write_seconds * 1000,
+                (time.perf_counter() - started) * 1000,
+            )
 
     async def open_voice_socket(next_voice_id: str):
         query = urlencode({"model_id": ELEVEN_FLASH_MODEL, "output_format": "pcm_16000"})

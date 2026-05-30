@@ -32,6 +32,7 @@ class WakeWordDetector:
         self.last_score = 0.0
         self.fire_count = 0
         self.last_fire_at = 0.0
+        self.last_predict_seconds = 0.0
 
     def load(self) -> str:
         from openwakeword.model import Model
@@ -53,7 +54,9 @@ class WakeWordDetector:
         samples = np.frombuffer(frame, dtype=np.int16)
         if len(samples) != FRAME_SAMPLES:
             return 0.0
+        started = time.perf_counter()
         score = float(self._model.predict(samples)[self._wake_name])
+        self.last_predict_seconds = time.perf_counter() - started
         self.last_score = score
         return score
 

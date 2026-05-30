@@ -12,7 +12,6 @@ try:
     from aiohttp.test_utils import TestClient, TestServer
 
     from robot_camera import (
-        CAPTURE_FAILURE_HEALTH_THRESHOLD,
         CameraServiceState,
         FrameStore,
         MJPEG_BOUNDARY,
@@ -114,36 +113,6 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload, {"status": "ok", "has_frame": True, "active_streams": 0})
 
-    async def test_health_returns_503_after_repeated_capture_failures(self):
-        self.state.camera_ok = True
-        self.store.publish(b"stale-jpeg")
-
-        for _ in range(CAPTURE_FAILURE_HEALTH_THRESHOLD):
-            self.state.record_capture_failure("fake capture failure")
-
-        async with self.client.get("/health") as resp:
-            self.assertEqual(resp.status, 503)
-            payload = await resp.json()
-
-        self.assertEqual(
-            payload,
-            {"status": "unavailable", "error": "camera capture failed: fake capture failure"},
-        )
-        self.assertIsNone(self.store.latest())
-
-    async def test_capture_success_restores_health_after_failures(self):
-        self.state.camera_ok = True
-        for _ in range(CAPTURE_FAILURE_HEALTH_THRESHOLD):
-            self.state.record_capture_failure("fake capture failure")
-
-        self.state.record_capture_success()
-
-        async with self.client.get("/health") as resp:
-            self.assertEqual(resp.status, 200)
-            payload = await resp.json()
-
-        self.assertEqual(payload, {"status": "ok", "has_frame": False, "active_streams": 0})
-
     async def test_snapshot_returns_503_before_first_frame(self):
         self.state.camera_ok = True
 
@@ -228,7 +197,6 @@ class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
         state = CameraServiceState(
             store,
             driver_factory=lambda: driver,
-            fps=100.0,
             idle_timeout=0.01,
             first_frame_timeout=0.5,
             loop=asyncio.get_running_loop(),
@@ -251,7 +219,6 @@ class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
         state = CameraServiceState(
             store,
             driver_factory=lambda: driver,
-            fps=100.0,
             idle_timeout=0.01,
             first_frame_timeout=0.5,
             loop=asyncio.get_running_loop(),
@@ -273,7 +240,6 @@ class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
         state = CameraServiceState(
             store,
             driver_factory=lambda: driver,
-            fps=100.0,
             idle_timeout=0.01,
             first_frame_timeout=0.5,
             loop=asyncio.get_running_loop(),
@@ -289,15 +255,11 @@ class FakeCameraDriver:
     def __init__(self):
         self.started = False
         self.starts = 0
-        self.captures = 0
 
-    def start(self):
+    def start(self, sink):
         self.starts += 1
         self.started = True
-
-    def capture_jpeg(self):
-        self.captures += 1
-        return f"frame-{self.captures}".encode("ascii")
+        sink(b"fake-frame")
 
     def stop(self):
         self.started = False

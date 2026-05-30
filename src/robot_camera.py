@@ -29,7 +29,6 @@ DEFAULT_JPEG_QUALITY = 75
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
 FIRST_FRAME_TIMEOUT_SECONDS = 3.0
 SHUTDOWN_TIMEOUT_SECONDS = 2.0
-CAPTURE_FAILURE_HEALTH_THRESHOLD = 3
 MJPEG_BOUNDARY = "robotpet-frame"
 
 
@@ -96,41 +95,6 @@ def mjpeg_part(jpeg: bytes, boundary: str = MJPEG_BOUNDARY) -> bytes:
     return headers + jpeg + b"\r\n"
 
 
-class CameraCaptureThread:
-    """Continuously captures JPEG frames into a FrameStore."""
-
-    def __init__(self, driver: CameraDriver, store: FrameStore, fps: float, state: "CameraServiceState"):
-        self._driver = driver
-        self._store = store
-        self._state = state
-        self._period = 1.0 / fps if fps > 0 else 0.0
-        self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, name="camera-capture", daemon=True
-        )
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2.0)
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            try:
-                jpeg = self._driver.capture_jpeg()
-            except Exception as exc:  # noqa: BLE001 -- libcamera throws varied types
-                log.warning("camera capture failed: %s", exc)
-                self._state.record_capture_failure(str(exc))
-                self._stop.wait(0.5)
-                continue
-            self._state.record_capture_success()
-            self._store.publish(jpeg)
-            if self._period > 0:
-                self._stop.wait(self._period)
-
-
 class CameraServiceState:
     """Owns on-demand camera runtime state for aiohttp handlers."""
 
@@ -139,7 +103,6 @@ class CameraServiceState:
         store: FrameStore,
         *,
         driver_factory: Callable[[], CameraDriver] | None = None,
-        fps: float = DEFAULT_CAPTURE_FPS,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
         first_frame_timeout: float = FIRST_FRAME_TIMEOUT_SECONDS,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -147,16 +110,13 @@ class CameraServiceState:
         self.store = store
         self.camera_ok: bool = False
         self.error: str | None = None
-        self.consecutive_capture_failures = 0
         self.active_streams = 0
 
         self._driver_factory = driver_factory
-        self._fps = fps
         self._idle_timeout = idle_timeout
         self.first_frame_timeout = first_frame_timeout
         self._loop = loop
         self._driver: CameraDriver | None = None
-        self._capture: CameraCaptureThread | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
         self._lock = threading.Lock()
         self._start_lock = asyncio.Lock()
@@ -166,14 +126,15 @@ class CameraServiceState:
         async with self._start_lock:
             self._cancel_idle_stop()
             with self._lock:
-                if self._capture is not None:
+                if self._driver is not None:
                     return True
                 if self._driver_factory is None:
                     return self.camera_ok or self.store.latest() is not None
 
             driver = self._driver_factory()
+            self.store.clear()
             try:
-                driver.start()
+                driver.start(self.store.publish)
             except CameraUnavailable as exc:
                 log.error("camera unavailable: %s", exc)
                 with self._lock:
@@ -181,32 +142,12 @@ class CameraServiceState:
                     self.error = str(exc)
                 return False
 
-            capture = CameraCaptureThread(driver, self.store, self._fps, self)
-            self.store.clear()
-            capture.start()
             with self._lock:
                 self._driver = driver
-                self._capture = capture
                 self.camera_ok = True
                 self.error = None
-                self.consecutive_capture_failures = 0
             log.info("camera became active")
             return True
-
-    def record_capture_success(self) -> None:
-        with self._lock:
-            self.consecutive_capture_failures = 0
-            self.camera_ok = True
-            self.error = None
-
-    def record_capture_failure(self, reason: str) -> None:
-        with self._lock:
-            self.consecutive_capture_failures += 1
-            if self.consecutive_capture_failures < CAPTURE_FAILURE_HEALTH_THRESHOLD:
-                return
-            self.camera_ok = False
-            self.error = f"camera capture failed: {reason}"
-        self.store.clear()
 
     def acquire_stream(self) -> None:
         self._cancel_idle_stop()
@@ -234,19 +175,14 @@ class CameraServiceState:
         with self._lock:
             if self.active_streams > 0 and not force:
                 return
-            capture = self._capture
             driver = self._driver
-            self._capture = None
             self._driver = None
             self.camera_ok = False
-            self.consecutive_capture_failures = 0
             self._idle_handle = None
-        if capture is not None:
-            capture.stop()
         if driver is not None:
             driver.stop()
         self.store.clear()
-        if capture is not None or driver is not None:
+        if driver is not None:
             log.info("camera became idle")
 
     def _cancel_idle_stop(self) -> None:
@@ -350,8 +286,8 @@ async def run_service(args: argparse.Namespace) -> None:
             size=(args.width, args.height),
             jpeg_quality=args.quality,
             sensor_size=(args.sensor_width, args.sensor_height),
+            fps=args.fps,
         ),
-        fps=args.fps,
         idle_timeout=args.idle_timeout,
         loop=loop,
     )

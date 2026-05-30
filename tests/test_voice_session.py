@@ -45,6 +45,26 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         self.assertIn("Default character prose.", session.system_prompt)
         self.assertEqual(session.system_prompt, compose_system_prompt("Default character prose."))
 
+    def test_set_personality_switches_card_and_voice(self):
+        session = make_session("default")
+        self.assertEqual(session.personality_name, "default")
+
+        session.set_personality("scientist")
+
+        self.assertEqual(session.personality_name, "scientist")
+        self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
+        self.assertEqual(session.voice_state.default_voice_id, "scientist-voice")
+        self.assertEqual(session.system_prompt, compose_system_prompt("Scientist observes first."))
+
+    def test_set_unknown_personality_falls_back_to_default_card(self):
+        session = make_session("scientist")
+
+        session.set_personality("missing")
+
+        self.assertEqual(session.personality_name, "default")
+        self.assertEqual(session.voice_state.current_voice_id, "default-voice")
+        self.assertEqual(session.system_prompt, compose_system_prompt("Default character prose."))
+
     def test_config_voice_ids_drive_voice_state(self):
         session = VoiceSession(
             VoiceConfig(personality="scientist", voice_id="default-voice-id", alternate_voice_id="alt-voice-id"),

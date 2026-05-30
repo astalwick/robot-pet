@@ -222,7 +222,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("capture_channel_index", keys)
         self.assertIn("input_gain", keys)
         self.assertIn("output_gain", keys)
-        self.assertIn("personality", keys)
+        self.assertNotIn("personality", keys)
         self.assertIn("barge_in_enabled", keys)
         self.assertIn("barge_in_min_rms", keys)
         self.assertIn("barge_in_sustain_ms", keys)
@@ -233,9 +233,6 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(types["capture_channel_index"], "number")
         self.assertEqual(types["input_gain"], "number")
         self.assertEqual(types["output_gain"], "number")
-        self.assertEqual(types["personality"], "select")
-        personality_field = next(field for field in payload["fields"] if field["key"] == "personality")
-        self.assertIn("default", personality_field["options"])
         self.assertFalse(payload["values"]["enabled"])
         self.assertFalse(payload["values"]["wake_word_enabled"])
         self.assertEqual(payload["values"]["wake_threshold"], 0.5)
@@ -314,6 +311,16 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             saved = json.load(file_obj)
         self.assertFalse(saved["enabled"])
         self.assertFalse(saved["wake_word_enabled"])
+
+    async def test_get_voice_personalities_lists_cards(self):
+        async with self.client.get("/voice/personalities") as resp:
+            self.assertEqual(resp.status, 200)
+            payload = await resp.json()
+        self.assertIn("default", payload["personalities"])
+
+    async def test_set_personality_command_requires_name(self):
+        async with self.client.post("/voice/command", json={"cmd": "set_personality"}) as resp:
+            self.assertEqual(resp.status, 400)
 
     async def test_get_config_sensors_returns_fields_and_default_values(self):
         async with self.client.get("/config/sensors") as resp:

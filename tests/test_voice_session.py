@@ -32,7 +32,7 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         session = make_session("scientist")
 
         self.assertEqual(session.personality_name, "scientist")
-        self.assertEqual(session.voice_state.voice_id, "scientist-voice")
+        self.assertNotEqual(session.voice_state.current_voice_id, "scientist-voice")
         self.assertIn("Scientist observes first.", session.system_prompt)
         self.assertIn(OPERATIONAL_SYSTEM_PROMPT, session.system_prompt)
         self.assertEqual(session.system_prompt, compose_system_prompt("Scientist observes first."))
@@ -41,13 +41,27 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         session = make_session("missing")
 
         self.assertEqual(session.personality_name, "default")
-        self.assertEqual(session.voice_state.voice_id, "default-voice")
+        self.assertNotEqual(session.voice_state.current_voice_id, "default-voice")
         self.assertIn("Default character prose.", session.system_prompt)
         self.assertEqual(session.system_prompt, compose_system_prompt("Default character prose."))
 
+    def test_config_voice_ids_drive_voice_state(self):
+        session = VoiceSession(
+            VoiceConfig(personality="scientist", voice_id="default-voice-id", alternate_voice_id="alt-voice-id"),
+            "test-elevenlabs-key",
+            object(),
+            lambda _update: None,
+            object(),
+            personalities=CARD_MAP,
+        )
+
+        self.assertEqual(session.voice_state.default_voice_id, "default-voice-id")
+        self.assertEqual(session.voice_state.alternate_voice_id, "alt-voice-id")
+        self.assertEqual(session.voice_state.current_voice_id, "default-voice-id")
+
 
 class AssistantToolsTest(unittest.TestCase):
-    def test_assistant_tools_exclude_switch_voice(self):
+    def test_assistant_tools_include_switch_voice(self):
         tool_names = {tool["name"] for tool in ASSISTANT_TOOLS if tool.get("type") == "function"}
-        self.assertNotIn("switch_voice", tool_names)
-        self.assertEqual(tool_names, {"end_session", "wiggle", "move_forward", "look_around"})
+        self.assertIn("switch_voice", tool_names)
+        self.assertEqual(tool_names, {"switch_voice", "end_session", "wiggle", "move_forward", "look_around"})

@@ -33,6 +33,8 @@ class VoiceConfig:
     output_channels: int = 1
     input_gain: float = 1.0
     output_gain: float = 1.0
+    voice_id: str | None = None
+    alternate_voice_id: str | None = None
     personality: str = "default"
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
@@ -65,6 +67,8 @@ class VoiceConfig:
             output_channels=int(values.get("output_channels", defaults.output_channels)),
             input_gain=clamp(float(values.get("input_gain", defaults.input_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             output_gain=clamp(float(values.get("output_gain", defaults.output_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
+            voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
+            alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
             personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
             barge_in_enabled=bool(values.get("barge_in_enabled", defaults.barge_in_enabled)),
             barge_in_min_words=int(values.get("barge_in_min_words", defaults.barge_in_min_words)),
@@ -119,6 +123,13 @@ class VoiceConfig:
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def load_voice_config(path: str = DEFAULT_CONFIG_PATH) -> VoiceConfig:

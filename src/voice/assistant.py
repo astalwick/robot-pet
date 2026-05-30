@@ -19,9 +19,13 @@ log = setup_logging("robot-voice")
 
 
 OPENAI_MODEL = "gpt-5.4-mini"
+DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
+ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 OPERATIONAL_SYSTEM_PROMPT = (
     "Keep responses brief. Answer naturally in one or two sentences. "
     "Avoid markdown unless the user explicitly asks for it. "
+    "You can use the switch_voice tool to toggle between the default and alternate speaking voices. "
+    "Only call switch_voice when the user explicitly asks you to switch, change, or toggle voices. "
     "You can use the wiggle and move_forward tools for small playful body movements when the user asks the robot to move. "
     "You can use the look_around tool to take a current camera snapshot when the user asks what you see or asks about the robot's surroundings. "
     "You have a web_search tool for questions that need fresh or external information. "
@@ -34,6 +38,7 @@ OPERATIONAL_SYSTEM_PROMPT = (
     "(for example, 'I tried, but the gamepad cut me off' or 'my body isn't responding right now'). "
     "You can speak in English or French. The vast majority of the time, you should speak in English - only speak French when the user speaks french."
 )
+VOICE_SWITCH_TOOL_NAME = "switch_voice"
 END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
@@ -133,6 +138,20 @@ def barge_in_telemetry(
     }
 
 
+VOICE_SWITCH_TOOL = {
+    "type": "function",
+    "name": VOICE_SWITCH_TOOL_NAME,
+    "description": "Toggle between the default and alternate speaking voices. Only use when the user explicitly asks to switch voices.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 WIGGLE_TOOL = {
     "type": "function",
     "name": WIGGLE_TOOL_NAME,
@@ -195,12 +214,31 @@ LOOK_AROUND_TOOL = {
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
-ASSISTANT_TOOLS = [END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, LOOK_AROUND_TOOL, WEB_SEARCH_TOOL]
+ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, LOOK_AROUND_TOOL, WEB_SEARCH_TOOL]
+
+
+@dataclass(frozen=True)
+class VoiceSwitch:
+    voice_id: str
+    voice_name: str
 
 
 @dataclass
 class VoiceState:
-    voice_id: str
+    default_voice_id: str
+    alternate_voice_id: str = ALTERNATE_VOICE_ID
+    current_voice_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.current_voice_id is None:
+            self.current_voice_id = self.default_voice_id
+
+    def toggle(self) -> VoiceSwitch:
+        if self.current_voice_id == self.default_voice_id:
+            self.current_voice_id = self.alternate_voice_id
+            return VoiceSwitch(voice_id=self.current_voice_id, voice_name="alternate")
+        self.current_voice_id = self.default_voice_id
+        return VoiceSwitch(voice_id=self.current_voice_id, voice_name="default")
 
 
 async def cancel_task(task: asyncio.Task[Any] | None) -> None:
@@ -344,10 +382,11 @@ def decide_barge_in_during_playback(
 async def stream_openai_words(
     openai_input: list[dict[str, Any]],
     openai_client: Any,
+    voice_state: VoiceState,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
     response_input: object = openai_input
@@ -416,8 +455,15 @@ async def stream_openai_words(
             call_id = getattr(function_call, "call_id", "")
             name = getattr(function_call, "name", "")
             log.info("tool call: %s", name)
+            voice_switch = None
 
-            if name == END_SESSION_TOOL_NAME:
+            if name == VOICE_SWITCH_TOOL_NAME:
+                voice_switch = voice_state.toggle()
+                result: dict[str, Any] = {
+                    "voice": voice_switch.voice_name,
+                    "voice_id": voice_switch.voice_id,
+                }
+            elif name == END_SESSION_TOOL_NAME:
                 if session_end_caller is None:
                     result = {"ok": False, "error": "session_end_unavailable"}
                 else:
@@ -454,6 +500,9 @@ async def stream_openai_words(
             else:
                 result = {"ok": False, "error": "unsupported tool"}
 
+            if voice_switch is not None:
+                yield voice_switch
+
             tool_outputs.append(
                 {
                     "type": "function_call_output",
@@ -489,24 +538,26 @@ async def run_assistant_turn(
 
     assistant_chunks: list[str] = []
 
-    async def captured_openai_words() -> AsyncIterator[str]:
+    async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
         async for chunk in stream_openai_words(
             openai_input,
             openai_client,
+            voice_state,
             motion_intent_caller,
             session_end_caller,
             camera_snapshot_caller,
         ):
-            assistant_chunks.append(chunk)
-            if on_assistant_chunk:
-                on_assistant_chunk(chunk)
+            if isinstance(chunk, str):
+                assistant_chunks.append(chunk)
+                if on_assistant_chunk:
+                    on_assistant_chunk(chunk)
             yield chunk
 
     speaker = tts_speaker or speak_with_eleven_flash
     await speaker(
         captured_openai_words(),
         elevenlabs_api_key,
-        voice_state.voice_id,
+        voice_state.current_voice_id,
         playback_event,
         speaking_event,
     )

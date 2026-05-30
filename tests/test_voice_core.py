@@ -386,6 +386,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 async for chunk in stream_openai_words(
                     [{"role": "user", "content": "Goodbye"}],
                     SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
                     session_end_caller=lambda: ended.append(True),
                 )
             ]
@@ -436,6 +437,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 async for chunk in stream_openai_words(
                     [{"role": "user", "content": "What do you see?"}],
                     SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
                     camera_snapshot_caller=lambda: b"jpeg-bytes",
                 )
             ]

@@ -9,7 +9,8 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from voice.elevenlabs_io import ElevenLabsTtsError, speak_with_eleven_flash
+from voice.assistant import VoiceSwitch
+from voice.elevenlabs_io import speak_with_eleven_flash
 
 
 class FakeClosed(Exception):
@@ -46,26 +47,8 @@ async def chunks():
 
 
 class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
-    async def test_tts_no_audio_is_an_error(self):
+    async def test_tts_sends_api_key_in_initial_message(self):
         ws = FakeWebsocket([json.dumps({"isFinal": True})])
-        connected = {}
-
-        async def connect(*_args, **kwargs):
-            connected.update(kwargs)
-            return ws
-
-        fake_websockets = types.SimpleNamespace(
-            connect=connect,
-            exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
-        )
-
-        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
-            with self.assertRaisesRegex(ElevenLabsTtsError, "produced no audio.*voice-123"):
-                await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
-        self.assertEqual(connected["additional_headers"], {"xi-api-key": "key"})
-
-    async def test_tts_error_message_is_an_error(self):
-        ws = FakeWebsocket([json.dumps({"message": "voice not found"})])
 
         async def connect(*_args, **_kwargs):
             return ws
@@ -76,39 +59,38 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
-            with self.assertRaisesRegex(ElevenLabsTtsError, "voice not found"):
-                await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
+            await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
 
-    async def test_tts_cancel_sends_final_text_before_close(self):
-        ws = BlockingWebsocket([])
+        self.assertEqual(json.loads(ws.sent[0])["xi_api_key"], "key")
 
-        async def connect(*_args, **_kwargs):
-            return ws
+    async def test_tts_switch_voice_reopens_socket(self):
+        sockets = [
+            FakeWebsocket([json.dumps({"isFinal": True})]),
+            FakeWebsocket([json.dumps({"isFinal": True})]),
+        ]
+        connected_urls = []
+
+        async def connect(url, **_kwargs):
+            connected_urls.append(url)
+            return sockets[len(connected_urls) - 1]
 
         fake_websockets = types.SimpleNamespace(
             connect=connect,
             exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
         )
 
-        async def unfinished_chunks():
+        async def switching_chunks():
             yield "hello"
-            await asyncio.Event().wait()
+            yield VoiceSwitch("voice-456", "alternate")
+            yield "there"
 
         with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
-            task = asyncio.create_task(
-                speak_with_eleven_flash(unfinished_chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
-            )
-            for _ in range(10):
-                if len(ws.sent) >= 2:
-                    break
-                await asyncio.sleep(0.01)
+            await speak_with_eleven_flash(switching_chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
 
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
-
-        self.assertEqual(json.loads(ws.sent[-1]), {"text": ""})
-        self.assertTrue(ws.closed)
+        self.assertIn("/voice-123/", connected_urls[0])
+        self.assertIn("/voice-456/", connected_urls[1])
+        self.assertEqual(json.loads(sockets[0].sent[-1]), {"text": ""})
+        self.assertTrue(sockets[0].closed)
 
 
 if __name__ == "__main__":

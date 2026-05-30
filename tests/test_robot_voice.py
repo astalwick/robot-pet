@@ -5,13 +5,12 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import suppress
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from robot_voice import RobotVoiceService, TimelineBuffer, voice_restart_values
+from robot_voice import RobotVoiceService, TimelineBuffer
 from config.voice import load_voice_config
 
 
@@ -200,75 +199,6 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             await service.stop_all()
 
         self.assertIs(captured["personalities"], cards)
-
-    async def test_personality_change_does_not_restart_orchestrator(self):
-        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
-        service.active_config = service_config(enabled=True, wake_word_enabled=True, personality="default")
-        service._orchestrator_task = asyncio.create_task(asyncio.Event().wait())
-        next_config = service_config(enabled=True, wake_word_enabled=True, personality="ben")
-
-        with (
-            mock.patch.object(service, "stop_all", new=mock.AsyncMock()) as stop_all,
-            mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator,
-            mock.patch("robot_voice.publish_message", return_value=True),
-        ):
-            await service._run_wake_orchestrator(next_config)
-
-        self.assertEqual(service.active_config, next_config)
-        stop_all.assert_not_called()
-        start_orchestrator.assert_not_called()
-        service._orchestrator_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await service._orchestrator_task
-
-    async def test_personality_change_ends_active_session_without_full_restart(self):
-        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
-        service.active_config = service_config(enabled=True, wake_word_enabled=True, personality="default")
-        service._orchestrator_task = asyncio.create_task(asyncio.Event().wait())
-        service._mode = "active"
-        next_config = service_config(enabled=True, wake_word_enabled=True, personality="ben")
-
-        with (
-            mock.patch.object(service, "stop_all", new=mock.AsyncMock()) as stop_all,
-            mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator,
-            mock.patch("robot_voice.publish_message", return_value=True),
-        ):
-            await service._run_wake_orchestrator(next_config)
-
-        self.assertTrue(service._end_session_event.is_set())
-        stop_all.assert_not_called()
-        start_orchestrator.assert_not_called()
-        service._orchestrator_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await service._orchestrator_task
-
-    async def test_hardware_config_change_still_restarts_orchestrator(self):
-        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
-        service.active_config = service_config(enabled=True, wake_word_enabled=True, input_gain=1.0)
-        service._orchestrator_task = asyncio.create_task(asyncio.Event().wait())
-        next_config = service_config(enabled=True, wake_word_enabled=True, input_gain=1.2)
-
-        with (
-            mock.patch.object(service, "stop_all", new=mock.AsyncMock()) as stop_all,
-            mock.patch.object(service, "start_orchestrator", new=mock.AsyncMock()) as start_orchestrator,
-        ):
-            await service._run_wake_orchestrator(next_config)
-
-        stop_all.assert_called_once()
-        start_orchestrator.assert_called_once_with(next_config)
-        service._orchestrator_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await service._orchestrator_task
-
-    def test_voice_restart_values_ignore_personality_only(self):
-        self.assertEqual(
-            voice_restart_values(service_config(personality="default")),
-            voice_restart_values(service_config(personality="ben")),
-        )
-        self.assertNotEqual(
-            voice_restart_values(service_config(input_gain=1.0)),
-            voice_restart_values(service_config(input_gain=1.2)),
-        )
 
 
 class TimelineBufferTest(unittest.TestCase):

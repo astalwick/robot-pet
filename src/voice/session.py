@@ -9,7 +9,15 @@ from typing import Any
 from config.voice import VoiceConfig
 from drivers.respeaker import ReSpeakerAudio
 from lib.log import setup_logging
-from voice.assistant import AudioLevels, VoiceState, compose_system_prompt, handle_scribe_events, run_assistant_turn
+from voice.assistant import (
+    ALTERNATE_VOICE_ID,
+    DEFAULT_VOICE_ID,
+    AudioLevels,
+    VoiceState,
+    compose_system_prompt,
+    handle_scribe_events,
+    run_assistant_turn,
+)
 from voice.conversation import ConversationHistory
 from voice.elevenlabs_io import stream_audio_to_scribe
 from voice.personality import load_personalities, lookup_personality
@@ -56,10 +64,15 @@ class VoiceSession:
         self.scribe_events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
         card_map = personalities if personalities is not None else load_personalities()
-        self.personality_name, voice_id, prose = lookup_personality(config.personality, card_map)
+        self.personality_name, _card_voice_id, prose = lookup_personality(config.personality, card_map)
         self.system_prompt = compose_system_prompt(prose)
-        self.voice_state = VoiceState(voice_id=voice_id)
-        log.info("personality: %s (voice %s)", self.personality_name, voice_id)
+        voice_id = config.voice_id or DEFAULT_VOICE_ID
+        self.voice_state = VoiceState(
+            default_voice_id=voice_id,
+            alternate_voice_id=config.alternate_voice_id or ALTERNATE_VOICE_ID,
+            current_voice_id=voice_id,
+        )
+        log.info("personality: %s", self.personality_name)
 
         self.history = ConversationHistory()
         self.policy = turn_policy_from_config(config)

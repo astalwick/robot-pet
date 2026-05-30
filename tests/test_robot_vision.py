@@ -342,6 +342,43 @@ class VisionServiceTest(unittest.TestCase):
         self.assertIn("resize=", output)
         self.assertIn("detect=", output)
 
+    def test_detector_tuning_config_is_applied_live(self):
+        seen = {}
+
+        class ConfigurableDetector:
+            detection_max_width = 640
+            haar_scale_factor = 1.1
+            haar_min_size = 24
+
+            def __call__(self, _frame):
+                seen["detection_max_width"] = self.detection_max_width
+                seen["haar_scale_factor"] = self.haar_scale_factor
+                seen["haar_min_size"] = self.haar_min_size
+                return [], 1000, 800
+
+        def factory():
+            return ConfigurableDetector()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "vision.json")
+            write_config(
+                config_path,
+                {
+                    "enabled": True,
+                    "detection_rate_hz": 2.0,
+                    "detection_max_width": 480,
+                    "haar_scale_factor": 1.2,
+                    "haar_min_size": 32,
+                },
+            )
+
+            service, _published, _fetched = make_service(config_path, detector_factory=factory)
+            service.tick()
+
+        self.assertEqual(seen["detection_max_width"], 480)
+        self.assertEqual(seen["haar_scale_factor"], 1.2)
+        self.assertEqual(seen["haar_min_size"], 32)
+
     def test_camera_fetch_failure_publishes_camera_unavailable(self):
         def failing_fetch(_url):
             raise CameraFetchError("connection refused")

@@ -30,8 +30,6 @@ DEFAULT_CAMERA_URL = "http://127.0.0.1:8081/vision.gray"
 DEFAULT_SNAPSHOT_TIMEOUT = 1.0
 CONFIG_POLL_INTERVAL = 1.0
 DISABLED_PUBLISH_INTERVAL = 1.0
-DETECTION_MAX_WIDTH = 640
-
 log = setup_logging("robot-vision")
 
 PixelBox = tuple[int, int, int, int]
@@ -112,6 +110,10 @@ class HaarFaceDetector:
         self._cv2 = cv2
         self._numpy = numpy
         self._cascade = cascade
+        defaults = VisionConfig()
+        self.detection_max_width = defaults.detection_max_width
+        self.haar_scale_factor = defaults.haar_scale_factor
+        self.haar_min_size = defaults.haar_min_size
         self.last_profile: dict[str, float] = {}
 
     def __call__(self, frame: CameraFrame) -> DetectorResult:
@@ -134,12 +136,12 @@ class HaarFaceDetector:
         detect_gray = gray
         scale = 1.0
         resize_seconds = 0.0
-        if width > DETECTION_MAX_WIDTH:
+        if width > self.detection_max_width:
             resize_started = time.perf_counter()
-            scale = DETECTION_MAX_WIDTH / width
+            scale = self.detection_max_width / width
             detect_gray = cv2.resize(
                 gray,
-                (DETECTION_MAX_WIDTH, max(1, int(height * scale))),
+                (self.detection_max_width, max(1, int(height * scale))),
                 interpolation=cv2.INTER_AREA,
             )
             resize_seconds = time.perf_counter() - resize_started
@@ -147,9 +149,9 @@ class HaarFaceDetector:
         detect_started = time.perf_counter()
         rects = self._cascade.detectMultiScale(
             detect_gray,
-            scaleFactor=1.1,
+            scaleFactor=self.haar_scale_factor,
             minNeighbors=4,
-            minSize=(24, 24),
+            minSize=(self.haar_min_size, self.haar_min_size),
         )
         detect_seconds = time.perf_counter() - detect_started
         faces = []
@@ -253,6 +255,7 @@ class VisionService:
 
         detector_started = time.perf_counter()
         try:
+            self._configure_detector(self._detector)
             faces_pixels, image_width, image_height = self._detector(frame)
         except CameraFetchError as exc:
             self._publish_status("camera_unavailable", error=str(exc))
@@ -292,6 +295,14 @@ class VisionService:
             time.perf_counter() - tick_started,
         )
         return self._next_sleep(now)
+
+    def _configure_detector(self, detector: Detector) -> None:
+        if hasattr(detector, "detection_max_width"):
+            detector.detection_max_width = self.config.detection_max_width
+        if hasattr(detector, "haar_scale_factor"):
+            detector.haar_scale_factor = self.config.haar_scale_factor
+        if hasattr(detector, "haar_min_size"):
+            detector.haar_min_size = self.config.haar_min_size
 
     def _maybe_log_profile(
         self,

@@ -177,14 +177,41 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             payload = await resp.json()
 
         keys = {field["key"] for field in payload["fields"]}
-        self.assertEqual(keys, {"enabled", "detection_rate_hz"})
+        self.assertEqual(
+            keys,
+            {
+                "enabled",
+                "detection_rate_hz",
+                "detection_max_width",
+                "haar_scale_factor",
+                "haar_min_size",
+            },
+        )
         types = {field["key"]: field["type"] for field in payload["fields"]}
-        self.assertEqual(types, {"enabled": "boolean", "detection_rate_hz": "number"})
+        self.assertEqual(
+            types,
+            {
+                "enabled": "boolean",
+                "detection_rate_hz": "number",
+                "detection_max_width": "number",
+                "haar_scale_factor": "number",
+                "haar_min_size": "number",
+            },
+        )
         self.assertIn("enabled", payload["values"])
         self.assertIn("detection_rate_hz", payload["values"])
+        self.assertIn("detection_max_width", payload["values"])
+        self.assertIn("haar_scale_factor", payload["values"])
+        self.assertIn("haar_min_size", payload["values"])
 
     async def test_post_config_vision_writes_file_to_disk(self):
-        body = {"enabled": False, "detection_rate_hz": 1.5}
+        body = {
+            "enabled": False,
+            "detection_rate_hz": 1.5,
+            "detection_max_width": 480,
+            "haar_scale_factor": 1.2,
+            "haar_min_size": 32,
+        }
         async with self.client.post("/config/vision", json=body) as resp:
             self.assertEqual(resp.status, 200)
             payload = await resp.json()
@@ -192,7 +219,16 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["ok"])
         with open(self.vision_config_path) as file_obj:
             saved = json.load(file_obj)
-        self.assertEqual(saved, {"enabled": False, "detection_rate_hz": 1.5})
+        self.assertEqual(
+            saved,
+            {
+                "enabled": False,
+                "detection_rate_hz": 1.5,
+                "detection_max_width": 480,
+                "haar_scale_factor": 1.2,
+                "haar_min_size": 32,
+            },
+        )
 
     async def test_post_config_vision_does_not_call_restart_gamepad_teleop(self):
         body = {"enabled": True, "detection_rate_hz": 2.0}

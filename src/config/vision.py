@@ -14,6 +14,12 @@ DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/vision.json"
 
 MIN_DETECTION_RATE_HZ = 0.2
 MAX_DETECTION_RATE_HZ = 10.0
+MIN_DETECTION_MAX_WIDTH = 160
+MAX_DETECTION_MAX_WIDTH = 1280
+MIN_HAAR_SCALE_FACTOR = 1.05
+MAX_HAAR_SCALE_FACTOR = 1.5
+MIN_HAAR_MIN_SIZE = 8
+MAX_HAAR_MIN_SIZE = 240
 
 
 class VisionConfigError(ValueError):
@@ -28,6 +34,9 @@ def clamp(value: float, minimum: float, maximum: float) -> float:
 class VisionConfig:
     enabled: bool = True
     detection_rate_hz: float = 2.0
+    detection_max_width: int = 640
+    haar_scale_factor: float = 1.1
+    haar_min_size: int = 24
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "VisionConfig":
@@ -38,6 +47,25 @@ class VisionConfig:
                 float(values.get("detection_rate_hz", defaults.detection_rate_hz)),
                 MIN_DETECTION_RATE_HZ,
                 MAX_DETECTION_RATE_HZ,
+            ),
+            detection_max_width=int(
+                clamp(
+                    float(values.get("detection_max_width", defaults.detection_max_width)),
+                    MIN_DETECTION_MAX_WIDTH,
+                    MAX_DETECTION_MAX_WIDTH,
+                )
+            ),
+            haar_scale_factor=clamp(
+                float(values.get("haar_scale_factor", defaults.haar_scale_factor)),
+                MIN_HAAR_SCALE_FACTOR,
+                MAX_HAAR_SCALE_FACTOR,
+            ),
+            haar_min_size=int(
+                clamp(
+                    float(values.get("haar_min_size", defaults.haar_min_size)),
+                    MIN_HAAR_MIN_SIZE,
+                    MAX_HAAR_MIN_SIZE,
+                )
             ),
         )
 
@@ -60,6 +88,33 @@ VISION_FIELDS = (
         "min": 0.2,
         "max": 10.0,
         "step": 0.1,
+    },
+    {
+        "key": "detection_max_width",
+        "label": "Detector max width",
+        "type": "number",
+        "help": "160 .. 1280; current default is 640",
+        "min": 160,
+        "max": 1280,
+        "step": 20,
+    },
+    {
+        "key": "haar_scale_factor",
+        "label": "Haar scale factor",
+        "type": "number",
+        "help": "1.05 .. 1.50; higher is faster but may miss faces",
+        "min": 1.05,
+        "max": 1.5,
+        "step": 0.05,
+    },
+    {
+        "key": "haar_min_size",
+        "label": "Haar min face size",
+        "type": "number",
+        "help": "8 .. 240 px; higher ignores small/far faces",
+        "min": 8,
+        "max": 240,
+        "step": 1,
     },
 )
 

@@ -152,7 +152,12 @@ async def speak_with_eleven_flash(
         nonlocal ws, play_task, socket_opened
         query = urlencode({"model_id": ELEVEN_FLASH_MODEL, "output_format": "pcm_16000"})
         url = f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input?{query}"
-        ws = await websockets.connect(url, ssl=ssl_context(), close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
+        ws = await websockets.connect(
+            url,
+            additional_headers={"xi-api-key": elevenlabs_api_key},
+            ssl=ssl_context(),
+            close_timeout=ELEVEN_CLOSE_TIMEOUT_SECS,
+        )
         socket_opened = True
         await ws.send(
             json.dumps(

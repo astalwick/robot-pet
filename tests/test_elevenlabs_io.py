@@ -48,8 +48,10 @@ async def chunks():
 class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
     async def test_tts_no_audio_is_an_error(self):
         ws = FakeWebsocket([json.dumps({"isFinal": True})])
+        connected = {}
 
-        async def connect(*_args, **_kwargs):
+        async def connect(*_args, **kwargs):
+            connected.update(kwargs)
             return ws
 
         fake_websockets = types.SimpleNamespace(
@@ -60,6 +62,7 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
             with self.assertRaisesRegex(ElevenLabsTtsError, "produced no audio.*voice-123"):
                 await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
+        self.assertEqual(connected["additional_headers"], {"xi-api-key": "key"})
 
     async def test_tts_error_message_is_an_error(self):
         ws = FakeWebsocket([json.dumps({"message": "voice not found"})])

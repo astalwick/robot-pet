@@ -23,15 +23,22 @@ class FakeClosedOk(FakeClosed):
 class FakeWebsocket:
     def __init__(self, messages):
         self.messages = list(messages)
+        self.sent = []
+        self.closed = False
 
-    async def send(self, _message):
-        pass
+    async def send(self, message):
+        self.sent.append(message)
 
     async def recv(self):
         return self.messages.pop(0)
 
     async def close(self):
-        pass
+        self.closed = True
+
+
+class BlockingWebsocket(FakeWebsocket):
+    async def recv(self):
+        await asyncio.Event().wait()
 
 
 async def chunks():
@@ -68,6 +75,37 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
             with self.assertRaisesRegex(ElevenLabsTtsError, "voice not found"):
                 await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
+
+    async def test_tts_cancel_sends_final_text_before_close(self):
+        ws = BlockingWebsocket([])
+
+        async def connect(*_args, **_kwargs):
+            return ws
+
+        fake_websockets = types.SimpleNamespace(
+            connect=connect,
+            exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
+        )
+
+        async def unfinished_chunks():
+            yield "hello"
+            await asyncio.Event().wait()
+
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            task = asyncio.create_task(
+                speak_with_eleven_flash(unfinished_chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
+            )
+            for _ in range(10):
+                if len(ws.sent) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        self.assertEqual(json.loads(ws.sent[-1]), {"text": ""})
+        self.assertTrue(ws.closed)
 
 
 if __name__ == "__main__":

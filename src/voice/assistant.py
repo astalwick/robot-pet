@@ -658,7 +658,7 @@ async def handle_scribe_events(
                 emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
             if stop_playback_now and turn.is_playing_back():
                 trigger_stop_playback_now()
-            turn.request_cancel(reason)
+            await turn.cancel(reason)
 
     async def release_speculative_playback(turn: ActiveTurn) -> None:
         await asyncio.sleep(policy.speculative_playback_delay_secs)

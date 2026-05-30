@@ -222,6 +222,9 @@ async def speak_with_eleven_flash(
 
     async def cancel_socket() -> None:
         nonlocal play_task, ws
+        if ws:
+            with suppress(TimeoutError, websockets.exceptions.ConnectionClosed):
+                await asyncio.wait_for(ws.send(json.dumps({"text": ""})), timeout=ELEVEN_CLOSE_TIMEOUT_SECS)
         if play_task:
             if not play_task.done():
                 play_task.cancel()

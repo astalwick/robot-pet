@@ -32,7 +32,7 @@ def _make_sink_output(sink: Callable[[bytes], None]):
     from picamera2.outputs import Output
 
     class SinkOutput(Output):
-        def outputframe(self, frame, keyframe=True, timestamp=None, **kwargs):
+        def outputframe(self, frame, *args, **kwargs):
             if self.recording:
                 sink(bytes(frame))
 

@@ -32,7 +32,7 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         session = make_session("scientist")
 
         self.assertEqual(session.personality_name, "scientist")
-        self.assertNotEqual(session.voice_state.current_voice_id, "scientist-voice")
+        self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
         self.assertIn("Scientist observes first.", session.system_prompt)
         self.assertIn(OPERATIONAL_SYSTEM_PROMPT, session.system_prompt)
         self.assertEqual(session.system_prompt, compose_system_prompt("Scientist observes first."))
@@ -41,7 +41,7 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         session = make_session("missing")
 
         self.assertEqual(session.personality_name, "default")
-        self.assertNotEqual(session.voice_state.current_voice_id, "default-voice")
+        self.assertEqual(session.voice_state.current_voice_id, "default-voice")
         self.assertIn("Default character prose.", session.system_prompt)
         self.assertEqual(session.system_prompt, compose_system_prompt("Default character prose."))
 
@@ -65,7 +65,7 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         self.assertEqual(session.voice_state.current_voice_id, "default-voice")
         self.assertEqual(session.system_prompt, compose_system_prompt("Default character prose."))
 
-    def test_config_voice_ids_drive_voice_state(self):
+    def test_card_voice_drives_initial_voice_state(self):
         session = VoiceSession(
             VoiceConfig(personality="scientist", voice_id="default-voice-id", alternate_voice_id="alt-voice-id"),
             "test-elevenlabs-key",
@@ -75,9 +75,9 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
             personalities=CARD_MAP,
         )
 
-        self.assertEqual(session.voice_state.default_voice_id, "default-voice-id")
+        self.assertEqual(session.voice_state.default_voice_id, "scientist-voice")
         self.assertEqual(session.voice_state.alternate_voice_id, "alt-voice-id")
-        self.assertEqual(session.voice_state.current_voice_id, "default-voice-id")
+        self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
 
 
 class AssistantToolsTest(unittest.TestCase):

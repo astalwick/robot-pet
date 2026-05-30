@@ -261,6 +261,15 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(log.error.call_count, 2)
 
+    async def test_publish_reports_configured_personality_without_active_session(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        published = []
+
+        with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+            service.publish(service_config(personality="nina"), status="disabled")
+
+        self.assertEqual(published[-1]["personality"], "nina")
+
     async def test_publish_profile_logs_when_enabled(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01, profile_every=1)
 

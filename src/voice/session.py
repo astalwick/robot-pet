@@ -66,9 +66,8 @@ class VoiceSession:
         self.scribe_events: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
         self.card_map = personalities if personalities is not None else load_personalities()
-        self.personality_name, _card_voice_id, prose = lookup_personality(config.personality, self.card_map)
+        self.personality_name, voice_id, prose = lookup_personality(config.personality, self.card_map)
         self.system_prompt = compose_system_prompt(prose)
-        voice_id = config.voice_id or DEFAULT_VOICE_ID
         self.voice_state = VoiceState(
             default_voice_id=voice_id,
             alternate_voice_id=config.alternate_voice_id or ALTERNATE_VOICE_ID,

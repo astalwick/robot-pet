@@ -723,7 +723,7 @@ class RobotVoiceService:
             wake_last_score=optional_float(self.status["wake_last_score"]),
             wake_fire_count=optional_int(self.status["wake_fire_count"]),
             wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
-            personality=optional_text(self.status["personality"]),
+            personality=optional_text(self.status["personality"]) or config.personality,
             timeline=timeline,
         )
         message_seconds = time.perf_counter() - message_started

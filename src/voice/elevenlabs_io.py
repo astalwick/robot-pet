@@ -169,7 +169,6 @@ async def speak_with_eleven_flash(
                         "use_speaker_boost": False,
                     },
                     "generation_config": {"chunk_length_schedule": [120, 160, 250, 290]},
-                    "xi_api_key": elevenlabs_api_key,
                 }
             )
         )

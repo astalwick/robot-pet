@@ -218,7 +218,7 @@ class RobotVoiceService:
                 await writer.wait_closed()
 
     async def _run_wake_orchestrator(self, config: VoiceConfig) -> None:
-        if self._orchestrator_task is None or self.active_config != config:
+        if self._orchestrator_task is None:
             await self.stop_all()
             await self.start_orchestrator(config)
         elif self._orchestrator_task.done():
@@ -233,6 +233,14 @@ class RobotVoiceService:
             self.publish(config, status="reconnecting", last_error=last_error)
             await asyncio.sleep(min(5.0, self.poll_seconds * 2))
             return
+        elif self.active_config != config:
+            if voice_restart_values(self.active_config) != voice_restart_values(config):
+                await self.stop_all()
+                await self.start_orchestrator(config)
+            else:
+                self.active_config = config
+                self.publish(config, personality=config.personality)
+                self.request_end_session()
 
         await asyncio.sleep(self.poll_seconds)
 
@@ -659,6 +667,12 @@ def optional_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def voice_restart_values(config: VoiceConfig) -> dict[str, object]:
+    values = config.to_dict()
+    del values["personality"]
+    return values
 
 
 def fetch_camera_snapshot(camera_url: str, timeout: float = 5.0) -> bytes:

@@ -8,6 +8,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 
+from lib.log import setup_logging
 
 MIC_BLOCKSIZE = 1280
 OUTPUT_BLOCKSIZE = 1600
@@ -20,6 +21,7 @@ OVERFLOW_LOG_INTERVAL_SECS = 5.0
 _PLAYBACK_STOP = object()
 
 log = logging.getLogger(__name__)
+profile_log = setup_logging("robot-voice")
 
 
 class PlaybackPcmBuffer:
@@ -332,7 +334,7 @@ class ReSpeakerAudio:
         self._capture_profile_count += 1
         if self._capture_profile_count % self.profile_every != 0:
             return
-        log.info(
+        profile_log.info(
             "voice audio profile: subscribers=%d mono=%.1fms gain=%.1fms fanout=%.1fms total=%.1fms",
             subscriber_count,
             mono_seconds * 1000,

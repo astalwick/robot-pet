@@ -77,4 +77,4 @@ class PersonalityLoaderTest(unittest.TestCase):
 
         self.assertTrue(prompt.startswith("You are a quiet robot."))
         self.assertIn(OPERATIONAL_SYSTEM_PROMPT, prompt)
-        self.assertLess(prompt.index("You are a quiet robot."), prompt.index("Keep responses brief"))
+        self.assertLess(prompt.index("You are a quiet robot."), prompt.index("# Operational System Prompt"))

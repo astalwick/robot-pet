@@ -12,8 +12,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from robot_vision import (
     CameraFetchError,
     DetectorUnavailable,
+    GrayFrame,
     HaarFaceDetector,
     VisionService,
+    fetch_snapshot_http,
     normalize_box,
 )
 
@@ -62,7 +64,7 @@ def make_service(
 
     service = VisionService(
         config_path=config_path,
-        camera_url="http://camera/snapshot.jpg",
+        camera_url="http://camera/vision.gray",
         publish=published.append,
         fetch_snapshot=fetch_snapshot or default_fetch,
         detector_factory=detector_factory or default_factory,
@@ -83,6 +85,30 @@ class NormalizeBoxTest(unittest.TestCase):
     def test_normalize_box_rejects_zero_image_size(self):
         with self.assertRaises(ValueError):
             normalize_box((0, 0, 1, 1), 0, 100)
+
+
+class FetchSnapshotHttpTest(unittest.TestCase):
+    def test_gray8_response_returns_frame_with_dimensions(self):
+        class FakeResponse:
+            headers = {
+                "X-Frame-Format": "gray8",
+                "X-Frame-Width": "2",
+                "X-Frame-Height": "2",
+            }
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return b"\x00\x01\x02\x03"
+
+        with mock.patch("robot_vision.urllib.request.urlopen", return_value=FakeResponse()):
+            frame = fetch_snapshot_http("http://camera/vision.gray")
+
+        self.assertEqual(frame, GrayFrame(b"\x00\x01\x02\x03", 2, 2))
 
 
 class HaarFaceDetectorTest(unittest.TestCase):
@@ -153,17 +179,13 @@ class HaarFaceDetectorTest(unittest.TestCase):
                 return [(50, 60, 40, 30)]
 
         class FakeCv2:
-            IMREAD_COLOR = 1
-            COLOR_BGR2GRAY = 2
+            IMREAD_GRAYSCALE = 0
             INTER_AREA = 3
 
             def CascadeClassifier(self, path):
                 return FakeCascade(path)
 
             def imdecode(self, _buffer, _mode):
-                return FakeImage(720, 1280, 3)
-
-            def cvtColor(self, _image, _mode):
                 return FakeImage(720, 1280)
 
             def resize(self, _image, size, interpolation=None):
@@ -184,6 +206,47 @@ class HaarFaceDetectorTest(unittest.TestCase):
         self.assertEqual(detect_shapes, [(360, 640)])
         self.assertEqual((image_width, image_height), (1280, 720))
         self.assertEqual(faces, [(100, 120, 80, 60)])
+
+    def test_gray_frames_skip_jpeg_decode(self):
+        detect_shapes = []
+
+        class FakeCascade:
+            def __init__(self, _path):
+                pass
+
+            def empty(self):
+                return False
+
+            def detectMultiScale(self, image, **_kwargs):
+                detect_shapes.append(image.shape)
+                return [(10, 20, 30, 40)]
+
+        class FakeCv2:
+            INTER_AREA = 3
+
+            def CascadeClassifier(self, path):
+                return FakeCascade(path)
+
+        class FakeBuffer:
+            def reshape(self, shape):
+                self.shape = shape
+                return self
+
+        class FakeNumpy:
+            uint8 = object()
+
+            def frombuffer(self, _data, dtype=None):
+                return FakeBuffer()
+
+        with mock.patch.dict(
+            sys.modules, {"cv2": FakeCv2(), "numpy": FakeNumpy()}
+        ), mock.patch("robot_vision.os.path.exists", lambda _path: True):
+            detector = HaarFaceDetector()
+            faces, image_width, image_height = detector(GrayFrame(b"\x00" * (320 * 180), 320, 180))
+
+        self.assertEqual(detect_shapes, [(180, 320)])
+        self.assertEqual((image_width, image_height), (320, 180))
+        self.assertEqual(faces, [(10, 20, 30, 40)])
 
 
 class VisionServiceTest(unittest.TestCase):
@@ -226,7 +289,7 @@ class VisionServiceTest(unittest.TestCase):
             service, published, fetched = make_service(config_path)
             sleep_seconds = service.tick()
 
-        self.assertEqual(fetched, ["http://camera/snapshot.jpg"])
+        self.assertEqual(fetched, ["http://camera/vision.gray"])
         self.assertEqual(len(published), 1)
         message = published[0]
         self.assertEqual(message["status"], "detecting")
@@ -284,7 +347,7 @@ class VisionServiceTest(unittest.TestCase):
             service, published, fetched = make_service(config_path, detector_factory=factory)
             service.tick()
 
-        self.assertEqual(fetched, ["http://camera/snapshot.jpg"])
+        self.assertEqual(fetched, ["http://camera/vision.gray"])
         self.assertEqual(len(published), 1)
         self.assertEqual(published[0]["status"], "camera_unavailable")
         self.assertEqual(published[0]["error"], "could not decode jpeg")

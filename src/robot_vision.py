@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from config.vision import (
@@ -25,7 +26,7 @@ from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
 
-DEFAULT_CAMERA_URL = "http://127.0.0.1:8081/snapshot.jpg"
+DEFAULT_CAMERA_URL = "http://127.0.0.1:8081/vision.gray"
 DEFAULT_SNAPSHOT_TIMEOUT = 1.0
 CONFIG_POLL_INTERVAL = 1.0
 DISABLED_PUBLISH_INTERVAL = 1.0
@@ -35,7 +36,17 @@ log = setup_logging("robot-vision")
 
 PixelBox = tuple[int, int, int, int]
 DetectorResult = tuple[list[PixelBox], int, int]
-Detector = Callable[[bytes], DetectorResult]
+
+
+@dataclass(frozen=True)
+class GrayFrame:
+    data: bytes
+    width: int
+    height: int
+
+
+CameraFrame = bytes | GrayFrame
+Detector = Callable[[CameraFrame], DetectorResult]
 
 
 class CameraFetchError(RuntimeError):
@@ -58,11 +69,19 @@ def normalize_box(box: PixelBox, image_width: int, image_height: int) -> dict[st
     }
 
 
-def fetch_snapshot_http(url: str, timeout: float = DEFAULT_SNAPSHOT_TIMEOUT) -> bytes:
+def fetch_snapshot_http(url: str, timeout: float = DEFAULT_SNAPSHOT_TIMEOUT) -> CameraFrame:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            return response.read()
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+            body = response.read()
+            if response.headers.get("X-Frame-Format") != "gray8":
+                return body
+
+            width = int(response.headers["X-Frame-Width"])
+            height = int(response.headers["X-Frame-Height"])
+            if len(body) != width * height:
+                raise CameraFetchError("gray frame size did not match dimensions")
+            return GrayFrame(body, width, height)
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as exc:
         raise CameraFetchError(str(exc)) from exc
 
 
@@ -94,17 +113,21 @@ class HaarFaceDetector:
         self._numpy = numpy
         self._cascade = cascade
 
-    def __call__(self, jpeg: bytes) -> DetectorResult:
+    def __call__(self, frame: CameraFrame) -> DetectorResult:
         cv2 = self._cv2
         numpy = self._numpy
 
-        buffer = numpy.frombuffer(jpeg, dtype=numpy.uint8)
-        image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-        if image is None:
-            raise CameraFetchError("could not decode jpeg")
+        if isinstance(frame, GrayFrame):
+            gray = numpy.frombuffer(frame.data, dtype=numpy.uint8).reshape((frame.height, frame.width))
+            width = frame.width
+            height = frame.height
+        else:
+            buffer = numpy.frombuffer(frame, dtype=numpy.uint8)
+            gray = cv2.imdecode(buffer, cv2.IMREAD_GRAYSCALE)
+            if gray is None:
+                raise CameraFetchError("could not decode jpeg")
+            height, width = gray.shape[:2]
 
-        height, width = image.shape[:2]
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         detect_gray = gray
         scale = 1.0
         if width > DETECTION_MAX_WIDTH:
@@ -143,7 +166,7 @@ class VisionService:
         config_path: str,
         camera_url: str,
         publish: Callable[[dict[str, Any]], Any],
-        fetch_snapshot: Callable[[str], bytes],
+        fetch_snapshot: Callable[[str], CameraFrame],
         detector_factory: Callable[[], Detector],
         time_fn: Callable[[], float] = time.time,
     ):

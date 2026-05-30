@@ -11,7 +11,9 @@ import argparse
 import asyncio
 import signal
 import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from aiohttp import web
 
@@ -24,6 +26,8 @@ DEFAULT_CAMERA_WIDTH = 1280
 DEFAULT_CAMERA_HEIGHT = 720
 DEFAULT_SENSOR_WIDTH = 2304
 DEFAULT_SENSOR_HEIGHT = 1296
+DEFAULT_VISION_WIDTH = DEFAULT_CAMERA_WIDTH
+DEFAULT_VISION_HEIGHT = DEFAULT_CAMERA_HEIGHT
 DEFAULT_CAPTURE_FPS = 10.0
 DEFAULT_JPEG_QUALITY = 75
 DEFAULT_IDLE_TIMEOUT_SECONDS = 30.0
@@ -33,6 +37,14 @@ MJPEG_BOUNDARY = "robotpet-frame"
 
 
 log = setup_logging("robot-camera")
+
+
+@dataclass(frozen=True)
+class VisionFrame:
+    data: bytes
+    width: int
+    height: int
+    timestamp: float
 
 
 class FrameStore:
@@ -84,6 +96,48 @@ class FrameStore:
         return latest
 
 
+class VisionFrameStore:
+    """Thread-safe latest raw grayscale frame store."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
+        self._lock = threading.Lock()
+        self._latest: VisionFrame | None = None
+        self._waiters: list[asyncio.Event] = []
+
+    def publish(self, data: bytes, width: int, height: int) -> None:
+        frame = VisionFrame(data, width, height, time.monotonic())
+        with self._lock:
+            self._latest = frame
+            waiters = self._waiters
+            self._waiters = []
+        for waiter in waiters:
+            self._loop.call_soon_threadsafe(waiter.set)
+
+    def latest(self) -> VisionFrame | None:
+        with self._lock:
+            return self._latest
+
+    def clear(self) -> None:
+        with self._lock:
+            self._latest = None
+
+    async def wait_for_next(self) -> VisionFrame:
+        event = asyncio.Event()
+        with self._lock:
+            self._waiters.append(event)
+        try:
+            await event.wait()
+        except asyncio.CancelledError:
+            with self._lock:
+                if event in self._waiters:
+                    self._waiters.remove(event)
+            raise
+        latest = self.latest()
+        assert latest is not None
+        return latest
+
+
 def mjpeg_part(jpeg: bytes, boundary: str = MJPEG_BOUNDARY) -> bytes:
     """Format a single MJPEG multipart chunk."""
     headers = (
@@ -102,12 +156,14 @@ class CameraServiceState:
         self,
         store: FrameStore,
         *,
+        vision_store: VisionFrameStore | None = None,
         driver_factory: Callable[[], CameraDriver] | None = None,
         idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
         first_frame_timeout: float = FIRST_FRAME_TIMEOUT_SECONDS,
         loop: asyncio.AbstractEventLoop | None = None,
     ):
         self.store = store
+        self.vision_store = vision_store
         self.camera_ok: bool = False
         self.error: str | None = None
         self.active_streams = 0
@@ -133,8 +189,13 @@ class CameraServiceState:
 
             driver = self._driver_factory()
             self.store.clear()
+            if self.vision_store is not None:
+                self.vision_store.clear()
             try:
-                driver.start(self.store.publish)
+                driver.start(
+                    self.store.publish,
+                    self.vision_store.publish if self.vision_store is not None else None,
+                )
             except CameraUnavailable as exc:
                 log.error("camera unavailable: %s", exc)
                 with self._lock:
@@ -182,6 +243,8 @@ class CameraServiceState:
         if driver is not None:
             driver.stop()
         self.store.clear()
+        if self.vision_store is not None:
+            self.vision_store.clear()
         if driver is not None:
             log.info("camera became idle")
 
@@ -221,6 +284,21 @@ async def wait_for_frame(state: CameraServiceState) -> bytes | None:
         return None
 
 
+async def wait_for_vision_frame(state: CameraServiceState) -> VisionFrame | None:
+    if state.vision_store is None:
+        return None
+    latest = state.vision_store.latest()
+    if latest is not None:
+        return latest
+    try:
+        return await asyncio.wait_for(
+            state.vision_store.wait_for_next(),
+            timeout=state.first_frame_timeout,
+        )
+    except TimeoutError:
+        return None
+
+
 async def snapshot_handler(request: web.Request) -> web.Response:
     state: CameraServiceState = request.app["state"]
     if not await state.ensure_started():
@@ -233,6 +311,27 @@ async def snapshot_handler(request: web.Request) -> web.Response:
         body=jpeg,
         content_type="image/jpeg",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+async def vision_gray_handler(request: web.Request) -> web.Response:
+    state: CameraServiceState = request.app["state"]
+    if not await state.ensure_started():
+        return web.Response(status=503, text=f"camera unavailable: {state.error}\n")
+    frame = await wait_for_vision_frame(state)
+    state.schedule_idle_stop()
+    if frame is None:
+        return web.Response(status=503, text="no vision frame yet\n")
+    return web.Response(
+        body=frame.data,
+        content_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Width": str(frame.width),
+            "X-Frame-Height": str(frame.height),
+            "X-Frame-Format": "gray8",
+            "X-Frame-Time": f"{frame.timestamp:.6f}",
+        },
     )
 
 
@@ -273,6 +372,7 @@ def build_app(state: CameraServiceState) -> web.Application:
     app["state"] = state
     app.router.add_get("/health", health_handler)
     app.router.add_get("/snapshot.jpg", snapshot_handler)
+    app.router.add_get("/vision.gray", vision_gray_handler)
     app.router.add_get("/stream.mjpg", stream_handler)
     return app
 
@@ -280,12 +380,15 @@ def build_app(state: CameraServiceState) -> web.Application:
 async def run_service(args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     store = FrameStore(loop)
+    vision_store = VisionFrameStore(loop)
     state = CameraServiceState(
         store,
+        vision_store=vision_store,
         driver_factory=lambda: CameraDriver(
             size=(args.width, args.height),
             jpeg_quality=args.quality,
             sensor_size=(args.sensor_width, args.sensor_height),
+            vision_size=(args.vision_width, args.vision_height),
             fps=args.fps,
         ),
         idle_timeout=args.idle_timeout,
@@ -327,6 +430,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=DEFAULT_CAMERA_HEIGHT)
     parser.add_argument("--sensor-width", type=int, default=DEFAULT_SENSOR_WIDTH)
     parser.add_argument("--sensor-height", type=int, default=DEFAULT_SENSOR_HEIGHT)
+    parser.add_argument("--vision-width", type=int, default=DEFAULT_VISION_WIDTH)
+    parser.add_argument("--vision-height", type=int, default=DEFAULT_VISION_HEIGHT)
     parser.add_argument("--fps", type=float, default=DEFAULT_CAPTURE_FPS)
     parser.add_argument("--quality", type=int, default=DEFAULT_JPEG_QUALITY)
     parser.add_argument("--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT_SECONDS)

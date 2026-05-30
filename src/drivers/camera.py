@@ -39,6 +39,21 @@ def _make_sink_output(sink: Callable[[bytes], None]):
     return SinkOutput()
 
 
+def _gray8_from_lores(frame: Any, size: tuple[int, int]) -> bytes:
+    width, height = size
+    return frame[:height, :width].tobytes()
+
+
+def _make_lores_callback(size: tuple[int, int], sink: Callable[[bytes, int, int], None]):
+    def publish_lores(request: Any) -> None:
+        try:
+            sink(_gray8_from_lores(request.make_array("lores"), size), size[0], size[1])
+        except Exception:  # noqa: BLE001 -- keep camera streaming if a debug frame fails
+            log.exception("vision frame publish failed")
+
+    return publish_lores
+
+
 class CameraDriver:
     """Streams JPEG frames from a Pi camera via picamera2's encoder pipeline."""
 
@@ -47,15 +62,21 @@ class CameraDriver:
         size: tuple[int, int] = (1280, 720),
         jpeg_quality: int = 75,
         sensor_size: tuple[int, int] | None = (2304, 1296),
+        vision_size: tuple[int, int] | None = (320, 180),
         fps: float = 10.0,
     ):
         self.size = size
         self.jpeg_quality = jpeg_quality
         self.sensor_size = sensor_size
+        self.vision_size = vision_size
         self.fps = fps
         self._picam: Any | None = None
 
-    def start(self, sink: Callable[[bytes], None]) -> None:
+    def start(
+        self,
+        sink: Callable[[bytes], None],
+        vision_sink: Callable[[bytes, int, int], None] | None = None,
+    ) -> None:
         """Open the camera and stream encoded JPEGs to `sink`.
 
         `sink` is invoked from picamera2's encoder thread; it must be thread-safe.
@@ -80,8 +101,12 @@ class CameraDriver:
             }
             if self.sensor_size is not None:
                 kwargs["raw"] = {"size": self.sensor_size}
+            if self.vision_size is not None and vision_sink is not None:
+                kwargs["lores"] = {"size": self.vision_size, "format": "YUV420"}
             config = picam.create_video_configuration(**kwargs)
             picam.configure(config)
+            if self.vision_size is not None and vision_sink is not None:
+                picam.post_callback = _make_lores_callback(self.vision_size, vision_sink)
             log.info("camera configured: %s", picam.camera_configuration())
             picam.start_recording(JpegEncoder(q=self.jpeg_quality), _make_sink_output(sink))
         except Exception as exc:  # noqa: BLE001 -- libcamera throws varied types

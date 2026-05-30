@@ -16,9 +16,11 @@ try:
         FrameStore,
         MJPEG_BOUNDARY,
         SHUTDOWN_TIMEOUT_SECONDS,
+        VisionFrameStore,
         build_app,
         mjpeg_part,
         wait_for_frame,
+        wait_for_vision_frame,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "aiohttp":
@@ -60,6 +62,20 @@ class FrameStoreTest(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipIf(ROBOT_CAMERA_IMPORT_ERROR is not None, "aiohttp is not installed")
+class VisionFrameStoreTest(unittest.IsolatedAsyncioTestCase):
+    async def test_latest_returns_most_recent_gray_frame(self):
+        store = VisionFrameStore(asyncio.get_running_loop())
+
+        store.publish(b"\x01\x02\x03\x04", 2, 2)
+
+        frame = store.latest()
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.data, b"\x01\x02\x03\x04")
+        self.assertEqual(frame.width, 2)
+        self.assertEqual(frame.height, 2)
+
+
+@unittest.skipIf(ROBOT_CAMERA_IMPORT_ERROR is not None, "aiohttp is not installed")
 class MjpegPartTest(unittest.TestCase):
     def test_mjpeg_part_emits_boundary_headers_and_trailing_crlf(self):
         chunk = mjpeg_part(b"\xff\xd8\xff\xe0FAKE", boundary="my-boundary")
@@ -84,7 +100,12 @@ class MjpegPartTest(unittest.TestCase):
 class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = FrameStore(asyncio.get_running_loop())
-        self.state = CameraServiceState(self.store, first_frame_timeout=0.01)
+        self.vision_store = VisionFrameStore(asyncio.get_running_loop())
+        self.state = CameraServiceState(
+            self.store,
+            vision_store=self.vision_store,
+            first_frame_timeout=0.01,
+        )
         self.client = TestClient(TestServer(build_app(self.state)))
         await self.client.start_server()
 
@@ -129,6 +150,20 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
             body = await resp.read()
 
         self.assertEqual(body, b"\xff\xd8\xff\xe0FAKEJPEG")
+
+    async def test_vision_gray_returns_raw_frame_with_dimensions(self):
+        self.state.camera_ok = True
+        self.vision_store.publish(b"\x00\x01\x02\x03", 2, 2)
+
+        async with self.client.get("/vision.gray") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers["Content-Type"], "application/octet-stream")
+            self.assertEqual(resp.headers["X-Frame-Width"], "2")
+            self.assertEqual(resp.headers["X-Frame-Height"], "2")
+            self.assertEqual(resp.headers["X-Frame-Format"], "gray8")
+            body = await resp.read()
+
+        self.assertEqual(body, b"\x00\x01\x02\x03")
 
     async def test_stream_returns_503_before_first_frame(self):
         self.state.camera_ok = True
@@ -193,9 +228,11 @@ class CameraServiceHandlersTest(unittest.IsolatedAsyncioTestCase):
 class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_camera_starts_on_demand_and_stops_after_idle_timeout(self):
         store = FrameStore(asyncio.get_running_loop())
+        vision_store = VisionFrameStore(asyncio.get_running_loop())
         driver = FakeCameraDriver()
         state = CameraServiceState(
             store,
+            vision_store=vision_store,
             driver_factory=lambda: driver,
             idle_timeout=0.01,
             first_frame_timeout=0.5,
@@ -206,12 +243,14 @@ class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await state.ensure_started())
         self.assertIsNotNone(await wait_for_frame(state))
+        self.assertIsNotNone(await wait_for_vision_frame(state))
         state.schedule_idle_stop()
         await asyncio.sleep(0.05)
 
         self.assertFalse(driver.started)
         self.assertFalse(state.camera_ok)
         self.assertIsNone(store.latest())
+        self.assertIsNone(vision_store.latest())
 
     async def test_active_stream_keeps_camera_running_until_release(self):
         store = FrameStore(asyncio.get_running_loop())
@@ -256,10 +295,12 @@ class FakeCameraDriver:
         self.started = False
         self.starts = 0
 
-    def start(self, sink):
+    def start(self, sink, vision_sink=None):
         self.starts += 1
         self.started = True
         sink(b"fake-frame")
+        if vision_sink is not None:
+            vision_sink(b"\x00", 1, 1)
 
     def stop(self):
         self.started = False

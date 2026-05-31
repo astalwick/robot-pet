@@ -47,8 +47,8 @@ class BatteryRunner:
         self.clock = clock
 
         self.stop_requested = False
-        self.state = "starting"
-        self.reason: str | None = None
+        self.state = "off"
+        self.reason: str | None = "startup"
         self.last_pack_voltage: float | None = None
         self.low_voltage_seen_at: float | None = None
         self.next_cutoff_log_at = 0.0
@@ -64,7 +64,7 @@ class BatteryRunner:
             active_high=True,
             initial_value=False,
         )
-        self._rail_on("startup")
+        self._publish_status()
 
         try:
             for snapshot in self.telemetry_subscriber(self.config.telemetry_subscribe_socket):
@@ -83,6 +83,7 @@ class BatteryRunner:
             self.low_voltage_seen_at = None
         else:
             self._handle_voltage(voltage, now)
+        self._sync_power(snapshot)
         if self.state == "low_battery_cutoff" and now >= self.next_cutoff_log_at:
             log.warning(
                 "motor LiPo discharged; motor rail is off until robot-battery restarts "
@@ -101,17 +102,18 @@ class BatteryRunner:
 
         if voltage > self.config.low_voltage_cutoff:
             self.low_voltage_seen_at = None
-            if voltage < self.config.warning_voltage:
+            if self.state != "off" and voltage < self.config.warning_voltage:
                 self.state = "warning"
                 self.reason = "low_battery_warning"
-            else:
+            elif self.state != "off":
                 self.state = "on"
                 self.reason = None
             return
 
         if self.low_voltage_seen_at is None:
             self.low_voltage_seen_at = now
-            self.state = "warning"
+            if self.state != "off":
+                self.state = "warning"
             self.reason = "low_battery_pending_cutoff"
             return
 
@@ -134,15 +136,53 @@ class BatteryRunner:
             return None
         return float(voltage)
 
+    def _sync_power(self, snapshot: dict[str, Any]) -> None:
+        if self.state == "low_battery_cutoff":
+            return
+
+        if self._gamepad_connected(snapshot):
+            self._rail_on("gamepad_connected")
+        elif self._motion_power_requested(snapshot):
+            self._rail_on("motion_power_requested")
+        elif self.state != "off":
+            self._rail_off("idle_no_gamepad")
+
+    def _gamepad_connected(self, snapshot: dict[str, Any]) -> bool:
+        source = (snapshot.get("sources") or {}).get("gamepad_teleop") or {}
+        if source.get("stale") is not False:
+            return False
+        controller = snapshot.get("controller")
+        return isinstance(controller, dict) and controller.get("connected") is True
+
+    def _motion_power_requested(self, snapshot: dict[str, Any]) -> bool:
+        source = (snapshot.get("sources") or {}).get("gamepad_teleop") or {}
+        if source.get("stale") is not False:
+            return False
+        drive_status = snapshot.get("drive_status")
+        return isinstance(drive_status, dict) and drive_status.get("motion_power_requested") is True
+
     def _rail_on(self, reason: str) -> None:
+        if self.state == "low_battery_cutoff":
+            return
+        if self.state in ("on", "warning"):
+            return
+        if self.last_pack_voltage is not None and self.last_pack_voltage <= self.config.low_voltage_cutoff:
+            self._rail_off("low_battery_cutoff")
+            return
         if self.mosfet is not None:
             self.mosfet.on()
-        self.state = "on"
-        self.reason = reason
+        if self.last_pack_voltage is not None and self.last_pack_voltage < self.config.warning_voltage:
+            self.state = "warning"
+            self.reason = "low_battery_warning"
+        else:
+            self.state = "on"
+            self.reason = reason
         self._publish_status()
         log.info("motor rail on: %s", reason)
 
     def _rail_off(self, reason: str) -> None:
+        if self.state == "off" and self.reason == reason:
+            return
         if self.mosfet is not None:
             self.mosfet.off()
         self.state = "off" if reason != "low_battery_cutoff" else "low_battery_cutoff"

@@ -228,7 +228,13 @@ class MotionRunner:
     def _wait_for_roboclaw(self) -> Any:
         self._set_drive_state("waiting_for_roboclaw")
         while not self.stop_requested:
-            self._publish_waiting_telemetry()
+            now = self.clock()
+            self._service_intent_requests(now)
+            drive = self._get_drive_command()
+            self._publish_waiting_telemetry(drive, roboclaw_ready=False)
+            if drive is None and not self._motion_power_requested():
+                self.sleep(self.config.retry_interval)
+                continue
             try:
                 motor = self.motor_factory()
             except Exception as exc:
@@ -273,6 +279,9 @@ class MotionRunner:
                     elif not idle_released and now - idle_started_at >= self.config.idle_release_delay:
                         self._release_idle(motor)
                         idle_released = True
+                    elif idle_released:
+                        self._publish_waiting_telemetry(None, roboclaw_ready=True)
+                        break
                     self.sleep(self.config.loop_interval)
                     continue
 
@@ -373,19 +382,34 @@ class MotionRunner:
         right = wheels.get("right_command", 0.0) or 0.0
         return left != 0.0 or right != 0.0
 
-    def _publish_waiting_telemetry(self) -> None:
-        message = gamepad_teleop_update(
-            controller={"connected": False},
-            wheels={"read_ok": False},
-            motor_battery=motor_battery_message(None),
-            link_loop=link_loop_message(
+    def _publish_waiting_telemetry(self, drive: DriveCommand | None = None, roboclaw_ready: bool = False) -> None:
+        drive_status = self._drive_status_payload(roboclaw_ready=roboclaw_ready)
+        if drive is None:
+            controller = {"connected": False}
+            wheels = {"read_ok": False}
+            drive_tuning = None
+            link_loop = link_loop_message(
                 read_success_rate=None,
                 consecutive_read_failures=0,
                 last_good_read_age_seconds=None,
                 telemetry_latency_ms=None,
                 command_loop_hz=None,
-            ),
-            drive_status=self._drive_status_payload(),
+            )
+        else:
+            controller = drive.controller
+            wheels = dict(drive.wheels)
+            wheels["read_ok"] = False
+            drive_tuning = drive.drive_tuning
+            link_loop = drive.link_loop
+            drive_status["controller_reader_alive"] = drive.drive_status.get("controller_reader_alive")
+
+        message = gamepad_teleop_update(
+            controller=controller,
+            wheels=wheels,
+            motor_battery=motor_battery_message(None),
+            link_loop=link_loop,
+            drive_tuning=drive_tuning,
+            drive_status=drive_status,
         )
         self._publish_message(message)
 
@@ -432,6 +456,8 @@ class MotionRunner:
         drive_status["last_motor_command_ack_age_seconds"] = self._last_motor_command_ack_age(now)
         drive_status["safety_blocked"] = safety_blocked
         drive_status["safety_reason"] = safety_reason
+        drive_status["motion_power_requested"] = self._motion_power_requested()
+        drive_status["roboclaw_ready"] = True
 
         message = gamepad_teleop_update(
             controller=drive.controller,
@@ -455,7 +481,7 @@ class MotionRunner:
         )
         self._publish_message(message)
 
-    def _drive_status_payload(self) -> dict[str, Any]:
+    def _drive_status_payload(self, roboclaw_ready: bool | None = None) -> dict[str, Any]:
         return drive_status_message(
             state=self.drive_state,
             stop_reason=self.stop_reason,
@@ -467,7 +493,12 @@ class MotionRunner:
             last_telemetry_publish_ok=self.last_telemetry_publish_ok,
             safety_blocked=self._last_safety_blocked,
             safety_reason=self._last_safety_reason,
+            motion_power_requested=self._motion_power_requested(),
+            roboclaw_ready=roboclaw_ready,
         )
+
+    def _motion_power_requested(self) -> bool:
+        return self.intent_executor.is_active() or self.pending_intent_complete is not None
 
     def _service_intent_requests(self, now: float) -> None:
         if self.intent_bridge is None or self.pending_intent_complete is not None:

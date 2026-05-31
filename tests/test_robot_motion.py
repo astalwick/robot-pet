@@ -129,6 +129,62 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertTrue(any(left > 0 and right > 0 for left, right in motor.commands))
 
+    def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
+        calls = 0
+
+        def motor_factory():
+            nonlocal calls
+            calls += 1
+            return FakeMotor()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=0.05),
+            motor_factory=motor_factory,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+
+        self.assertIsNone(runner._wait_for_roboclaw())
+        self.assertEqual(calls, 0)
+
+    def test_motion_intent_requests_power_before_waiting_for_roboclaw(self):
+        motor = FakeMotor()
+        published = []
+        completed = []
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        runner.intent_executor.start("move_forward", now=0.0)
+        runner.pending_intent_complete = completed.append
+
+        self.assertIs(runner._wait_for_roboclaw(), motor)
+
+        self.assertTrue(published[0]["drive_status"]["motion_power_requested"])
+        self.assertFalse(published[0]["drive_status"]["roboclaw_ready"])
+        self.assertEqual(motor.commands[0], (0, 0))
+
+    def test_wait_for_roboclaw_publishes_connected_gamepad(self):
+        motor = FakeMotor()
+        published = []
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        runner._on_drive_command(drive_command(250, 250))
+
+        self.assertIs(runner._wait_for_roboclaw(), motor)
+
+        self.assertTrue(published[0]["controller"]["connected"])
+        self.assertFalse(published[0]["drive_status"]["roboclaw_ready"])
+
     def test_motion_intent_publishes_telemetry_and_completes(self):
         motor = FakeMotor()
         completed = []

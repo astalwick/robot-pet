@@ -27,15 +27,17 @@ class FakeMosfet:
         self.closed = True
 
 
-def snapshot(voltage, stale=False):
+def snapshot(voltage, stale=False, controller_connected=False, motion_power_requested=False):
     return {
         "sources": {"gamepad_teleop": {"stale": stale}},
+        "controller": {"connected": controller_connected},
         "motor_battery": {"pack_voltage": voltage},
+        "drive_status": {"motion_power_requested": motion_power_requested},
     }
 
 
 class RobotBatteryTest(unittest.TestCase):
-    def test_startup_turns_motor_rail_on(self):
+    def test_startup_keeps_motor_rail_off(self):
         mosfet = FakeMosfet()
         published = []
         runner = BatteryRunner(
@@ -47,8 +49,84 @@ class RobotBatteryTest(unittest.TestCase):
 
         runner.run_forever()
 
+        self.assertEqual(mosfet.on_count, 0)
+        self.assertEqual(published[0]["state"], "off")
+
+    def test_gamepad_connected_turns_motor_rail_on(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
         self.assertEqual(mosfet.on_count, 1)
-        self.assertEqual(published[0]["state"], "on")
+        self.assertEqual(runner.state, "on")
+        self.assertEqual(runner.reason, "gamepad_connected")
+
+    def test_gamepad_disconnected_turns_motor_rail_off(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
+        runner._handle_snapshot(snapshot(None, controller_connected=False))
+
+        self.assertEqual(mosfet.off_count, 1)
+        self.assertEqual(runner.state, "off")
+        self.assertEqual(runner.reason, "idle_no_gamepad")
+
+    def test_motion_power_request_turns_motor_rail_on_without_gamepad(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+
+        runner._handle_snapshot(snapshot(None, motion_power_requested=True))
+
+        self.assertEqual(mosfet.on_count, 1)
+        self.assertEqual(runner.state, "on")
+        self.assertEqual(runner.reason, "motion_power_requested")
+
+    def test_low_battery_cutoff_blocks_restart(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+        runner.state = "low_battery_cutoff"
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True, motion_power_requested=True))
+
+        self.assertEqual(mosfet.on_count, 0)
+        self.assertEqual(runner.state, "low_battery_cutoff")
+
+    def test_last_critical_voltage_blocks_start(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(low_voltage_cutoff=10.8),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+        runner.last_pack_voltage = 10.7
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
+        self.assertEqual(mosfet.on_count, 0)
+        self.assertEqual(runner.state, "low_battery_cutoff")
 
     def test_fresh_low_voltage_cuts_motor_rail_after_debounce(self):
         mosfet = FakeMosfet()
@@ -63,13 +141,13 @@ class RobotBatteryTest(unittest.TestCase):
         runner.mosfet = mosfet
         runner._rail_on("test")
 
-        runner._handle_snapshot(snapshot(10.7))
+        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
         self.assertEqual(runner.state, "warning")
 
-        runner._handle_snapshot(snapshot(10.7))
+        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
         self.assertEqual(runner.state, "warning")
 
-        runner._handle_snapshot(snapshot(10.7))
+        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
         self.assertEqual(runner.state, "low_battery_cutoff")
         self.assertEqual(mosfet.off_count, 1)
 
@@ -87,8 +165,9 @@ class RobotBatteryTest(unittest.TestCase):
 
         runner._handle_snapshot(snapshot(10.0, stale=True))
 
-        self.assertEqual(runner.state, "on")
-        self.assertEqual(mosfet.off_count, 0)
+        self.assertEqual(runner.state, "off")
+        self.assertEqual(runner.reason, "idle_no_gamepad")
+        self.assertEqual(mosfet.off_count, 1)
 
     def test_stale_voltage_resets_pending_cutoff(self):
         mosfet = FakeMosfet()
@@ -103,12 +182,12 @@ class RobotBatteryTest(unittest.TestCase):
         runner.mosfet = mosfet
         runner._rail_on("test")
 
-        runner._handle_snapshot(snapshot(10.7))
+        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
         runner._handle_snapshot(snapshot(10.7, stale=True))
-        runner._handle_snapshot(snapshot(10.7))
+        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
 
-        self.assertEqual(runner.state, "warning")
-        self.assertEqual(mosfet.off_count, 0)
+        self.assertEqual(runner.state, "low_battery_cutoff")
+        self.assertEqual(mosfet.off_count, 2)
 
     def test_cutoff_logs_periodic_reminder(self):
         times = iter([30.0, 59.0, 60.0])
@@ -143,7 +222,7 @@ class RobotBatteryTest(unittest.TestCase):
             clock=lambda: 0.0,
         )
 
-        runner._handle_snapshot(snapshot(10.9))
+        runner._handle_snapshot(snapshot(10.9, controller_connected=True))
 
         self.assertEqual(runner.state, "warning")
         self.assertEqual(runner.reason, "low_battery_warning")

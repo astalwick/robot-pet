@@ -168,6 +168,8 @@ def drive_status_message(
     last_telemetry_publish_ok: bool | None,
     safety_blocked: bool | None = None,
     safety_reason: str | None = None,
+    motion_power_requested: bool | None = None,
+    roboclaw_ready: bool | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "state": state,
@@ -183,6 +185,10 @@ def drive_status_message(
         payload["safety_blocked"] = safety_blocked
     if safety_reason is not None:
         payload["safety_reason"] = safety_reason
+    if motion_power_requested is not None:
+        payload["motion_power_requested"] = motion_power_requested
+    if roboclaw_ready is not None:
+        payload["roboclaw_ready"] = roboclaw_ready
     return payload
 
 

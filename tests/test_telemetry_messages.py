@@ -207,7 +207,7 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["barge_in_last_event"], "commit: explicit_interrupt")
 
     def test_drive_status_message_includes_command_and_publish_health(self):
-        message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False)
+        message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)
 
         self.assertEqual(message["state"], "driving")
         self.assertIsNone(message["stop_reason"])
@@ -217,6 +217,7 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["last_motor_command_ack_age_seconds"], 0.2)
         self.assertEqual(message["telemetry_publish_failures"], 1)
         self.assertFalse(message["last_telemetry_publish_ok"])
+        self.assertTrue(message["motion_power_requested"])
 
 
 class SocketClientTest(unittest.TestCase):

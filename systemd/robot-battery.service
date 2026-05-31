@@ -1,14 +1,14 @@
 [Unit]
-Description=Robot Motion - RoboClaw owner, safety gating, voice intents
-After=robot-telemetry.service robot-battery.service robot-sensors.service
-Wants=robot-telemetry.service robot-battery.service
+Description=Robot Battery - motor rail MOSFET and LiPo protection
+After=robot-telemetry.service
+Wants=robot-telemetry.service
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/robot-pet/src
 Environment=PYTHONPATH=/home/pi/robot-pet/src
-ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_motion.py
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_battery.py
 Restart=always
 RestartSec=2
 RuntimeDirectory=robot-pet

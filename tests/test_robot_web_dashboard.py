@@ -16,6 +16,7 @@ try:
     from aiohttp.test_utils import TestClient, TestServer
 
     from robot_web_dashboard import (
+        LOG_COMMAND,
         STATIC_DIR,
         SnapshotStore,
         WebDashboardState,
@@ -702,6 +703,28 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn('id="voice-rows"', self.dashboard_html)
         self.assertIn("export function renderVoice(snapshot, sources)", self.voice_js)
         self.assertIn("renderVoice(snapshot, sources)", self.telemetry_js)
+
+    def test_dashboard_logs_include_all_robot_services(self):
+        command = " ".join(LOG_COMMAND)
+        for service in (
+            "robot-brain",
+            "robot-telemetry",
+            "robot-battery",
+            "robot-motion",
+            "gamepad-teleop",
+            "robot-camera",
+            "robot-vision",
+            "robot-sensors",
+            "robot-voice",
+            "robot-web-dashboard",
+        ):
+            self.assertIn(service, command)
+
+    def test_dashboard_renders_motor_rail_telemetry(self):
+        self.assertIn("const motorRail = snapshot.motor_rail || {}", self.telemetry_js)
+        self.assertIn("renderBattery(battery, motorRail, sources.motor_rail || {})", self.telemetry_js)
+        self.assertIn("row('rail'", self.telemetry_js)
+        self.assertIn("low_battery_cutoff", self.telemetry_js)
 
     def test_dashboard_exposes_barge_in_visibility_not_inline_editors(self):
         self.assertNotIn("voiceToggleRow('barge-in'", self.voice_js)

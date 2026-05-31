@@ -35,9 +35,9 @@ def decode_json_line(line: bytes | str) -> dict[str, Any]:
 def motor_battery_status(pack_voltage: float | None) -> str:
     if pack_voltage is None:
         return "unknown"
-    if pack_voltage <= 9.6:
+    if pack_voltage <= 10.8:
         return "critical"
-    if pack_voltage < 10.5:
+    if pack_voltage < 11.1:
         return "low"
     return "ok"
 
@@ -47,6 +47,28 @@ def motor_battery_message(pack_voltage: float | None) -> dict[str, Any]:
         "pack_voltage": pack_voltage,
         "cell_voltage": pack_voltage / 3.0 if pack_voltage is not None else None,
         "status": motor_battery_status(pack_voltage),
+    }
+
+
+def motor_rail_update(
+    state: str,
+    mosfet_gpio: int,
+    last_pack_voltage: float | None,
+    reason: str | None = None,
+    low_voltage_cutoff: float | None = None,
+    warning_voltage: float | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "motor_rail",
+        "time": now if now is not None else time.time(),
+        "state": state,
+        "mosfet_gpio": mosfet_gpio,
+        "last_pack_voltage": last_pack_voltage,
+        "reason": reason,
+        "low_voltage_cutoff": low_voltage_cutoff,
+        "warning_voltage": warning_voltage,
     }
 
 

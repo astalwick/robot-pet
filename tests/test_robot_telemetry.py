@@ -12,6 +12,7 @@ from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
 from telemetry.messages import (
     decode_json_line,
     gamepad_teleop_update,
+    motor_rail_update,
     sensors_update,
     vision_update,
     voice_update,
@@ -122,6 +123,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["sources"]["sensors"]["stale"])
         self.assertIsNone(snapshot["sensors"])
 
+    async def test_snapshot_lists_motor_rail_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("motor_rail", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["motor_rail"]["stale"])
+        self.assertIsNone(snapshot["motor_rail"])
+
     async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()
 
@@ -202,6 +210,24 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["voice"]["status"], "listening")
         self.assertEqual(snapshot["voice"]["capture_channel_index"], 1)
         self.assertFalse(snapshot["sources"]["voice"]["stale"])
+
+    async def test_motor_rail_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                motor_rail_update("on", 24, 11.8, "startup", 10.8, 11.1),
+            )
+        )
+        snapshot = await self._read_until(reader, lambda item: item.get("motor_rail") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["motor_rail"]["state"], "on")
+        self.assertEqual(snapshot["motor_rail"]["mosfet_gpio"], 24)
+        self.assertFalse(snapshot["sources"]["motor_rail"]["stale"])
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

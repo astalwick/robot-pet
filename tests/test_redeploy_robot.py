@@ -6,10 +6,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "redeploy-robot.sh"
+SETUP = REPO_ROOT / "setup.sh"
 
 ALL_SERVICES = {
     "robot-brain.service",
     "robot-telemetry.service",
+    "robot-battery.service",
     "robot-motion.service",
     "robot-camera.service",
     "gamepad-teleop.service",
@@ -37,10 +39,13 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-brain.service")
         elif path in ("src/robot_telemetry.py",) or path.startswith("src/telemetry/"):
             want("robot-telemetry.service")
+            want("robot-battery.service")
         elif path == "src/robot_camera.py":
             want("robot-camera.service")
         elif path == "src/robot_motion.py":
             want("robot-motion.service")
+        elif path == "src/robot_battery.py":
+            want("robot-battery.service")
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
             want("gamepad-teleop.service")
             want("robot-motion.service")
@@ -122,6 +127,18 @@ class TestRedeployRobot(unittest.TestCase):
 
     def test_pyproject_restarts_all_services(self):
         self.assertEqual(planned_services(["pyproject.toml"]), ALL_SERVICES)
+
+    def test_battery_service_paths_restart_battery(self):
+        self.assertEqual(planned_services(["src/robot_battery.py"]), {"robot-battery.service"})
+
+    def test_setup_installs_and_manages_battery_service(self):
+        body = SETUP.read_text()
+
+        self.assertIn("robot-battery.service", body)
+        self.assertIn("$SYSTEMCTL_PATH enable robot-battery.service", body)
+        self.assertIn("$SYSTEMCTL_PATH start robot-battery.service", body)
+        self.assertIn("$SYSTEMCTL_PATH stop robot-battery.service", body)
+        self.assertIn("$SYSTEMCTL_PATH restart robot-battery.service", body)
 
     def test_docs_only_plans_no_restarts(self):
         self.assertEqual(

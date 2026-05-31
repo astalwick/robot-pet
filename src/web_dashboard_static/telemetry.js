@@ -54,13 +54,14 @@ function render(snapshot) {
   const controller = snapshot.controller || {};
   const wheels = snapshot.wheels || {};
   const battery = snapshot.motor_battery || {};
+  const motorRail = snapshot.motor_rail || {};
   const linkLoop = snapshot.link_loop || {};
   const driveStatusPayload = snapshot.drive_status || {};
   const pi = snapshot.pi || {};
 
   renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
   renderPi(pi);
-  renderBattery(battery);
+  renderBattery(battery, motorRail, sources.motor_rail || {});
   renderController(controller);
   renderWheels(wheels);
   renderLink(linkLoop, driveStatusPayload);
@@ -162,18 +163,32 @@ function renderPi(pi) {
   ]);
 }
 
-function renderBattery(battery) {
+function renderBattery(battery, motorRail, motorRailSource) {
   const v = battery.pack_voltage;
   const cell = battery.cell_voltage;
   const status = battery.status || 'unknown';
+  const railState = motorRailSource.stale === false ? (motorRail.state || 'unknown') : 'stale';
+  const railVoltage = motorRail.last_pack_voltage;
+  const railReason = motorRail.reason || '--';
 
   setRows('power-rows', [
+    row('rail', '', railState.toUpperCase().replaceAll('_', ' '), railClass(railState)),
+    row('rail reason', '', railReason.replaceAll('_', ' '), railReason === '--' ? 'muted' : ''),
     row('pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
     row('cell est', '', fmt(cell, 'V', 2)),
+    row('last rail v', '', fmt(railVoltage, 'V', 2)),
     row('trend', sparkline(history.pack_voltage, 14), ''),
     row('peak amps', '', fmt(maxCurrentAmps, 'A', 2)),
     row('status', '', status.toUpperCase(), batteryClass(status)),
   ]);
+}
+
+function railClass(state) {
+  if (state === 'on') return 'ok';
+  if (state === 'warning') return 'warn';
+  if (state === 'low_battery_cutoff') return 'err';
+  if (state === 'off' || state === 'stale') return 'muted';
+  return 'err';
 }
 
 function renderController(controller) {

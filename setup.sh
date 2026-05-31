@@ -149,6 +149,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-sensors.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-battery.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-telemetry.service
@@ -157,6 +158,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-sensors.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-battery.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-telemetry.service
@@ -165,6 +167,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-sensors.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-battery.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
@@ -173,6 +176,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-vision.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-voice.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-sensors.service
+$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-battery.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
@@ -228,6 +232,7 @@ sudo systemctl daemon-reload
 for service in \
   robot-brain.service \
   robot-telemetry.service \
+  robot-battery.service \
   robot-motion.service \
   gamepad-teleop.service \
   robot-camera.service \
@@ -246,6 +251,7 @@ for service in \
   robot-voice.service \
   robot-sensors.service \
   robot-motion.service \
+  robot-battery.service \
   robot-telemetry.service \
   robot-web-dashboard.service \
   robot-brain.service
@@ -257,6 +263,7 @@ for service in \
   robot-brain.service \
   robot-telemetry.service \
   robot-sensors.service \
+  robot-battery.service \
   robot-motion.service \
   robot-camera.service \
   gamepad-teleop.service \
@@ -281,8 +288,14 @@ echo "    sudo systemctl status robot-brain"
 echo "    journalctl -u robot-brain -f"
 echo "    sudo systemctl status robot-telemetry"
 echo "    journalctl -u robot-telemetry -f"
+echo "    sudo systemctl status robot-battery"
+echo "    journalctl -u robot-battery -f"
+echo "    sudo systemctl status robot-motion"
+echo "    journalctl -u robot-motion -f"
 echo "    sudo systemctl status gamepad-teleop"
 echo "    journalctl -u gamepad-teleop -f"
+echo "    sudo systemctl status robot-sensors"
+echo "    journalctl -u robot-sensors -f"
 echo "    sudo systemctl status robot-camera"
 echo "    journalctl -u robot-camera -f"
 echo "    sudo systemctl status robot-vision"

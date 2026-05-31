@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from robot_telemetry import TelemetryHub, parse_meminfo, sample_pi_health
 from telemetry.messages import (
     decode_json_line,
+    gamepad_update,
     gamepad_teleop_update,
     motor_rail_update,
     sensors_update,
@@ -108,6 +109,26 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         snapshot = self.hub.build_snapshot()
 
         self.assertTrue(snapshot["sources"]["gamepad_teleop"]["stale"])
+
+    async def test_snapshot_lists_gamepad_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("gamepad", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["gamepad"]["stale"])
+        self.assertIsNone(snapshot["gamepad"])
+
+    async def test_gamepad_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        self.assertTrue(publish_message(self.publish_socket, gamepad_update(connected=True, state="driving")))
+        snapshot = await self._read_until(reader, lambda item: item.get("gamepad") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertTrue(snapshot["gamepad"]["connected"])
+        self.assertEqual(snapshot["gamepad"]["state"], "driving")
+        self.assertFalse(snapshot["sources"]["gamepad"]["stale"])
 
     async def test_snapshot_lists_vision_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()

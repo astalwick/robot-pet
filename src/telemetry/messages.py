@@ -111,6 +111,16 @@ def controller_message(state: Any, connected: bool = True) -> dict[str, Any]:
     }
 
 
+def gamepad_update(connected: bool, state: str, now: float | None = None) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "gamepad",
+        "time": now if now is not None else time.time(),
+        "connected": connected,
+        "state": state,
+    }
+
+
 def wheel_message(
     left_command: float,
     right_command: float,

@@ -259,6 +259,39 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertFalse(missing_controller.cleaned_up)
         self.assertIn((0, 0), motion.commands)
 
+    def test_wait_for_motion_publishes_connected_gamepad(self):
+        state = controller_state()
+        controller = FakeController(state)
+        motion = FakeMotion(connect_results=[False])
+        published = []
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            motion_factory=lambda: motion,
+            sleep=lambda _seconds: runner.request_stop(),
+            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+        )
+
+        runner._wait_for_motion(controller)
+
+        gamepad_messages = [message for message in published if message.get("source") == "gamepad"]
+        self.assertTrue(gamepad_messages)
+        self.assertTrue(gamepad_messages[0]["connected"])
+
+    def test_run_connected_heartbeats_connected_gamepad(self):
+        state = controller_state()
+        controller = FakeController(state)
+        motion = FakeMotion()
+        published = []
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            sleep=lambda _seconds: runner.request_stop(),
+            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+        )
+
+        runner._run_connected(controller, motion)
+
+        self.assertTrue(any(message.get("source") == "gamepad" and message["connected"] for message in published))
+
     def test_sleep_with_status_updates_publishes_during_retry_sleep(self):
         published = []
         current_time = 0.0
@@ -279,8 +312,10 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         runner._sleep_with_status_updates(1.0)
 
-        self.assertEqual(len(published), 1)
-        self.assertEqual(published[0]["drive_status"]["state"], "stopped")
+        self.assertEqual(len(published), 2)
+        self.assertEqual(published[0]["source"], "gamepad")
+        self.assertFalse(published[0]["connected"])
+        self.assertEqual(published[1]["drive_status"]["state"], "stopped")
 
 
 if __name__ == "__main__":

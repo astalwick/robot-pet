@@ -14,6 +14,7 @@ from telemetry.messages import (
     decode_json_line,
     drive_status_message,
     encode_json_line,
+    gamepad_update,
     link_loop_message,
     motor_battery_message,
     motor_battery_status,
@@ -87,6 +88,15 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertTrue(message["buttons"]["a"])
         self.assertTrue(message["buttons"]["left_stick"])
         self.assertEqual(message["right_trigger"], 0.6)
+
+    def test_gamepad_update_carries_connection_state(self):
+        message = gamepad_update(connected=True, state="driving", now=1000.0)
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "gamepad")
+        self.assertEqual(message["time"], 1000.0)
+        self.assertTrue(message["connected"])
+        self.assertEqual(message["state"], "driving")
 
     def test_wheel_message_calculates_errors(self):
         message = wheel_message(0.4, 0.2, 100, 50, 90, 55, 1000, 1000, 1.2, 1.1)

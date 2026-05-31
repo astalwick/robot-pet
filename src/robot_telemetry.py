@@ -205,6 +205,8 @@ class TelemetryHub:
 
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()
+        gamepad_status = self.latest.get("gamepad")
+        gamepad_status_data = gamepad_status["data"] if gamepad_status else None
         gamepad = self.latest.get("gamepad_teleop")
         gamepad_data = gamepad["data"] if gamepad else {}
         vision = self.latest.get("vision")
@@ -220,6 +222,7 @@ class TelemetryHub:
             "type": "snapshot",
             "time": now,
             "sources": {
+                "gamepad": self._source_status(gamepad_status, now),
                 "gamepad_teleop": self._source_status(gamepad, now),
                 "vision": self._source_status(vision, now),
                 "voice": self._source_status(voice, now),
@@ -228,6 +231,7 @@ class TelemetryHub:
                 "system": self._system_status(now),
             },
             "controller": gamepad_data.get("controller"),
+            "gamepad": gamepad_status_data,
             "wheels": gamepad_data.get("wheels"),
             "motor_battery": gamepad_data.get("motor_battery"),
             "link_loop": gamepad_data.get("link_loop"),

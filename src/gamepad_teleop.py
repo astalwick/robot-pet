@@ -20,6 +20,7 @@ from lib.log import setup_logging
 from telemetry.messages import (
     controller_message,
     drive_status_message,
+    gamepad_update,
     gamepad_teleop_update,
     link_loop_message,
     motor_battery_message,
@@ -91,7 +92,8 @@ class GamepadTeleopRunner:
                 if self.stop_requested:
                     break
 
-                motion = self._wait_for_motion()
+                self._publish_gamepad_update(True)
+                motion = self._wait_for_motion(controller)
                 if self.stop_requested:
                     controller.cleanup()
                     break
@@ -105,33 +107,36 @@ class GamepadTeleopRunner:
     def _wait_for_controller(self):
         self._set_drive_state("waiting_for_controller")
         while not self.stop_requested:
+            self._publish_gamepad_update(False)
             self._publish_status_update()
             controller = self.controller_factory()
             if controller.connect():
                 log.info("controller connected")
                 return controller
             log.info("waiting for controller")
-            self._sleep_with_status_updates(self.config.retry_interval)
+            self._sleep_with_status_updates(self.config.retry_interval, connected=False)
         return None
 
-    def _wait_for_motion(self):
+    def _wait_for_motion(self, controller):
         self._set_drive_state("waiting_for_motion")
         while not self.stop_requested:
-            self._publish_status_update()
+            self._publish_gamepad_update(True)
+            self._publish_status_update(controller)
             motion = self.motion_factory()
             if motion.connect():
                 log.info("robot-motion drive socket connected")
                 return motion
             log.info("waiting for robot-motion")
-            self._sleep_with_status_updates(self.config.retry_interval)
+            self._sleep_with_status_updates(self.config.retry_interval, controller=controller, connected=True)
         return None
 
-    def _sleep_with_status_updates(self, duration: float):
+    def _sleep_with_status_updates(self, duration: float, controller=None, connected: bool = False):
         deadline = self.clock() + duration
         next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
         while self.clock() < deadline and not self.stop_requested:
             if self.clock() >= next_publish_at:
-                self._publish_status_update()
+                self._publish_gamepad_update(connected)
+                self._publish_status_update(controller)
                 next_publish_at = self.clock() + STATUS_PUBLISH_INTERVAL
             remaining = min(next_publish_at, deadline) - self.clock()
             if remaining > 0:
@@ -141,6 +146,7 @@ class GamepadTeleopRunner:
         disconnected = threading.Event()
         controller.start(on_disconnect=disconnected.set)
         last_stall_log_at = 0.0
+        next_status_at = 0.0
         stop_reason = None
         self._reset_slew()
         self._set_drive_state("driving")
@@ -149,6 +155,9 @@ class GamepadTeleopRunner:
             cycle_started = self.clock()
             now = cycle_started
             self.loop_samples.append(now)
+            if now >= next_status_at:
+                self._publish_gamepad_update(True)
+                next_status_at = now + STATUS_PUBLISH_INTERVAL
 
             command = self.policy.motion_from_state(controller.state)
             wheels = self.mixer.mix(command)
@@ -208,6 +217,7 @@ class GamepadTeleopRunner:
         if disconnected.is_set():
             reason = controller.disconnect_reason or "controller disconnected"
             self._set_drive_state("controller_lost", reason)
+            self._publish_gamepad_update(False)
             log.warning("%s; waiting for reconnect", reason)
         elif stop_reason is not None:
             self._set_drive_state("motion_send_failed", stop_reason)
@@ -278,9 +288,13 @@ class GamepadTeleopRunner:
             last_telemetry_publish_ok=self.last_telemetry_publish_ok,
         )
 
-    def _publish_status_update(self, controller_reader_alive: bool | None = None):
+    def _publish_gamepad_update(self, connected: bool):
+        self._publish_message(gamepad_update(connected=connected, state=self.drive_state))
+
+    def _publish_status_update(self, controller=None, controller_reader_alive: bool | None = None):
+        controller_payload = controller_message(controller.state) if controller is not None else {"connected": False}
         message = gamepad_teleop_update(
-            controller={"connected": False},
+            controller=controller_payload,
             wheels={"read_ok": False},
             motor_battery=motor_battery_message(None),
             link_loop=self._link_loop_payload(),

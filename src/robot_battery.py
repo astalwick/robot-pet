@@ -25,6 +25,7 @@ class BatteryConfig:
     low_voltage_cutoff: float = 10.8
     warning_voltage: float = 11.1
     low_voltage_seconds: float = 2.0
+    idle_power_off_seconds: float = 5.0
     cutoff_log_interval: float = 30.0
     telemetry_interval: float = 1.0
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
@@ -51,6 +52,7 @@ class BatteryRunner:
         self.reason: str | None = "startup"
         self.last_pack_voltage: float | None = None
         self.low_voltage_seen_at: float | None = None
+        self.last_power_request_at: float | None = None
         self.next_cutoff_log_at = 0.0
         self.next_telemetry_at = 0.0
         self.mosfet = None
@@ -83,7 +85,7 @@ class BatteryRunner:
             self.low_voltage_seen_at = None
         else:
             self._handle_voltage(voltage, now)
-        self._sync_power(snapshot)
+        self._sync_power(snapshot, now)
         if self.state == "low_battery_cutoff" and now >= self.next_cutoff_log_at:
             log.warning(
                 "motor LiPo discharged; motor rail is off until robot-battery restarts "
@@ -136,16 +138,23 @@ class BatteryRunner:
             return None
         return float(voltage)
 
-    def _sync_power(self, snapshot: dict[str, Any]) -> None:
+    def _sync_power(self, snapshot: dict[str, Any], now: float) -> None:
         if self.state == "low_battery_cutoff":
             return
 
         if self._gamepad_connected(snapshot):
+            self.last_power_request_at = now
             self._rail_on("gamepad_connected")
         elif self._motion_power_requested(snapshot):
+            self.last_power_request_at = now
             self._rail_on("motion_power_requested")
-        elif self.state != "off":
+        elif self.state != "off" and self._idle_power_expired(now):
             self._rail_off("idle_no_gamepad")
+
+    def _idle_power_expired(self, now: float) -> bool:
+        if self.last_power_request_at is None:
+            return True
+        return now - self.last_power_request_at >= self.config.idle_power_off_seconds
 
     def _gamepad_connected(self, snapshot: dict[str, Any]) -> bool:
         source = (snapshot.get("sources") or {}).get("gamepad_teleop") or {}
@@ -218,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--low-voltage-cutoff", type=float, default=10.8)
     parser.add_argument("--warning-voltage", type=float, default=11.1)
     parser.add_argument("--low-voltage-seconds", type=float, default=2.0)
+    parser.add_argument("--idle-power-off-seconds", type=float, default=5.0)
     parser.add_argument("--cutoff-log-interval", type=float, default=30.0)
     parser.add_argument("--telemetry-interval", type=float, default=1.0)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
@@ -233,6 +243,7 @@ def main() -> None:
             low_voltage_cutoff=args.low_voltage_cutoff,
             warning_voltage=args.warning_voltage,
             low_voltage_seconds=args.low_voltage_seconds,
+            idle_power_off_seconds=args.idle_power_off_seconds,
             cutoff_log_interval=args.cutoff_log_interval,
             telemetry_interval=args.telemetry_interval,
             telemetry_socket=args.telemetry_socket,

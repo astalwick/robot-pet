@@ -69,10 +69,12 @@ class RobotBatteryTest(unittest.TestCase):
 
     def test_gamepad_disconnected_turns_motor_rail_off(self):
         mosfet = FakeMosfet()
+        times = iter([0.0, 6.0])
         runner = BatteryRunner(
-            BatteryConfig(),
+            BatteryConfig(idle_power_off_seconds=5.0),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
         )
         runner.mosfet = mosfet
         runner._handle_snapshot(snapshot(None, controller_connected=True))
@@ -82,6 +84,23 @@ class RobotBatteryTest(unittest.TestCase):
         self.assertEqual(mosfet.off_count, 1)
         self.assertEqual(runner.state, "off")
         self.assertEqual(runner.reason, "idle_no_gamepad")
+
+    def test_transient_stale_gamepad_telemetry_keeps_motor_rail_on(self):
+        mosfet = FakeMosfet()
+        times = iter([0.0, 2.0])
+        runner = BatteryRunner(
+            BatteryConfig(idle_power_off_seconds=5.0),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
+        )
+        runner.mosfet = mosfet
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
+        runner._handle_snapshot(snapshot(None, stale=True))
+
+        self.assertEqual(mosfet.off_count, 0)
+        self.assertEqual(runner.state, "on")
 
     def test_motion_power_request_turns_motor_rail_on_without_gamepad(self):
         mosfet = FakeMosfet()
@@ -162,12 +181,12 @@ class RobotBatteryTest(unittest.TestCase):
         )
         runner.mosfet = mosfet
         runner._rail_on("test")
+        runner.last_power_request_at = 10.0
 
         runner._handle_snapshot(snapshot(10.0, stale=True))
 
-        self.assertEqual(runner.state, "off")
-        self.assertEqual(runner.reason, "idle_no_gamepad")
-        self.assertEqual(mosfet.off_count, 1)
+        self.assertEqual(runner.state, "on")
+        self.assertEqual(mosfet.off_count, 0)
 
     def test_stale_voltage_resets_pending_cutoff(self):
         mosfet = FakeMosfet()
@@ -186,8 +205,8 @@ class RobotBatteryTest(unittest.TestCase):
         runner._handle_snapshot(snapshot(10.7, stale=True))
         runner._handle_snapshot(snapshot(10.7, controller_connected=True))
 
-        self.assertEqual(runner.state, "low_battery_cutoff")
-        self.assertEqual(mosfet.off_count, 2)
+        self.assertEqual(runner.state, "warning")
+        self.assertEqual(mosfet.off_count, 0)
 
     def test_cutoff_logs_periodic_reminder(self):
         times = iter([30.0, 59.0, 60.0])

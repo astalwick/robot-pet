@@ -134,11 +134,19 @@ class TestRedeployRobot(unittest.TestCase):
     def test_setup_installs_and_manages_battery_service(self):
         body = SETUP.read_text()
 
+        self.assertIn('for service_file in "$REPO_DIR/systemd/"*.service', body)
+        self.assertIn('sudo install -m 0644 "$service_file"', body)
         self.assertIn("robot-battery.service", body)
         self.assertIn("$SYSTEMCTL_PATH enable robot-battery.service", body)
         self.assertIn("$SYSTEMCTL_PATH start robot-battery.service", body)
         self.assertIn("$SYSTEMCTL_PATH stop robot-battery.service", body)
         self.assertIn("$SYSTEMCTL_PATH restart robot-battery.service", body)
+
+    def test_setup_does_not_fail_when_amixer_fails(self):
+        body = SETUP.read_text()
+
+        self.assertIn("if amixer -c 0 sset 'PCM' 100% >/dev/null; then", body)
+        self.assertIn("WARNING: could not set PCM volume with amixer; continuing", body)
 
     def test_docs_only_plans_no_restarts(self):
         self.assertEqual(

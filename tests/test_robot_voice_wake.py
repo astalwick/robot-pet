@@ -99,6 +99,9 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertFalse(phase_events[-1]["on"])
 
+        service.publish(service.active_config, status="waiting", assistant_speaking=False)
+        self.assertIn("timeline", published[-1])
+
     async def test_armed_mode_suppresses_wake_scoring(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service._mode = "active"

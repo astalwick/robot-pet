@@ -628,6 +628,7 @@ class RobotVoiceService:
                 partial_transcript=None,
                 force_timeline=True,
             )
+            self._last_timeline_publish_at = 0.0
 
     def _close_timeline_phases(self) -> None:
         now = time.monotonic()

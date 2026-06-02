@@ -165,6 +165,10 @@ class TelemetryHub:
                 message = decode_json_line(line)
                 source = message.get("source")
                 if message.get("type") == "source_update" and source:
+                    if source == "voice" and "timeline" not in message:
+                        previous = self.latest.get(source)
+                        if previous and "timeline" in previous["data"]:
+                            message = {**message, "timeline": previous["data"]["timeline"]}
                     self.latest[source] = {"last_seen": time.time(), "data": message}
         except Exception as exc:
             log.warning("publisher update failed: %s", exc)

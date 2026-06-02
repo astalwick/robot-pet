@@ -232,6 +232,46 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["voice"]["capture_channel_index"], 1)
         self.assertFalse(snapshot["sources"]["voice"]["stale"])
 
+    async def test_voice_update_without_timeline_keeps_previous_timeline(self):
+        timeline = {"ref": 1.0, "spans": [{"lane": "hearing", "start": 0.5, "end": None}]}
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                voice_update(
+                    enabled=True,
+                    status="listening",
+                    input_device="hw:0,0",
+                    output_device="plughw:0,0",
+                    sample_rate=16000,
+                    capture_channels=6,
+                    capture_channel_index=1,
+                    timeline=timeline,
+                ),
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                voice_update(
+                    enabled=True,
+                    status="thinking",
+                    input_device="hw:0,0",
+                    output_device="plughw:0,0",
+                    sample_rate=16000,
+                    capture_channels=6,
+                    capture_channel_index=1,
+                ),
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        snapshot = self.hub.build_snapshot()
+
+        self.assertEqual(snapshot["voice"]["status"], "thinking")
+        self.assertEqual(snapshot["voice"]["timeline"], timeline)
+
     async def test_motor_rail_update_appears_in_subscriber_snapshot(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
         await reader.readline()

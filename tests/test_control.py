@@ -56,6 +56,14 @@ class DifferentialDriveMixerTest(unittest.TestCase):
         self.assertEqual(wheels.left, 1.0)
         self.assertEqual(wheels.right, 0.0)
 
+    def test_mix_preserves_turn_ratio_when_saturated(self):
+        mixer = DifferentialDriveMixer(qpps=1000)
+
+        wheels = mixer.mix(MotionCommand(1.0, 0.5))
+
+        self.assertEqual(wheels.left, 1.0)
+        self.assertAlmostEqual(wheels.right, 1.0 / 3.0)
+
     def test_wheel_speeds_use_normal_and_turbo_caps(self):
         mixer = DifferentialDriveMixer(qpps=2000, speed_scale=0.25, turbo_scale=0.75)
 

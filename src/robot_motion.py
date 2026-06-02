@@ -46,9 +46,6 @@ from telemetry.socket_client import publish_message, subscribe
 log = setup_logging("robot-motion")
 
 DRIVE_COMMAND_STALE_SECONDS = 0.5
-SENSOR_STALE_SECONDS = 1.0
-STATUS_PUBLISH_INTERVAL = 0.5
-SLOW_TELEMETRY_WARNING_SECONDS = 0.025
 
 
 @dataclass(frozen=True)
@@ -121,6 +118,12 @@ class MotionRunner:
         self.last_telemetry_publish_ok: bool | None = None
         self._last_safety_blocked = False
         self._last_safety_reason: str | None = None
+        self._telemetry_read_slot = 0
+        self._last_left_actual: int | None = None
+        self._last_right_actual: int | None = None
+        self._last_left_current: float | None = None
+        self._last_right_current: float | None = None
+        self._last_pack_voltage: float | None = None
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
@@ -430,22 +433,7 @@ class MotionRunner:
         safety_reason: str | None,
     ) -> None:
         now = self.clock()
-        left_actual = None
-        right_actual = None
-        left_current = None
-        right_current = None
-        pack_voltage = None
-        read_ok = True
-        try:
-            left_actual, right_actual = motor.read_wheel_speeds()
-            pack_voltage = motor.get_battery_voltage()
-            currents = motor.get_currents()
-            if currents is not None:
-                left_current, right_current = currents
-            read_ok = left_actual is not None and right_actual is not None
-        except Exception as exc:
-            log.warning("telemetry read failed: %s", exc)
-            read_ok = False
+        read_ok = self._read_next_telemetry_value(motor)
 
         self._record_read_result(read_ok, now)
         link_loop = dict(drive.link_loop)
@@ -472,20 +460,39 @@ class MotionRunner:
                 right_command=wheels.get("right_command", 0.0),
                 left_target_qpps=target.left_qpps,
                 right_target_qpps=target.right_qpps,
-                left_actual_qpps=left_actual,
-                right_actual_qpps=right_actual,
+                left_actual_qpps=self._last_left_actual,
+                right_actual_qpps=self._last_right_actual,
                 left_max_qpps=motor_max_qpps[0],
                 right_max_qpps=motor_max_qpps[1],
-                left_current_amps=left_current,
-                right_current_amps=right_current,
+                left_current_amps=self._last_left_current,
+                right_current_amps=self._last_right_current,
                 read_ok=read_ok,
             ),
-            motor_battery=motor_battery_message(pack_voltage),
+            motor_battery=motor_battery_message(self._last_pack_voltage),
             link_loop=link_loop,
             drive_tuning=drive.drive_tuning,
             drive_status=drive_status,
         )
         self._publish_message(message)
+
+    def _read_next_telemetry_value(self, motor: Any) -> bool:
+        try:
+            if self._telemetry_read_slot == 0:
+                self._last_left_actual, self._last_right_actual = motor.read_wheel_speeds()
+                return self._last_left_actual is not None and self._last_right_actual is not None
+            if self._telemetry_read_slot == 1:
+                self._last_pack_voltage = motor.get_battery_voltage()
+                return self._last_pack_voltage is not None
+            currents = motor.get_currents()
+            if currents is None:
+                return False
+            self._last_left_current, self._last_right_current = currents
+            return True
+        except Exception as exc:
+            log.warning("telemetry read failed: %s", exc)
+            return False
+        finally:
+            self._telemetry_read_slot = (self._telemetry_read_slot + 1) % 3
 
     def _drive_status_payload(self, roboclaw_ready: bool | None = None) -> dict[str, Any]:
         return drive_status_message(

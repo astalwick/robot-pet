@@ -7,6 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
+from control.commands import WheelSpeedCommand
 from control.motion_drive import DriveCommand
 from robot_motion import MotionConfig, MotionRunner
 
@@ -16,18 +17,22 @@ logging.getLogger("robot-motion").disabled = True
 class FakeMotor:
     def __init__(self):
         self.commands = []
+        self.telemetry_reads = []
 
     def set_wheel_speeds(self, left_qpps, right_qpps):
         self.commands.append((left_qpps, right_qpps))
         return True
 
     def read_wheel_speeds(self):
+        self.telemetry_reads.append("speeds")
         return 100, 100
 
     def get_battery_voltage(self):
+        self.telemetry_reads.append("battery")
         return 11.5
 
     def get_currents(self):
+        self.telemetry_reads.append("currents")
         return 1.0, 1.0
 
     def read_max_qpps(self):
@@ -119,6 +124,35 @@ class RobotMotionTest(unittest.TestCase):
         runner._run_motor_loop(motor)
 
         self.assertIn((1000, -1000), motor.commands)
+
+    def test_telemetry_reads_rotate_across_publish_ticks(self):
+        motor = FakeMotor()
+        published = []
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: None,
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        drive = drive_command(100, 100)
+
+        for _index in range(3):
+            runner._publish_telemetry(
+                drive,
+                drive.wheels,
+                WheelSpeedCommand(100, 100),
+                motor,
+                (1000, 1000),
+                safety_blocked=False,
+                safety_reason=None,
+            )
+
+        self.assertEqual(motor.telemetry_reads, ["speeds", "battery", "currents"])
+        self.assertEqual(published[0]["wheels"]["left_actual_qpps"], 100)
+        self.assertEqual(published[1]["wheels"]["left_actual_qpps"], 100)
+        self.assertEqual(published[1]["motor_battery"]["pack_voltage"], 11.5)
+        self.assertEqual(published[2]["wheels"]["left_current_amps"], 1.0)
 
     def test_stale_drive_command_stops_motor(self):
         motor = FakeMotor()

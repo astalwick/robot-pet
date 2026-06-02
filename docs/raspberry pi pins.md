@@ -5,9 +5,9 @@
 5 = YELLOW wire to I2C
 6 = BROWN wire to ROBOCLAW
 7 = empty
-8 = ORANGE wire to ROBOCLAW
+8 = RED wire to ROBOCLAW
 9 = BLACK wire to I2C
-10 = YELLOW wire to ROBOCLAW
+10 = ORANGE wire to ROBOCLAW
 11 = empty
 12 = empty
 13 = empty

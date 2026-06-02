@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import array
 import logging
 import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
+
+import numpy as np
 
 from lib.log import setup_logging
 
@@ -92,11 +93,8 @@ def extract_mono_channel(interleaved_pcm: bytes, channels: int, channel_index: i
 def apply_pcm16_gain(audio: bytes, gain: float) -> bytes:
     if gain == 1.0:
         return audio
-    samples = array.array("h")
-    samples.frombytes(audio)
-    for index, sample in enumerate(samples):
-        samples[index] = max(-32768, min(32767, int(sample * gain)))
-    return samples.tobytes()
+    samples = np.frombuffer(audio, dtype=np.int16)
+    return np.clip(samples * gain, -32768, 32767).astype(np.int16).tobytes()
 
 
 class _MicSubscriber:

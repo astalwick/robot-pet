@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
     from config.voice import VoiceConfig
 
@@ -249,10 +251,10 @@ def should_speculate(text: str) -> bool:
 
 
 def pcm16_rms(chunk: bytes) -> int:
-    samples = memoryview(chunk).cast("h")
-    if len(samples) == 0:
+    samples = np.frombuffer(chunk, dtype=np.int16)
+    if samples.size == 0:
         return 0
-    return int((sum(sample * sample for sample in samples) / len(samples)) ** 0.5)
+    return int(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
 
 
 def should_accept_barge_in(

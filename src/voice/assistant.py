@@ -327,6 +327,9 @@ class TurnRuntimeState:
     recent_barge_in_gate_open: bool = False
     recent_barge_in_gate_reason: str = "assistant_not_speaking"
     recent_barge_in_audio_at: float = 0.0
+    local_audio_seq: int = 0
+    last_partial_text: str = ""
+    last_partial_audio_seq: int = -1
     barge_in_event_count: int = 0
     barge_in_hearing_reported: bool = False
 
@@ -840,13 +843,22 @@ async def handle_scribe_events(
             if quiet_remaining_secs > 0:
                 await asyncio.sleep(quiet_remaining_secs)
                 continue
-            if state.active_turn and state.active_turn.is_active() and policy.transcript_matches(text, state.active_turn.prompt):
+            if state.active_turn and policy.transcript_matches(text, state.active_turn.prompt):
                 return
             await start_turn(text, speculative=True)
             return
 
     async def handle_partial(text: str) -> None:
         now = asyncio.get_running_loop().time()
+        normalized_partial = policy.normalized_transcript(text)
+        if (
+            normalized_partial
+            and normalized_partial == state.last_partial_text
+            and state.local_audio_seq == state.last_partial_audio_seq
+        ):
+            return
+        state.last_partial_text = normalized_partial
+        state.last_partial_audio_seq = state.local_audio_seq
         emit("partial", text=text)
         note_user_speech()
         if is_recent_assistant_echo(text, now):
@@ -1005,11 +1017,16 @@ async def handle_scribe_events(
             if event_type == "audio_activity":
                 now = asyncio.get_running_loop().time()
                 state.last_local_speech_rms = max(int(event.get("rms", 0)), levels.mic_peak)
+                heard_local_audio = False
                 if state.last_local_speech_rms >= policy.user_active_rms_threshold:
                     state.last_local_speech_at = now
                     note_user_speech()
+                    heard_local_audio = True
                 elif levels.scribe_gate_open:
                     note_user_speech()
+                    heard_local_audio = True
+                if heard_local_audio:
+                    state.local_audio_seq += 1
                 levels.mic_rms = state.last_local_speech_rms
                 publish_barge_in_state(now, state.last_local_speech_rms)
                 if state.active_turn and state.active_turn.is_playing_back():

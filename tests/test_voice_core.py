@@ -878,6 +878,55 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stale_partial_matching_completed_turn_does_not_restart_it(self):
+        async def run():
+            started_inputs = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(speculative_partial_delay_secs=0.01, speculative_local_quiet_secs=0)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input[-1]["content"])
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "What do you see?"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 120})
+            await scribe_events.put({"type": "partial", "text": "What do you see?"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(started_inputs, ["What do you see?"])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_silent_audio_activity_does_not_delay_speculation(self):
         async def run():
             started_inputs = []
@@ -928,6 +977,54 @@ class AssistantStreamingTest(unittest.TestCase):
             handler_task.cancel()
             with suppress(asyncio.CancelledError):
                 await silence_task
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_repeated_partial_without_new_audio_does_not_start_new_turn(self):
+        async def run():
+            started_inputs = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(speculative_partial_delay_secs=0.01, speculative_local_quiet_secs=0)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input)
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "Um, what do you see?"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "partial", "text": "Um, what do you see?"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(len(started_inputs), 1)
+
+            stop_event.set()
+            handler_task.cancel()
             with suppress(asyncio.CancelledError):
                 await handler_task
 

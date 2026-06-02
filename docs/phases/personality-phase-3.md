@@ -1,5 +1,9 @@
 # Personality Phase 3 — Visible Personality
 
+## Status
+
+Complete.
+
 ## Goal
 
 Give the robot a character card or personality system prompt that visibly changes how it speaks and behaves.

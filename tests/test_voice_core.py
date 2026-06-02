@@ -5,6 +5,7 @@ import sys
 import unittest
 from contextlib import suppress
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -346,6 +347,40 @@ class ActiveTurnTest(unittest.TestCase):
 
 
 class AssistantStreamingTest(unittest.TestCase):
+    def test_stream_openai_words_retries_create_once(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = 0
+
+                async def create(self, **_kwargs):
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise RuntimeError("temporary openai failure")
+
+                    async def stream():
+                        yield SimpleNamespace(type="response.output_text.delta", delta="Hello there.")
+                        yield SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1"))
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+
+            with mock.patch("voice.assistant.OPENAI_CREATE_RETRY_DELAY_SECS", 0):
+                chunks = [
+                    chunk
+                    async for chunk in stream_openai_words(
+                        [{"role": "user", "content": "Hi"}],
+                        SimpleNamespace(responses=fake_responses),
+                        VoiceState("test-voice"),
+                    )
+                ]
+
+            self.assertEqual(fake_responses.calls, 2)
+            self.assertEqual(chunks, ["Hello there."])
+
+        asyncio.run(run())
+
     def test_stream_openai_words_allows_tool_first_end_session_goodbye(self):
         async def run():
             pending = [False]

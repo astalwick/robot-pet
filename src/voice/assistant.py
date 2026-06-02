@@ -32,6 +32,7 @@ LOOK_AROUND_TOOL_NAME = "look_around"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
+OPENAI_CREATE_RETRY_DELAY_SECS = 0.2
 END_SESSION_UTTERANCES = {
     "bye",
     "goodbye",
@@ -432,7 +433,15 @@ async def stream_openai_words(
         if previous_response_id:
             create_kwargs["previous_response_id"] = previous_response_id
 
-        stream = await openai_client.responses.create(**create_kwargs)
+        for attempt in range(2):
+            try:
+                stream = await openai_client.responses.create(**create_kwargs)
+                break
+            except Exception as exc:
+                if attempt:
+                    raise
+                log.warning("openai response create failed; retrying: %s", exc)
+                await asyncio.sleep(OPENAI_CREATE_RETRY_DELAY_SECS)
         function_calls: list[Any] = []
         response_id = previous_response_id
 

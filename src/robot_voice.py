@@ -31,6 +31,7 @@ from voice.wakeword import WakeWordDetector
 DEFAULT_POLL_SECONDS = 1.0
 TIMELINE_HORIZON_SECS = 30.0
 TIMELINE_SAMPLE_HZ = 20.0
+TIMELINE_PUBLISH_HZ = 5.0
 TIMELINE_MAX_SIGNAL_EVENTS = 100
 TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
@@ -87,6 +88,83 @@ class TimelineBuffer:
             "horizon_secs": TIMELINE_HORIZON_SECS,
             "levels": [list(sample) for sample in self.levels],
             "events": merged,
+            "latency": self.latency_stats(merged),
+        }
+
+    def latency_stats(self, events: list[dict[str, object]]) -> dict[str, object]:
+        user_events: list[dict[str, object]] = []
+        records: dict[object, dict[str, object]] = {}
+        for event in events:
+            kind = event.get("type")
+            if kind in {"partial", "commit"} and event.get("text"):
+                user_events.append(event)
+                continue
+            if kind == "turn_start":
+                turn_id = event.get("turn_id")
+                if turn_id is None:
+                    continue
+                prompt = event.get("prompt")
+                source = None
+                for user_event in reversed(user_events):
+                    if user_event.get("text") == prompt:
+                        source = user_event
+                        break
+                records[turn_id] = {
+                    "turn_id": turn_id,
+                    "speculative": bool(event.get("speculative")),
+                    "input_type": source.get("type") if source else None,
+                    "input_t": float(source["t"]) if source and "t" in source else None,
+                    "turn_start_t": float(event.get("t", 0.0)),
+                }
+                continue
+            turn_id = event.get("turn_id")
+            if turn_id not in records:
+                continue
+            if kind == "turn_first_token":
+                records[turn_id]["first_token_t"] = float(event.get("t", 0.0))
+            elif kind == "assistant_start":
+                records[turn_id]["assistant_start_t"] = float(event.get("t", 0.0))
+
+        turns = []
+        for record in records.values():
+            turn = {
+                "turn_id": record["turn_id"],
+                "speculative": record["speculative"],
+                "input_type": record["input_type"],
+            }
+            start_t = record["turn_start_t"]
+            input_t = record["input_t"]
+            first_token_t = record.get("first_token_t")
+            assistant_start_t = record.get("assistant_start_t")
+            if input_t is not None:
+                turn["input_to_turn_ms"] = round((start_t - input_t) * 1000)
+            if first_token_t is not None:
+                turn["turn_to_first_token_ms"] = round((first_token_t - start_t) * 1000)
+            if assistant_start_t is not None:
+                turn["turn_to_audio_ms"] = round((assistant_start_t - start_t) * 1000)
+            if input_t is not None and assistant_start_t is not None:
+                turn["input_to_audio_ms"] = round((assistant_start_t - input_t) * 1000)
+            if first_token_t is not None and assistant_start_t is not None:
+                turn["first_token_to_audio_ms"] = round((assistant_start_t - first_token_t) * 1000)
+            turns.append(turn)
+
+        turns = turns[-20:]
+        input_to_audio = sorted(
+            turn["input_to_audio_ms"]
+            for turn in turns
+            if "input_to_audio_ms" in turn
+        )
+        median_input_to_audio_ms = None
+        if input_to_audio:
+            middle = len(input_to_audio) // 2
+            if len(input_to_audio) % 2:
+                median_input_to_audio_ms = input_to_audio[middle]
+            else:
+                median_input_to_audio_ms = round((input_to_audio[middle - 1] + input_to_audio[middle]) / 2)
+        return {
+            "turns": turns,
+            "last": turns[-1] if turns else None,
+            "median_input_to_audio_ms": median_input_to_audio_ms,
         }
 
 
@@ -150,6 +228,7 @@ class RobotVoiceService:
         self._config_load_error_config: str | None = None
         self._wake_profile_count = 0
         self._publish_profile_count = 0
+        self._last_timeline_publish_at = 0.0
 
     async def run(self, stop_event: asyncio.Event) -> None:
         command_server = await self._start_command_server()
@@ -684,10 +763,14 @@ class RobotVoiceService:
             self.last_logged_error = None
         now = time.monotonic()
         voice_on = config.enabled and config.wake_word_enabled
+        timeline = None
+        timeline_seconds = 0.0
         timeline_started = time.perf_counter()
-        self.timeline.trim(now)
-        timeline = self.timeline.snapshot(now)
-        timeline_seconds = time.perf_counter() - timeline_started
+        if now - self._last_timeline_publish_at >= 1.0 / TIMELINE_PUBLISH_HZ:
+            self._last_timeline_publish_at = now
+            self.timeline.trim(now)
+            timeline = self.timeline.snapshot(now)
+            timeline_seconds = time.perf_counter() - timeline_started
         message_started = time.perf_counter()
         message = voice_update(
             enabled=voice_on,

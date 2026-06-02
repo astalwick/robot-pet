@@ -282,6 +282,22 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("timeline=", output)
         self.assertIn("socket=", output)
 
+    async def test_publish_throttles_timeline_payload(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        published = []
+
+        with (
+            mock.patch("robot_voice.time.monotonic", side_effect=[100.0, 100.1, 100.3]),
+            mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True),
+        ):
+            service.publish(service_config(), status="listening")
+            service.publish(service_config(), status="hearing")
+            service.publish(service_config(), status="thinking")
+
+        self.assertIn("timeline", published[0])
+        self.assertNotIn("timeline", published[1])
+        self.assertIn("timeline", published[2])
+
     async def test_activate_session_reloads_personality_cards(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
         service.active_config = service_config(personality="cal")
@@ -347,6 +363,24 @@ class TimelineBufferTest(unittest.TestCase):
 
         times = [event["t"] for event in buffer.snapshot(now=3.0)["events"]]
         self.assertEqual(times, sorted(times))
+
+    def test_snapshot_includes_turn_latency_stats(self):
+        buffer = TimelineBuffer()
+        buffer.add_event({"type": "partial", "t": 1.0, "text": "What do you see?"})
+        buffer.add_event({"type": "turn_start", "t": 1.4, "turn_id": 1, "speculative": True, "prompt": "What do you see?"})
+        buffer.add_event({"type": "turn_first_token", "t": 1.7, "turn_id": 1})
+        buffer.add_event({"type": "assistant_start", "t": 2.2, "turn_id": 1})
+
+        latency = buffer.snapshot(now=3.0)["latency"]
+        last = latency["last"]
+
+        self.assertEqual(last["turn_id"], 1)
+        self.assertEqual(last["input_type"], "partial")
+        self.assertEqual(last["input_to_turn_ms"], 400)
+        self.assertEqual(last["turn_to_first_token_ms"], 300)
+        self.assertEqual(last["turn_to_audio_ms"], 800)
+        self.assertEqual(last["input_to_audio_ms"], 1200)
+        self.assertEqual(latency["median_input_to_audio_ms"], 1200)
 
 
 def service_config(**kwargs):

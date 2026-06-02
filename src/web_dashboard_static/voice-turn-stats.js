@@ -9,6 +9,7 @@ let tallyEl = null;
 let lastEventT = -1;
 let highestTurnId = 0;
 let sessionEpoch = 0;
+let latencySummary = null;
 
 export function initVoiceTurnStats() {
   listEl = document.getElementById('voice-turn-stats-list');
@@ -19,6 +20,7 @@ export function updateVoiceTurnStats(timeline) {
   if (!timeline || !listEl) return;
   const ref = Number(timeline.ref) || 0;
   const events = Array.isArray(timeline.events) ? timeline.events : [];
+  latencySummary = timeline.latency || latencySummary;
 
   // Server process restart: monotonic ref jumped backwards.
   if (lastEventT > 0 && ref + 1 < lastEventT) {
@@ -141,12 +143,14 @@ function render() {
   const absent = visibleRows.filter((row) => row.outcome === 'absent');
   const keptMedian = median(kept.map((row) => row.savings_ms));
   const replacedMedian = median(replaced.map((row) => row.cost_ms).filter((value) => value != null));
+  const latency = latestLatency();
 
   const tallyParts = [
     `kept ${kept.length}${keptMedian != null ? ` (median +${keptMedian}ms)` : ''}`,
     `replaced ${replaced.length}${replacedMedian != null ? ` (median ${replacedMedian}ms cost)` : ''}`,
     `absent ${absent.length}`,
   ];
+  if (latency) tallyParts.push(latency);
   tallyEl.textContent = visibleRows.length ? tallyParts.join(' · ') : 'no turns yet';
 
   listEl.innerHTML = '';
@@ -180,4 +184,15 @@ function median(values) {
   const sorted = [...values].sort((left, right) => left - right);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+function latestLatency() {
+  if (!latencySummary) return null;
+  const last = latencySummary.last || null;
+  const parts = [];
+  if (last && last.input_to_audio_ms != null) parts.push(`last audio ${last.input_to_audio_ms}ms`);
+  if (latencySummary.median_input_to_audio_ms != null) {
+    parts.push(`median audio ${latencySummary.median_input_to_audio_ms}ms`);
+  }
+  return parts.length ? parts.join(' / ') : null;
 }

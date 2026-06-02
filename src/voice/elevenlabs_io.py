@@ -114,6 +114,8 @@ async def stream_audio_to_scribe(
 
                 last_activity_log_at = 0.0
                 last_above_at: float | None = None
+                silence_message = ""
+                silence_message_bytes = -1
                 profile_count = 0
                 loop = asyncio.get_running_loop()
                 receive_task = asyncio.create_task(receive_transcripts())
@@ -135,15 +137,27 @@ async def stream_audio_to_scribe(
                         gate_seconds = time.perf_counter() - gate_started
 
                         encode_started = time.perf_counter()
-                        upload = chunk if gate_open else b"\x00" * len(chunk)
-                        message = json.dumps(
-                            {
-                                "message_type": "input_audio_chunk",
-                                "audio_base_64": base64.b64encode(upload).decode("ascii"),
-                                "commit": False,
-                                "sample_rate": sample_rate,
-                            }
-                        )
+                        if gate_open:
+                            message = json.dumps(
+                                {
+                                    "message_type": "input_audio_chunk",
+                                    "audio_base_64": base64.b64encode(chunk).decode("ascii"),
+                                    "commit": False,
+                                    "sample_rate": sample_rate,
+                                }
+                            )
+                        else:
+                            if silence_message_bytes != len(chunk):
+                                silence_message_bytes = len(chunk)
+                                silence_message = json.dumps(
+                                    {
+                                        "message_type": "input_audio_chunk",
+                                        "audio_base_64": base64.b64encode(b"\x00" * len(chunk)).decode("ascii"),
+                                        "commit": False,
+                                        "sample_rate": sample_rate,
+                                    }
+                                )
+                            message = silence_message
                         encode_seconds = time.perf_counter() - encode_started
 
                         send_started = time.perf_counter()

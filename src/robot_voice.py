@@ -25,6 +25,7 @@ from telemetry.socket_client import publish_message
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.personality import load_personalities
 from voice.session import VoiceSession
+from voice.usage import UsageTotals, cost_snapshot
 from voice.wakeword import WakeWordDetector
 
 
@@ -187,6 +188,7 @@ class RobotVoiceService:
         self.camera_url = camera_url
         self.profile_every = profile_every
         self.session: VoiceSession | None = None
+        self.usage = UsageTotals()
         self.audio: ReSpeakerAudio | None = None
         self._io_stop_event: asyncio.Event | None = None
         self.active_config: VoiceConfig | None = None
@@ -543,6 +545,7 @@ class RobotVoiceService:
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             personalities=self.personalities,
             profile_every=self.profile_every,
+            usage=self.usage,
         )
         if self.selected_personality is not None:
             self.session.set_personality(self.selected_personality)
@@ -814,6 +817,7 @@ class RobotVoiceService:
             wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
             personality=optional_text(self.status["personality"]) or config.personality,
             timeline=timeline,
+            cost=cost_snapshot(self.usage),
         )
         message_seconds = time.perf_counter() - message_started
         publish_started = time.perf_counter()

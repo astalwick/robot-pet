@@ -7,6 +7,7 @@ import ssl
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from typing import Any
 from urllib.parse import urlencode
 
 from lib.log import setup_logging
@@ -72,6 +73,7 @@ async def stream_audio_to_scribe(
     policy=DEFAULT_TURN_POLICY,
     audio_levels: AudioLevels | None = None,
     profile_every: int = 0,
+    usage: Any = None,
 ) -> None:
     import websockets
 
@@ -121,6 +123,8 @@ async def stream_audio_to_scribe(
                 receive_task = asyncio.create_task(receive_transcripts())
                 try:
                     async for chunk in audio_chunks:
+                        if usage is not None:
+                            usage.stt_audio_seconds += len(chunk) / 2 / sample_rate
                         if receive_task.done():
                             receive_task.result()
                         started = time.perf_counter()
@@ -202,6 +206,7 @@ async def speak_with_eleven_flash(
     audio_writer: Callable[[bytes], object] | None = None,
     on_playback_rms: Callable[[int], None] | None = None,
     profile_every: int = 0,
+    usage: Any = None,
 ) -> None:
     import websockets
 
@@ -390,6 +395,8 @@ async def speak_with_eleven_flash(
                 prewarm_voice_socket()
                 continue
 
+            if usage is not None:
+                usage.tts_characters += len(chunk)
             await send_text_chunk(chunk)
 
         await finish_voice_socket()

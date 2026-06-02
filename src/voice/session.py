@@ -22,6 +22,7 @@ from voice.conversation import ConversationHistory
 from voice.elevenlabs_io import stream_audio_to_scribe
 from voice.personality import load_personalities, lookup_personality
 from voice.turn_policy import turn_policy_from_config
+from voice.usage import UsageTotals
 
 
 log = setup_logging("robot-voice")
@@ -48,6 +49,7 @@ class VoiceSession:
         camera_snapshot_caller: Callable[[], bytes] | None = None,
         personalities: dict[str, tuple[str, str]] | None = None,
         profile_every: int = 0,
+        usage: UsageTotals | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -60,6 +62,7 @@ class VoiceSession:
         self.session_end_caller = session_end_caller
         self.camera_snapshot_caller = camera_snapshot_caller
         self.profile_every = profile_every
+        self.usage = usage if usage is not None else UsageTotals()
         self.stop_event = asyncio.Event()
         self._mic_frames: AsyncIterator[bytes] | None = None
         self.tasks: list[asyncio.Task[Any]] = []
@@ -108,7 +111,7 @@ class VoiceSession:
                 await self._speak(text_chunks, api_key, voice_id, playback_event, speaking_event, turn_id)
             return await run_assistant_turn(
                 turn_id, openai_input, playback_event, speaking_event, *args,
-                **kwargs, tts_speaker=turn_speaker,
+                **kwargs, tts_speaker=turn_speaker, usage=self.usage,
             )
 
         self.tasks = [
@@ -121,6 +124,7 @@ class VoiceSession:
                     policy=self.policy,
                     audio_levels=self.audio_levels,
                     profile_every=self.profile_every,
+                    usage=self.usage,
                 )
             ),
             asyncio.create_task(
@@ -198,6 +202,7 @@ class VoiceSession:
                 audio_writer=self.audio.write_output,
                 on_playback_rms=on_playback_rms,
                 profile_every=self.profile_every,
+                usage=self.usage,
             )
         except asyncio.CancelledError:
             cancelled = True

@@ -414,6 +414,7 @@ async def stream_openai_words(
     motion_intent_caller: Callable[[str], Any] | None = None,
     end_session_pending: list[bool] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
+    usage: Any = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -477,6 +478,10 @@ async def stream_openai_words(
             if event_type == "response.completed":
                 response = getattr(event, "response", None)
                 response_id = getattr(response, "id", response_id)
+                if usage is not None:
+                    from voice.usage import record_openai_usage
+
+                    record_openai_usage(usage, getattr(response, "usage", None))
 
         if pending:
             word_buffer.append(pending)
@@ -579,6 +584,7 @@ async def run_assistant_turn(
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
+    usage: Any = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -593,6 +599,7 @@ async def run_assistant_turn(
             motion_intent_caller,
             end_session_pending,
             camera_snapshot_caller,
+            usage,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)

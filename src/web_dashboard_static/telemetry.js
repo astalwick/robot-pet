@@ -10,6 +10,7 @@ import {
 } from './dom.js';
 import { renderFaceOverlay } from './camera.js';
 import { renderVoice } from './voice.js';
+import { renderCost } from './cost.js';
 import { updateVoiceTimeline } from './voice-timeline.js';
 import { updateVoiceTurnStats } from './voice-turn-stats.js';
 
@@ -66,6 +67,7 @@ function render(snapshot) {
   renderWheels(wheels);
   renderLink(linkLoop, driveStatusPayload);
   renderVoice(snapshot, sources);
+  renderCost(snapshot);
   renderSensors(snapshot, sources);
   updateVoiceTimeline((snapshot.voice || {}).timeline);
   updateVoiceTurnStats((snapshot.voice || {}).timeline);

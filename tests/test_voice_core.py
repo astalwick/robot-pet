@@ -1071,6 +1071,56 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_end_session_commit_ends_session_without_model_turn(self):
+        async def run():
+            started_inputs = []
+            ended = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input)
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    on_status=statuses.append,
+                    assistant_runner=fake_run_assistant_turn,
+                    session_end_caller=lambda: ended.append(True),
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "End session"})
+            await asyncio.sleep(0.02)
+
+            self.assertEqual(started_inputs, [])
+            self.assertEqual(ended, [True])
+            self.assertEqual(statuses[-1]["last_committed_transcript"], "End session")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_committed_transcript_during_tts_requires_open_gate(self):
         async def run():
             started_inputs = []

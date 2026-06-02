@@ -31,6 +31,16 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(service._wait_for_idle(), timeout=1.0)
 
+    async def test_wait_for_idle_after_quiet_time_when_status_sticks_thinking(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.1)
+        service._mode = "active"
+        service._idle_started_at = time.monotonic() - 1.0
+        service.status["status"] = "thinking"
+        service.status["assistant_speaking"] = False
+
+        await asyncio.wait_for(service._wait_for_idle(), timeout=1.0)
+
     async def test_wait_for_idle_ignored_while_speaking(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.05)
@@ -71,12 +81,23 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         session.stop = mock.AsyncMock()
         service.session = session
 
-        with mock.patch("robot_voice.publish_message", return_value=True):
+        published = []
+        service.timeline.add_event({"type": "phase", "t": time.monotonic() - 1.0, "name": "thinking", "on": True})
+        service._last_timeline_publish_at = time.monotonic()
+
+        with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
             await service._deactivate_session()
 
         session.history.clear.assert_called_once()
         self.assertIsNone(service.session)
         self.assertEqual(service._mode, "armed")
+        self.assertIn("timeline", published[-1])
+        phase_events = [
+            event
+            for event in published[-1]["timeline"]["events"]
+            if event.get("type") == "phase" and event.get("name") == "thinking"
+        ]
+        self.assertFalse(phase_events[-1]["on"])
 
     async def test_armed_mode_suppresses_wake_scoring(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")

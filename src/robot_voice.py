@@ -586,8 +586,6 @@ class RobotVoiceService:
             return
         while self._mode == "active":
             await asyncio.sleep(0.5)
-            if self.status.get("status") != "listening":
-                continue
             if bool(self.status.get("assistant_speaking")):
                 continue
             if self._idle_started_at is None:
@@ -612,6 +610,7 @@ class RobotVoiceService:
         self._idle_started_at = None
         self._end_session_event.clear()
         self._mode = "armed"
+        self._close_timeline_phases()
         if config is not None and config.wake_word_enabled and audio is not None:
             chime_path = config.session_end_chime_path
             if Path(chime_path).is_file():
@@ -627,7 +626,13 @@ class RobotVoiceService:
                 status="waiting",
                 assistant_speaking=False,
                 partial_transcript=None,
+                force_timeline=True,
             )
+
+    def _close_timeline_phases(self) -> None:
+        now = time.monotonic()
+        for name in ("hearing", "thinking", "speaking", "user_speech"):
+            self.timeline.add_event({"type": "phase", "t": now, "name": name, "on": False})
 
     async def _run_wake_loop(self, config: VoiceConfig) -> None:
         audio = self.audio
@@ -740,7 +745,7 @@ class RobotVoiceService:
             )
             self.timeline.trim(now)
 
-    def publish(self, config: VoiceConfig, **updates: object) -> None:
+    def publish(self, config: VoiceConfig, *, force_timeline: bool = False, **updates: object) -> None:
         started = time.perf_counter()
         was_idle = (
             self._mode == "active"
@@ -766,7 +771,7 @@ class RobotVoiceService:
         timeline = None
         timeline_seconds = 0.0
         timeline_started = time.perf_counter()
-        if now - self._last_timeline_publish_at >= 1.0 / TIMELINE_PUBLISH_HZ:
+        if force_timeline or now - self._last_timeline_publish_at >= 1.0 / TIMELINE_PUBLISH_HZ:
             self._last_timeline_publish_at = now
             self.timeline.trim(now)
             timeline = self.timeline.snapshot(now)

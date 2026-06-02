@@ -32,10 +32,40 @@ LOOK_AROUND_TOOL_NAME = "look_around"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
+END_SESSION_UTTERANCES = {
+    "bye",
+    "goodbye",
+    "end session",
+    "end the session",
+    "end your session",
+    "end your sessions",
+    "please end session",
+    "please end the session",
+    "please end your session",
+    "please end your sessions",
+    "can you end session",
+    "can you end the session",
+    "can you end your session",
+    "can you end your sessions",
+    "can you please end session",
+    "can you please end the session",
+    "can you please end your session",
+    "can you please end your sessions",
+    "stop listening",
+    "go back to sleep",
+    "that is all",
+    "thats all",
+    "we are done",
+    "were done",
+}
 
 
 def compose_system_prompt(character_prose: str) -> str:
     return f"{character_prose.strip()}\n\n{OPERATIONAL_SYSTEM_PROMPT}"
+
+
+def is_end_session_request(text: str, policy: TurnPolicy = DEFAULT_TURN_POLICY) -> bool:
+    return policy.normalized_transcript(text) in END_SESSION_UTTERANCES
 
 
 @dataclass
@@ -922,6 +952,11 @@ async def handle_scribe_events(
         now = asyncio.get_running_loop().time()
         emit("commit", text=text)
         end_user_speech()
+        if is_end_session_request(text, policy):
+            status(status="listening", partial_transcript=None, last_committed_transcript=text)
+            if session_end_caller:
+                session_end_caller()
+            return
         if is_recent_assistant_echo(text, now):
             emit("echo_suppressed", source="commit", text=text)
             status(status="listening")

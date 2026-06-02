@@ -25,7 +25,7 @@ def format_version(version):
 
 
 def is_recoverable_roboclaw_error(exc: Exception) -> bool:
-    return exc.__class__.__name__ == "PacketTimeoutError"
+    return exc.__class__.__name__ in ("PacketTimeoutError", "SerialException", "SerialTimeoutException")
 
 
 class MotorDriver:

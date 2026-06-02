@@ -12,6 +12,7 @@ from control.safety_gate import SafetyState, apply_safety_to_qpps, evaluate_safe
 class SafetyGateTest(unittest.TestCase):
     def test_is_forward_motion(self):
         self.assertTrue(is_forward_motion(100, 100))
+        self.assertTrue(is_forward_motion(100, -50))
         self.assertFalse(is_forward_motion(-100, 100))
         self.assertFalse(is_forward_motion(0, 0))
 
@@ -53,6 +54,17 @@ class SafetyGateTest(unittest.TestCase):
 
         self.assertFalse(state.blocked)
 
+    def test_stale_sensors_block_when_safety_is_enabled(self):
+        config = SensorsConfig(
+            safety=SafetyConfig(enabled=True),
+            sensors=(SensorEntry("cliff_left", "vl53l0x", 0, role="cliff"),),
+        )
+
+        state = evaluate_safety([], config, sensors_live=False)
+
+        self.assertTrue(state.blocked)
+        self.assertEqual(state.reason, "sensors_stale")
+
     def test_safety_disabled_never_blocks(self):
         config = SensorsConfig(
             safety=SafetyConfig(enabled=False),
@@ -64,7 +76,7 @@ class SafetyGateTest(unittest.TestCase):
 
         self.assertFalse(state.blocked)
 
-    def test_apply_safety_clamps_each_forward_wheel(self):
+    def test_apply_safety_removes_forward_motion(self):
         blocked = SafetyState(blocked=True, reason="test")
 
         left, right = apply_safety_to_qpps(200, 200, blocked)
@@ -73,7 +85,11 @@ class SafetyGateTest(unittest.TestCase):
 
         left, right = apply_safety_to_qpps(-200, 200, blocked)
 
-        self.assertEqual((left, right), (-200, 0))
+        self.assertEqual((left, right), (-200, 200))
+
+        left, right = apply_safety_to_qpps(200, 0, blocked)
+
+        self.assertEqual((left, right), (100, -100))
 
         left, right = apply_safety_to_qpps(-200, -200, blocked)
 

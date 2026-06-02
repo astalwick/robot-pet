@@ -59,6 +59,10 @@ class PacketTimeoutError(Exception):
     pass
 
 
+class SerialException(Exception):
+    pass
+
+
 class TimeoutRoboClaw(FakeRoboClaw):
     def SpeedM1M2(self, address, left_qpps, right_qpps):
         self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
@@ -73,6 +77,12 @@ class TimeoutConfigRoboClaw(FakeRoboClaw):
     def SetTimeout(self, address, timeout):
         self.calls.append(("SetTimeout", address, timeout))
         return False
+
+
+class SerialErrorRoboClaw(FakeRoboClaw):
+    def SpeedM1M2(self, address, left_qpps, right_qpps):
+        self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
+        raise SerialException("serial link dropped")
 
 
 class MotorDriverTest(unittest.TestCase):
@@ -133,6 +143,12 @@ class MotorDriverTest(unittest.TestCase):
 
     def test_set_wheel_speeds_returns_false_on_roboclaw_timeout(self):
         fake = TimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertFalse(driver.set_wheel_speeds(100, 100))
+
+    def test_set_wheel_speeds_returns_false_on_serial_error(self):
+        fake = SerialErrorRoboClaw("/dev/fake", 38400)
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertFalse(driver.set_wheel_speeds(100, 100))

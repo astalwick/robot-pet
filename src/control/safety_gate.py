@@ -14,7 +14,7 @@ class SafetyState:
 
 
 def is_forward_motion(left_qpps: int, right_qpps: int) -> bool:
-    return left_qpps > 0 and right_qpps > 0
+    return left_qpps + right_qpps > 0
 
 
 def evaluate_safety(
@@ -23,8 +23,10 @@ def evaluate_safety(
     *,
     sensors_live: bool,
 ) -> SafetyState:
-    if not config.safety.enabled or not sensors_live:
+    if not config.safety.enabled:
         return SafetyState(blocked=False)
+    if not sensors_live:
+        return SafetyState(blocked=True, reason="sensors_stale")
 
     readings_by_name = {reading["name"]: reading for reading in readings if reading.get("name")}
 
@@ -56,4 +58,7 @@ def apply_safety_to_qpps(
 ) -> tuple[int, int]:
     if not safety.blocked:
         return left_qpps, right_qpps
-    return min(left_qpps, 0), min(right_qpps, 0)
+    if not is_forward_motion(left_qpps, right_qpps):
+        return left_qpps, right_qpps
+    forward_qpps = (left_qpps + right_qpps) / 2
+    return int(left_qpps - forward_qpps), int(right_qpps - forward_qpps)

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from config.teleop import DriveTuning
+from config.teleop import DEFAULT_QPPS, DriveTuning
 from config.sensors import (
     DEFAULT_CONFIG_PATH,
     SensorsConfig,
@@ -25,7 +25,7 @@ from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
 from control.safety_gate import apply_safety_to_qpps, evaluate_safety
-from drivers.motor import MotorDriver
+from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
 from telemetry.messages import (
     drive_status_message,
@@ -56,7 +56,7 @@ class MotionConfig:
     port: str = "/dev/serial0"
     address: int = 0x80
     baud: int = 38400
-    qpps: int = 2425
+    qpps: int = DEFAULT_QPPS
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     telemetry_interval: float = 0.2
@@ -136,8 +136,14 @@ class MotionRunner:
                 motor = self._wait_for_roboclaw()
                 if self.stop_requested:
                     break
-                self._run_motor_loop(motor)
-                motor.cleanup()
+                try:
+                    self._run_motor_loop(motor)
+                except Exception as exc:
+                    if not is_recoverable_roboclaw_error(exc):
+                        raise
+                    log.warning("RoboClaw connection lost; reconnecting: %s", exc)
+                finally:
+                    motor.cleanup()
         finally:
             self._stop_intent_bridge()
             self._stop_drive_listener()
@@ -547,6 +553,8 @@ class MotionRunner:
         now: float | None = None,
         record: bool = True,
     ) -> bool:
+        left_qpps = max(-self.config.qpps, min(self.config.qpps, int(left_qpps)))
+        right_qpps = max(-self.config.qpps, min(self.config.qpps, int(right_qpps)))
         ok = motor.set_wheel_speeds(left_qpps, right_qpps)
         if record:
             self._record_motor_command_result(ok, self.clock() if now is None else now)
@@ -625,7 +633,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", default="/dev/serial0")
     parser.add_argument("--address", type=lambda value: int(value, 0), default=0x80)
     parser.add_argument("--baud", type=int, default=38400)
-    parser.add_argument("--qpps", type=int, default=2425)
+    parser.add_argument("--qpps", type=int, default=DEFAULT_QPPS)
     parser.add_argument("--loop-interval", type=float, default=0.05)
     parser.add_argument("--retry-interval", type=float, default=1.0)
     parser.add_argument("--telemetry-interval", type=float, default=0.2)

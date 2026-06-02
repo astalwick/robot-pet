@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning
+from config.teleop import DEFAULT_CONFIG_PATH, DEFAULT_QPPS, DriveTuning, DriveTuningConfigError, load_drive_tuning
 from control.commands import WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, MotionDrivePublisher
@@ -38,7 +38,7 @@ STATUS_PUBLISH_INTERVAL = 0.5
 @dataclass(frozen=True)
 class TeleopConfig:
     device: str | None = None
-    qpps: int = 2425
+    qpps: int = DEFAULT_QPPS
     drive_tuning: DriveTuning = field(default_factory=DriveTuning)
     loop_interval: float = 0.05
     retry_interval: float = 1.0
@@ -324,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gamepad teleop service (sends commands to robot-motion).")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Drive tuning JSON config path")
     parser.add_argument("--device", help="Read a specific /dev/input/event* controller device")
-    parser.add_argument("--qpps", type=int, default=2425, help="Configured RoboClaw max speed in encoder counts/sec")
+    parser.add_argument("--qpps", type=int, default=DEFAULT_QPPS, help="Configured RoboClaw max speed in encoder counts/sec")
     parser.add_argument("--speed-scale", type=float, help="Normal-mode fraction of --qpps")
     parser.add_argument("--turbo-scale", type=float, help="Turbo-mode fraction of --qpps while LB is held")
     parser.add_argument("--turn-scale", type=float, help="Turn command multiplier")

@@ -11,6 +11,7 @@ from typing import Any
 
 
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/teleop.json"
+DEFAULT_QPPS = 2425
 
 
 class DriveTuningConfigError(ValueError):

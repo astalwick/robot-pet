@@ -90,6 +90,36 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertIn((250, 250), motor.commands)
 
+    def test_safety_stale_sensors_remove_forward_motion(self):
+        motor = FakeMotor()
+        runner = self._runner(motor)
+        runner.sensors_config = SensorsConfig(
+            safety=SafetyConfig(enabled=True),
+            sensors=(SensorEntry("cliff_left", "vl53l0x", 0, role="cliff"),),
+        )
+        runner._sensors_live = False
+        runner._on_drive_command(drive_command(250, 250))
+
+        runner._run_motor_loop(motor)
+
+        self.assertIn((0, 0), motor.commands)
+        self.assertEqual(runner._last_safety_reason, "sensors_stale")
+
+    def test_motor_commands_are_clamped_to_motion_qpps(self):
+        motor = FakeMotor()
+        runner = MotionRunner(
+            MotionConfig(qpps=1000, loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner._on_drive_command(drive_command(999999, -999999))
+
+        runner._run_motor_loop(motor)
+
+        self.assertIn((1000, -1000), motor.commands)
+
     def test_stale_drive_command_stops_motor(self):
         motor = FakeMotor()
         current_time = 0.0

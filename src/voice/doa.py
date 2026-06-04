@@ -13,7 +13,12 @@ from drivers.respeaker import DoAReading
 ROBOT_FRONT_RAW_DEGREES = 270
 STABILITY_DURATION_SECONDS = 0.5
 STABILITY_TOLERANCE_DEGREES = 5
-STABLE_CACHE_MAX_AGE_SECONDS = 2.0
+# Generous enough to survive the round-trip from the user finishing their
+# sentence, through speech-to-text end-of-utterance + commit, to the assistant
+# deciding to call `face_me`. A tight window (a couple seconds) always expired
+# before the tool ran. Still short enough to reject a speaker who spoke once and
+# walked away.
+STABLE_CACHE_MAX_AGE_SECONDS = 10.0
 ALREADY_FACING_TOLERANCE_DEGREES = 15
 
 

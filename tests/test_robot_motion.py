@@ -217,6 +217,23 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(command.linear_x, 0.0)
         self.assertLess(command.angular_z, 0.0)
 
+    def test_motion_service_starts_parameterized_face_me(self):
+        motor = FakeMotor()
+        completed = []
+        runner = self._runner(motor)
+
+        class FakeIntentBridge:
+            def take_pending(self):
+                return ({"tool": "face_me", "relative_degrees": 90}, completed.append)
+
+        runner.intent_bridge = FakeIntentBridge()
+
+        runner._service_intent_requests(now=1.0)
+        command = runner._tick_intent(now=1.1, gamepad_active=False)
+
+        self.assertEqual(command.linear_x, 0.0)
+        self.assertLess(command.angular_z, 0.0)
+
     def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
         calls = 0
 

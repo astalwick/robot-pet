@@ -33,8 +33,25 @@ DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1
 DIAGNOSTIC_TURN_MAX_DURATION = 4.0
 
-KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn")
+# face_me reuses the verified turn command and direction signs from
+# diagnostic_turn. robot-voice supplies a signed angle; robot-motion derives the
+# direction and duration. Positive degrees turn toward the left drive wheel.
+FACE_ME_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
+FACE_ME_DEGREES_PER_SECOND = 55
+FACE_ME_ALREADY_FACING_DEGREES = 15
+FACE_ME_MAX_RELATIVE_DEGREES = 180
+
+KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn", "face_me")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
+
+
+def valid_relative_degrees(value: Any) -> bool:
+    """A real number (not a bool) within the signed turn range."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and -FACE_ME_MAX_RELATIVE_DEGREES <= value <= FACE_ME_MAX_RELATIVE_DEGREES
+    )
 
 
 @dataclass(frozen=True)
@@ -52,6 +69,7 @@ class _ActiveIntent:
     started_at: float
     direction: str | None = None
     duration_seconds: float | None = None
+    relative_degrees: float | None = None
 
 
 class MotionIntentExecutor:
@@ -72,6 +90,7 @@ class MotionIntentExecutor:
         now: float,
         direction: str | None = None,
         duration_seconds: float | None = None,
+        relative_degrees: float | None = None,
     ) -> str | None:
         """Begin a new intent. Returns None on success, error string on failure."""
         if tool not in KNOWN_TOOLS:
@@ -87,11 +106,14 @@ class MotionIntentExecutor:
                 or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
             ):
                 return "invalid_duration"
+        if tool == "face_me" and not valid_relative_degrees(relative_degrees):
+            return "invalid_relative_degrees"
         self._active = _ActiveIntent(
             tool=tool,
             started_at=now,
             direction=direction,
             duration_seconds=duration_seconds,
+            relative_degrees=relative_degrees,
         )
         return None
 
@@ -142,6 +164,20 @@ class MotionIntentExecutor:
                     finished=False,
                     result=None,
                 )
+            self._active = None
+            return IntentTick(command=None, finished=True, result="completed")
+
+        if self._active.tool == "face_me":
+            relative = self._active.relative_degrees
+            if abs(relative) > FACE_ME_ALREADY_FACING_DEGREES:
+                duration = abs(relative) / FACE_ME_DEGREES_PER_SECOND
+                if elapsed < duration:
+                    angular_z = -FACE_ME_ANGULAR_Z if relative > 0 else FACE_ME_ANGULAR_Z
+                    return IntentTick(
+                        command=MotionCommand(linear_x=0.0, angular_z=angular_z),
+                        finished=False,
+                        result=None,
+                    )
             self._active = None
             return IntentTick(command=None, finished=True, result="completed")
 
@@ -271,6 +307,9 @@ class MotionIntentBridge:
             ):
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return
+        if tool == "face_me" and not valid_relative_degrees(request.get("relative_degrees")):
+            self._send(conn, {"ok": False, "error": "invalid_relative_degrees"})
+            return
 
         done_event = threading.Event()
         holder: list[dict[str, Any] | None] = [None]

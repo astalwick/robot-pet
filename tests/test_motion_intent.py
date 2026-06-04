@@ -17,6 +17,9 @@ from control.motion_intent import (
     DIAGNOSTIC_TURN_ANGULAR_Z,
     DIAGNOSTIC_TURN_MAX_DURATION,
     DIAGNOSTIC_TURN_MIN_DURATION,
+    FACE_ME_ANGULAR_Z,
+    FACE_ME_DEGREES_PER_SECOND,
+    FACE_ME_MAX_RELATIVE_DEGREES,
     MOVE_FORWARD_DURATION,
     MOVE_FORWARD_LINEAR_X,
     WIGGLE_ANGULAR_Z,
@@ -134,6 +137,81 @@ class MotionIntentExecutorTest(unittest.TestCase):
             ),
             "invalid_duration",
         )
+    def test_face_me_positive_turns_toward_left_wheel(self):
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("face_me", now=0.0, relative_degrees=90))
+
+        running = executor.tick(now=0.5, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(0.0, -FACE_ME_ANGULAR_Z))
+        self.assertFalse(running.finished)
+
+        # 90 / 55 == 1.636 seconds.
+        done = executor.tick(now=90 / FACE_ME_DEGREES_PER_SECOND + 0.05, gamepad_active=False)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+
+    def test_face_me_negative_turns_toward_right_wheel(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=-90)
+
+        running = executor.tick(now=0.5, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(0.0, FACE_ME_ANGULAR_Z))
+
+    def test_face_me_duration_uses_fifty_five_degrees_per_second(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=110)
+
+        # 110 / 55 == 2.0 seconds: still turning just before, done just after.
+        self.assertFalse(executor.tick(now=1.95, gamepad_active=False).finished)
+        self.assertTrue(executor.tick(now=2.05, gamepad_active=False).finished)
+
+    def test_face_me_within_fifteen_degrees_completes_without_moving(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=15)
+
+        tick = executor.tick(now=0.0, gamepad_active=False)
+        self.assertTrue(tick.finished)
+        self.assertEqual(tick.result, "completed")
+        self.assertIsNone(tick.command)
+
+    def test_face_me_full_turn_stays_below_four_second_maximum(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=FACE_ME_MAX_RELATIVE_DEGREES)
+
+        # 180 / 55 == 3.27 seconds, still under the 4.0s bounded-turn limit.
+        self.assertFalse(executor.tick(now=3.2, gamepad_active=False).finished)
+        self.assertTrue(executor.tick(now=3.3, gamepad_active=False).finished)
+        self.assertLess(FACE_ME_MAX_RELATIVE_DEGREES / FACE_ME_DEGREES_PER_SECOND, 4.0)
+
+    def test_face_me_gamepad_activity_preempts(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=90)
+
+        tick = executor.tick(now=0.2, gamepad_active=True)
+        self.assertTrue(tick.finished)
+        self.assertEqual(tick.result, "preempted_by_gamepad")
+        self.assertFalse(executor.is_active())
+
+    def test_face_me_rejects_invalid_relative_degrees(self):
+        executor = MotionIntentExecutor()
+        self.assertEqual(executor.start("face_me", now=0.0), "invalid_relative_degrees")
+        self.assertEqual(
+            executor.start("face_me", now=0.0, relative_degrees="90"),
+            "invalid_relative_degrees",
+        )
+        self.assertEqual(
+            executor.start("face_me", now=0.0, relative_degrees=True),
+            "invalid_relative_degrees",
+        )
+        self.assertEqual(
+            executor.start("face_me", now=0.0, relative_degrees=181),
+            "invalid_relative_degrees",
+        )
+
+    def test_face_me_accepts_range_endpoints(self):
+        for value in (-180, 0, 180):
+            executor = MotionIntentExecutor()
+            self.assertIsNone(executor.start("face_me", now=0.0, relative_degrees=value))
 
 
 class MotionIntentBridgeTest(unittest.TestCase):
@@ -229,6 +307,48 @@ class MotionIntentBridgeTest(unittest.TestCase):
             ),
             {"ok": False, "error": "invalid_duration"},
         )
+
+    def test_face_me_parameters_arrive_at_main_loop(self):
+        thread, holder = self._send_request_threaded("face_me", relative_degrees=85)
+
+        deadline = time.monotonic() + 2.0
+        pending = None
+        while pending is None and time.monotonic() < deadline:
+            pending = self.bridge.take_pending()
+            if pending is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(pending)
+
+        request, complete = pending
+        self.assertEqual(request, {"tool": "face_me", "relative_degrees": 85})
+        complete({"ok": True, "result": "completed"})
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_face_me_accepts_range_endpoints_at_socket(self):
+        for value in (-180, 0, 180):
+            thread, holder = self._send_request_threaded("face_me", relative_degrees=value)
+
+            deadline = time.monotonic() + 2.0
+            pending = None
+            while pending is None and time.monotonic() < deadline:
+                pending = self.bridge.take_pending()
+                if pending is None:
+                    time.sleep(0.01)
+            self.assertIsNotNone(pending)
+
+            _, complete = pending
+            complete({"ok": True, "result": "completed"})
+            thread.join(timeout=2.0)
+            self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_face_me_rejects_invalid_relative_degrees_at_socket(self):
+        for value in ({}, "90", True, 181, -181):
+            parameters = {} if value == {} else {"relative_degrees": value}
+            self.assertEqual(
+                request_motion_intent(self.socket_path, "face_me", timeout=2.0, **parameters),
+                {"ok": False, "error": "invalid_relative_degrees"},
+            )
 
     def test_completion_failure_result_reaches_client(self):
         thread, holder = self._send_request_threaded("move_forward")

@@ -525,6 +525,7 @@ class MotionRunner:
             now,
             direction=request.get("direction"),
             duration_seconds=request.get("duration_seconds"),
+            relative_degrees=request.get("relative_degrees"),
         )
         if error is not None:
             complete({"ok": False, "error": error})

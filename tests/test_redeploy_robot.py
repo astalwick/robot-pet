@@ -148,6 +148,16 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertIn("if amixer -c 0 sset 'PCM' 100% >/dev/null; then", body)
         self.assertIn("WARNING: could not set PCM volume with amixer; continuing", body)
 
+    def test_setup_installs_respeaker_usb_permissions(self):
+        body = SETUP.read_text()
+
+        self.assertIn("/etc/udev/rules.d/99-robot-pet-respeaker.rules", body)
+        self.assertIn('ATTR{idVendor}=="2886"', body)
+        self.assertIn('ATTR{idProduct}=="001e"', body)
+        self.assertIn('GROUP="audio"', body)
+        self.assertIn("udevadm control --reload-rules", body)
+        self.assertIn("udevadm trigger --action=add --subsystem-match=usb", body)
+
     def test_docs_only_plans_no_restarts(self):
         self.assertEqual(
             planned_services(["docs/ARCHITECTURE.md", "README.md"]),

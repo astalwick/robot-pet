@@ -29,9 +29,14 @@ fi
 sudo usermod -a -G i2c "$USER"
 
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
-echo "[4/14] Adding $USER to input and audio groups..."
+echo "[4/14] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
 sudo usermod -a -G input "$USER"
 sudo usermod -a -G audio "$USER"
+sudo tee /etc/udev/rules.d/99-robot-pet-respeaker.rules >/dev/null <<'UDEV'
+SUBSYSTEM=="usb", ATTR{idVendor}=="2886", ATTR{idProduct}=="001e", GROUP="audio", MODE="0660"
+UDEV
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=2886 --attr-match=idProduct=001e
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[5/14] Configuring UART for RoboClaw..."

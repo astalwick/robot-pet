@@ -19,9 +19,11 @@ Tested on:
   sudo .venv/bin/python scripts/diagnostics/respeaker-flex-python-control/respeaker_get_doa.py --interval 0.1
   ```
 
-The diagnostic currently needs `sudo` because the `pi` user does not have
-permission to open the USB control interface. Add a udev rule before production
-use so `robot-voice` can read DoA without running as root.
+The diagnostic initially needed `sudo` because the `pi` user did not have
+permission to open the USB control interface. `setup.sh` now installs a udev
+rule granting the `audio` group access to USB device `2886:001e`, then reloads
+and triggers udev. After running setup, `robot-voice` and the diagnostic can read
+DoA without running as root.
 
 ## Measured Orientation
 
@@ -154,6 +156,29 @@ Before implementing the timed turn:
 2. Measure robot rotation for several short durations at a conservative angular
    command.
 3. Choose a simple duration-per-degree estimate.
-4. Cap large rear turns so an inaccurate timed turn cannot spin indefinitely.
-5. Later, replace timed angle estimation with BNO085 heading feedback when the
+4. Later, replace timed angle estimation with BNO085 heading feedback when the
    IMU is installed.
+
+## Timed Turn Calibration
+
+Measured with diagnostic angular command `0.3`:
+
+```text
+toward left drive wheel, 1.5 seconds: approximately 80-85 degrees
+toward right drive wheel, 1.5 seconds: approximately 80-85 degrees
+```
+
+Both directions appear symmetrical. Use an initial estimated rotation rate of:
+
+```text
+55 degrees per second
+```
+
+Initial duration estimate:
+
+```python
+duration_seconds = abs(relative_degrees) / 55
+```
+
+The bounded timed-turn maximum is `4 seconds`. This permits a full approximately
+`180 degree` turn while remaining time-bounded and gamepad-preemptible.

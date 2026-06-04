@@ -225,7 +225,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
                 "diagnostic_turn",
                 timeout=2.0,
                 direction="toward_left_wheel",
-                duration_seconds=3.0,
+                duration_seconds=DIAGNOSTIC_TURN_MAX_DURATION + 0.1,
             ),
             {"ok": False, "error": "invalid_duration"},
         )

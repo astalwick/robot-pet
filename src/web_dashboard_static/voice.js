@@ -45,6 +45,18 @@ function voiceStatusClass(status, lastError) {
   return 'muted';
 }
 
+function formatDoa(doa) {
+  if (!doa || !doa.connected) return { text: '--', cls: 'muted' };
+  if (doa.relative_degrees == null) return { text: 'listening', cls: 'muted' };
+  const degrees = doa.relative_degrees;
+  let where;
+  if (Math.abs(degrees) <= 15) where = 'front';
+  else if (degrees > 0) where = `left ${degrees}°`;
+  else where = `right ${-degrees}°`;
+  if (!doa.fresh) return { text: `${where} (${doa.age_seconds}s ago)`, cls: 'muted' };
+  return { text: where, cls: 'ok' };
+}
+
 function voiceActivityRow() {
   return `
       <div class="row voice-activity-row">
@@ -81,6 +93,7 @@ function ensureVoiceRows() {
   if (voiceRowsReady) return;
   document.getElementById('voice-rows').innerHTML = [
     voiceActivityRow(),
+    voiceValueRow('direction', 'speaker dir'),
     voiceValueRow('listen'),
     voiceValueRow('personality'),
     voiceValueRow('input'),
@@ -219,6 +232,8 @@ export function renderVoice(snapshot, sources) {
 
   ensureVoiceRows();
   setVoiceValue('status', cardStatus.text, cardStatus.cls);
+  const doa = formatDoa(voice.doa);
+  setVoiceValue('direction', doa.text, doa.cls);
   setVoiceValue('listen', wakeOn ? 'wake on' : 'wake off', wakeOn ? 'ok' : 'muted');
   const personality = voice.personality || '--';
   setVoiceValue('personality', personality, personality === '--' ? 'muted' : '');

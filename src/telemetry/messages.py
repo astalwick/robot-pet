@@ -289,6 +289,7 @@ def voice_update(
     wake_fire_count: int | None = None,
     wake_last_fire_at: float | None = None,
     personality: str | None = None,
+    doa: dict[str, Any] | None = None,
     timeline: dict[str, Any] | None = None,
     cost: dict[str, Any] | None = None,
     now: float | None = None,
@@ -344,6 +345,8 @@ def voice_update(
         payload["wake_last_fire_at"] = wake_last_fire_at
     if personality is not None:
         payload["personality"] = personality
+    if doa is not None:
+        payload["doa"] = doa
     if timeline is not None:
         payload["timeline"] = timeline
     if cost is not None:

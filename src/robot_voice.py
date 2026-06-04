@@ -759,6 +759,17 @@ class RobotVoiceService:
             relative_degrees=relative_degrees,
         )
 
+    def doa_snapshot(self, now: float | None = None) -> dict[str, object]:
+        age = self.doa_tracker.age(now if now is not None else time.monotonic())
+        if age is None:
+            return {"connected": self.doa_reader is not None, "relative_degrees": None, "age_seconds": None, "fresh": False}
+        return {
+            "connected": self.doa_reader is not None,
+            "relative_degrees": to_relative_degrees(self.doa_tracker.stable_angle),
+            "age_seconds": round(age, 1),
+            "fresh": age <= STABLE_CACHE_MAX_AGE_SECONDS,
+        }
+
     async def stop_all(self) -> None:
         if self._orchestrator_task is not None:
             orchestrator_task = self._orchestrator_task
@@ -904,6 +915,7 @@ class RobotVoiceService:
             wake_fire_count=optional_int(self.status["wake_fire_count"]),
             wake_last_fire_at=optional_float(self.status["wake_last_fire_at"]),
             personality=optional_text(self.status["personality"]) or config.personality,
+            doa=self.doa_snapshot(now),
             timeline=timeline,
             cost=cost_snapshot(self.usage),
         )

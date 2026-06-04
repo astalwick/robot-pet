@@ -515,6 +515,32 @@ class RobotVoiceDoATest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, {"ok": True, "result": "completed"})
 
+    def test_doa_snapshot_without_cache(self):
+        service = self._service()
+        self.assertEqual(
+            service.doa_snapshot(),
+            {"connected": False, "relative_degrees": None, "age_seconds": None, "fresh": False},
+        )
+
+    def test_doa_snapshot_fresh_cache(self):
+        service = self._service()
+        service.doa_reader = FakeDoAReader()
+        service.doa_tracker.stable_angle = 0
+        service.doa_tracker.stable_at = time.monotonic()
+        snapshot = service.doa_snapshot()
+        self.assertTrue(snapshot["connected"])
+        self.assertEqual(snapshot["relative_degrees"], 90)
+        self.assertTrue(snapshot["fresh"])
+
+    def test_doa_snapshot_stale_cache(self):
+        service = self._service()
+        service.doa_tracker.stable_angle = 0
+        service.doa_tracker.stable_at = time.monotonic() - 3.0
+        snapshot = service.doa_snapshot()
+        self.assertEqual(snapshot["relative_degrees"], 90)
+        self.assertFalse(snapshot["fresh"])
+        self.assertGreaterEqual(snapshot["age_seconds"], 2.0)
+
     def test_face_me_already_facing_skips_motion(self):
         service = self._service()
         service.doa_tracker.stable_angle = 270

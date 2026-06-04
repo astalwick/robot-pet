@@ -216,6 +216,31 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["barge_in_event_count"], 2)
         self.assertEqual(message["barge_in_last_event"], "commit: explicit_interrupt")
 
+    def test_voice_update_omits_doa_when_absent_and_carries_it_when_present(self):
+        without_doa = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+        )
+        self.assertNotIn("doa", without_doa)
+
+        with_doa = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+            doa={"connected": True, "relative_degrees": 90, "age_seconds": 0.3, "fresh": True},
+        )
+        self.assertEqual(with_doa["doa"]["relative_degrees"], 90)
+        self.assertTrue(with_doa["doa"]["fresh"])
+
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)
 

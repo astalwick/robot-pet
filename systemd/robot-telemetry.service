@@ -14,7 +14,12 @@ RestartSec=2
 TimeoutStopSec=10
 RuntimeDirectory=robot-pet
 RuntimeDirectoryMode=0755
-RuntimeDirectoryPreserve=restart
+# yes, not restart: several services share /run/robot-pet. With "restart",
+# stopping any one of them makes systemd delete the whole directory, wiping the
+# other services' sockets (e.g. motion-intent.sock) out from under live
+# processes. "yes" means systemd never tears it down; each service unlinks and
+# rebinds only its own socket on start. /run is tmpfs, cleared on reboot.
+RuntimeDirectoryPreserve=yes
 StandardOutput=journal
 StandardError=journal
 

@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import (
     END_SESSION_TOOL_NAME,
+    FACE_ME_TOOL_NAME,
     INSPECT_ROBOT_TOOL_NAME,
     LOOK_AROUND_TOOL_NAME,
     ActiveTurn,
@@ -448,6 +449,107 @@ class AssistantStreamingTest(unittest.TestCase):
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output["battery"]["status"], "ok")
             self.assertFalse(tool_output["sensors"]["available"])
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_invokes_face_me_caller(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=FACE_ME_TOOL_NAME,
+                                    call_id="call_face",
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="Turning to face you."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            calls = []
+
+            def face_me_caller():
+                calls.append(True)
+                return {"ok": True, "result": "completed", "relative_degrees": 90}
+
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "Face me."}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                    face_me_caller=face_me_caller,
+                )
+            ]
+
+            self.assertEqual("".join(chunks), "Turning to face you.")
+            self.assertEqual(len(calls), 1)
+            tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
+            self.assertEqual(tool_output, {"ok": True, "result": "completed", "relative_degrees": 90})
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_face_me_unavailable_without_caller(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=FACE_ME_TOOL_NAME,
+                                    call_id="call_face",
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="Sorry."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            async for _chunk in stream_openai_words(
+                [{"role": "user", "content": "Face me."}],
+                SimpleNamespace(responses=fake_responses),
+                VoiceState("test-voice"),
+            ):
+                pass
+
+            tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
+            self.assertEqual(tool_output, {"ok": False, "error": "face_me_unavailable"})
 
         asyncio.run(run())
 

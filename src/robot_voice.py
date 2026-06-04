@@ -16,7 +16,7 @@ from pathlib import Path
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
 from control.motion_intent import request_motion_intent
-from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
+from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import (
@@ -29,6 +29,12 @@ from telemetry.paths import (
 from telemetry.messages import encode_json_line
 from telemetry.socket_client import publish_message, read_telemetry_snapshot
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
+from voice.doa import (
+    ALREADY_FACING_TOLERANCE_DEGREES,
+    STABLE_CACHE_MAX_AGE_SECONDS,
+    DoATracker,
+    to_relative_degrees,
+)
 from voice.personality import load_personalities
 from voice.session import VoiceSession
 from voice.usage import UsageTotals, cost_snapshot
@@ -44,6 +50,9 @@ TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
 PLAYBACK_RMS_STALE_SECS = 0.25
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
+DOA_POLL_INTERVAL_SECONDS = 0.1
+DOA_REOPEN_DELAY_SECONDS = 1.0
+FACE_ME_MOTION_TIMEOUT_SECONDS = 5.0
 DEFAULT_CAMERA_SNAPSHOT_URL = f"http://127.0.0.1:{DEFAULT_CAMERA_PORT}/snapshot.jpg"
 
 log = setup_logging("robot-voice")
@@ -198,6 +207,10 @@ class RobotVoiceService:
         self.session: VoiceSession | None = None
         self.usage = UsageTotals()
         self.audio: ReSpeakerAudio | None = None
+        self.doa_tracker = DoATracker()
+        self.doa_reader: ReSpeakerDoA | None = None
+        self._doa_task: asyncio.Task[None] | None = None
+        self._doa_error_logged = False
         self._io_stop_event: asyncio.Event | None = None
         self.active_config: VoiceConfig | None = None
         self._mode: str | None = None
@@ -447,6 +460,9 @@ class RobotVoiceService:
             self.publish(config, status="error", last_error=str(exc))
             return False
 
+        self._doa_error_logged = False
+        self._doa_task = asyncio.create_task(self._run_doa_loop())
+
         try:
             detector = WakeWordDetector(
                 config.wake_word_model_path,
@@ -552,6 +568,7 @@ class RobotVoiceService:
             session_end_caller=self.request_end_session,
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             robot_inspection_caller=lambda: read_telemetry_snapshot(self.telemetry_subscribe_socket),
+            face_me_caller=self.face_me_caller,
             personalities=self.personalities,
             profile_every=self.profile_every,
             usage=self.usage,
@@ -686,6 +703,62 @@ class RobotVoiceService:
                 continue
             self._wake_event.set()
 
+    def _open_doa_reader(self) -> ReSpeakerDoA:
+        # Hardware boundary, kept tiny so tests can swap in a fake reader.
+        return ReSpeakerDoA.open()
+
+    async def _run_doa_loop(self) -> None:
+        while True:
+            if self.doa_reader is None:
+                try:
+                    self.doa_reader = await asyncio.to_thread(self._open_doa_reader)
+                    log.info("ReSpeaker DoA reader opened")
+                    self._doa_error_logged = False
+                except Exception as exc:
+                    if not self._doa_error_logged:
+                        log.warning("ReSpeaker DoA unavailable: %s", exc)
+                        self._doa_error_logged = True
+                    await asyncio.sleep(DOA_REOPEN_DELAY_SECONDS)
+                    continue
+
+            try:
+                reading = await asyncio.to_thread(self.doa_reader.read)
+            except Exception as exc:
+                if not self._doa_error_logged:
+                    log.warning("ReSpeaker DoA read failed: %s", exc)
+                    self._doa_error_logged = True
+                self._close_doa_reader()
+                await asyncio.sleep(DOA_REOPEN_DELAY_SECONDS)
+                continue
+
+            self._doa_error_logged = False
+            assistant_speaking = bool(self.status.get("assistant_speaking"))
+            self.doa_tracker.update(reading, time.monotonic(), assistant_speaking)
+            await asyncio.sleep(DOA_POLL_INTERVAL_SECONDS)
+
+    def _close_doa_reader(self) -> None:
+        if self.doa_reader is None:
+            return
+        with suppress(Exception):
+            self.doa_reader.close()
+        self.doa_reader = None
+
+    def face_me_caller(self) -> dict[str, object]:
+        age = self.doa_tracker.age(time.monotonic())
+        if age is None:
+            return {"ok": False, "error": "speaker_direction_unavailable"}
+        if age > STABLE_CACHE_MAX_AGE_SECONDS:
+            return {"ok": False, "error": "speaker_direction_stale"}
+        relative_degrees = to_relative_degrees(self.doa_tracker.stable_angle)
+        if abs(relative_degrees) <= ALREADY_FACING_TOLERANCE_DEGREES:
+            return {"ok": True, "result": "already_facing", "relative_degrees": relative_degrees}
+        return request_motion_intent(
+            self.motion_intent_socket,
+            "face_me",
+            timeout=FACE_ME_MOTION_TIMEOUT_SECONDS,
+            relative_degrees=relative_degrees,
+        )
+
     async def stop_all(self) -> None:
         if self._orchestrator_task is not None:
             orchestrator_task = self._orchestrator_task
@@ -715,6 +788,12 @@ class RobotVoiceService:
             with suppress(asyncio.CancelledError):
                 await self._sampler_task
             self._sampler_task = None
+        if self._doa_task is not None:
+            self._doa_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._doa_task
+            self._doa_task = None
+        self._close_doa_reader()
         if self.session is not None:
             await self.session.stop()
             self.session = None

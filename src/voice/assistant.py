@@ -30,6 +30,7 @@ WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
 LOOK_AROUND_TOOL_NAME = "look_around"
 INSPECT_ROBOT_TOOL_NAME = "inspect_robot"
+FACE_ME_TOOL_NAME = "face_me"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
@@ -247,6 +248,23 @@ INSPECT_ROBOT_TOOL = {
 }
 
 
+FACE_ME_TOOL = {
+    "type": "function",
+    "name": FACE_ME_TOOL_NAME,
+    "description": (
+        "Turn the robot to face whoever is speaking, based on the most recent direction "
+        "the voice came from. Use this when the user asks the robot to look at them or face them."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
@@ -257,6 +275,7 @@ ASSISTANT_TOOLS = [
     MOVE_FORWARD_TOOL,
     LOOK_AROUND_TOOL,
     INSPECT_ROBOT_TOOL,
+    FACE_ME_TOOL,
     WEB_SEARCH_TOOL,
 ]
 
@@ -523,6 +542,7 @@ async def stream_openai_words(
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
+    face_me_caller: Callable[[], dict[str, Any]] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -660,6 +680,11 @@ async def stream_openai_words(
                         result = {"ok": False, "error": str(exc)}
                     else:
                         result = inspect_robot_snapshot(snapshot)
+            elif name == FACE_ME_TOOL_NAME:
+                if face_me_caller is None:
+                    result = {"ok": False, "error": "face_me_unavailable"}
+                else:
+                    result = await asyncio.to_thread(face_me_caller)
             else:
                 result = {"ok": False, "error": "unsupported tool"}
 
@@ -704,6 +729,7 @@ async def run_assistant_turn(
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
+    face_me_caller: Callable[[], dict[str, Any]] | None = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -720,6 +746,7 @@ async def run_assistant_turn(
             camera_snapshot_caller,
             usage,
             robot_inspection_caller,
+            face_me_caller,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
@@ -758,6 +785,7 @@ async def handle_scribe_events(
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     stop_playback_now: Callable[[], Any] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
+    face_me_caller: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -975,6 +1003,7 @@ async def handle_scribe_events(
                     session_end_caller=session_end_caller,
                     camera_snapshot_caller=camera_snapshot_caller,
                     robot_inspection_caller=robot_inspection_caller,
+                    face_me_caller=face_me_caller,
                 ),
                 timeout=ASSISTANT_TURN_TIMEOUT_SECS,
             )

@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 import unittest
 from contextlib import suppress
@@ -11,8 +12,10 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+import robot_voice
 from robot_voice import RobotVoiceService, TimelineBuffer
 from config.voice import load_voice_config
+from drivers.respeaker import DoAReading
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -387,6 +390,144 @@ def service_config(**kwargs):
     from config.voice import VoiceConfig
 
     return VoiceConfig(**kwargs)
+
+
+class FakeDoAReader:
+    def __init__(self, readings=None, fail_reads=False):
+        self.readings = readings or [DoAReading(270, True)]
+        self.fail_reads = fail_reads
+        self.read_count = 0
+        self.closed = False
+
+    def read(self):
+        self.read_count += 1
+        if self.fail_reads:
+            raise OSError("USB read failed")
+        return self.readings[(self.read_count - 1) % len(self.readings)]
+
+    def close(self):
+        self.closed = True
+
+
+async def wait_for(predicate, timeout=1.0):
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.005)
+    return False
+
+
+class RobotVoiceDoATest(unittest.IsolatedAsyncioTestCase):
+    def _service(self):
+        return RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+
+    async def _cancel(self, task):
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    async def test_doa_loop_records_readings_in_tracker(self):
+        service = self._service()
+        reader = FakeDoAReader([DoAReading(270, True)])
+        service._open_doa_reader = lambda: reader
+
+        with mock.patch.object(robot_voice, "DOA_POLL_INTERVAL_SECONDS", 0.001):
+            with mock.patch.object(service.doa_tracker, "update", wraps=service.doa_tracker.update) as update:
+                task = asyncio.create_task(service._run_doa_loop())
+                self.assertTrue(await wait_for(lambda: update.called))
+                await self._cancel(task)
+
+        self.assertEqual(update.call_args.args[0], DoAReading(270, True))
+        self.assertIs(service.doa_reader, reader)
+
+    async def test_doa_read_failure_does_not_terminate_loop(self):
+        service = self._service()
+        reader = FakeDoAReader(fail_reads=True)
+        service._open_doa_reader = lambda: reader
+
+        with mock.patch.object(robot_voice, "DOA_POLL_INTERVAL_SECONDS", 0.001):
+            with mock.patch.object(robot_voice, "DOA_REOPEN_DELAY_SECONDS", 0.001):
+                task = asyncio.create_task(service._run_doa_loop())
+                self.assertTrue(await wait_for(lambda: reader.read_count >= 2))
+                self.assertFalse(task.done())
+                self.assertTrue(reader.closed)
+                await self._cancel(task)
+
+    async def test_unavailable_usb_does_not_terminate_loop(self):
+        service = self._service()
+
+        def boom():
+            raise OSError("device not found")
+
+        service._open_doa_reader = boom
+
+        with mock.patch.object(robot_voice, "DOA_REOPEN_DELAY_SECONDS", 0.001):
+            task = asyncio.create_task(service._run_doa_loop())
+            self.assertTrue(await wait_for(lambda: service._doa_error_logged))
+            self.assertFalse(task.done())
+            self.assertIsNone(service.doa_reader)
+            await self._cancel(task)
+
+    async def test_stop_closes_reader_and_cancels_task(self):
+        service = self._service()
+        reader = FakeDoAReader([DoAReading(270, True)])
+        service._open_doa_reader = lambda: reader
+
+        with mock.patch.object(robot_voice, "DOA_POLL_INTERVAL_SECONDS", 0.001):
+            service._doa_task = asyncio.create_task(service._run_doa_loop())
+            self.assertTrue(await wait_for(lambda: service.doa_reader is reader))
+            await service.stop_all()
+
+        self.assertIsNone(service._doa_task)
+        self.assertIsNone(service.doa_reader)
+        self.assertTrue(reader.closed)
+
+    def test_face_me_unavailable_without_cache(self):
+        service = self._service()
+        self.assertEqual(
+            service.face_me_caller(),
+            {"ok": False, "error": "speaker_direction_unavailable"},
+        )
+
+    def test_face_me_stale_cache(self):
+        service = self._service()
+        service.doa_tracker.stable_angle = 84
+        service.doa_tracker.stable_at = time.monotonic() - 3.0
+        self.assertEqual(
+            service.face_me_caller(),
+            {"ok": False, "error": "speaker_direction_stale"},
+        )
+
+    def test_face_me_fresh_cache_calls_motion(self):
+        service = self._service()
+        service.doa_tracker.stable_angle = 0
+        service.doa_tracker.stable_at = time.monotonic()
+
+        with mock.patch.object(
+            robot_voice, "request_motion_intent", return_value={"ok": True, "result": "completed"}
+        ) as request:
+            result = service.face_me_caller()
+
+        request.assert_called_once_with(
+            service.motion_intent_socket, "face_me", timeout=5.0, relative_degrees=90
+        )
+        self.assertEqual(result, {"ok": True, "result": "completed"})
+
+    def test_face_me_already_facing_skips_motion(self):
+        service = self._service()
+        service.doa_tracker.stable_angle = 270
+        service.doa_tracker.stable_at = time.monotonic()
+
+        with mock.patch.object(robot_voice, "request_motion_intent") as request:
+            result = service.face_me_caller()
+
+        request.assert_not_called()
+        self.assertEqual(
+            result,
+            {"ok": True, "result": "already_facing", "relative_degrees": 0},
+        )
 
 
 if __name__ == "__main__":

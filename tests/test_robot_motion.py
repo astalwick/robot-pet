@@ -193,6 +193,30 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertTrue(any(left > 0 and right > 0 for left, right in motor.commands))
 
+    def test_motion_service_starts_parameterized_diagnostic_turn(self):
+        motor = FakeMotor()
+        completed = []
+        runner = self._runner(motor)
+
+        class FakeIntentBridge:
+            def take_pending(self):
+                return (
+                    {
+                        "tool": "diagnostic_turn",
+                        "direction": "toward_left_wheel",
+                        "duration_seconds": 0.5,
+                    },
+                    completed.append,
+                )
+
+        runner.intent_bridge = FakeIntentBridge()
+
+        runner._service_intent_requests(now=1.0)
+        command = runner._tick_intent(now=1.1, gamepad_active=False)
+
+        self.assertEqual(command.linear_x, 0.0)
+        self.assertLess(command.angular_z, 0.0)
+
     def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
         calls = 0
 

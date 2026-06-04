@@ -29,8 +29,12 @@ WIGGLE_HALF_DURATION = 0.25
 WIGGLE_ANGULAR_Z = 0.5
 MOVE_FORWARD_DURATION = 0.5
 MOVE_FORWARD_LINEAR_X = 0.3
+DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
+DIAGNOSTIC_TURN_MIN_DURATION = 0.1
+DIAGNOSTIC_TURN_MAX_DURATION = 2.0
 
-KNOWN_TOOLS = ("wiggle", "move_forward")
+KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn")
+DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,8 @@ class IntentTick:
 class _ActiveIntent:
     tool: str
     started_at: float
+    direction: str | None = None
+    duration_seconds: float | None = None
 
 
 class MotionIntentExecutor:
@@ -60,13 +66,33 @@ class MotionIntentExecutor:
     def active_tool(self) -> str | None:
         return self._active.tool if self._active else None
 
-    def start(self, tool: str, now: float) -> str | None:
+    def start(
+        self,
+        tool: str,
+        now: float,
+        direction: str | None = None,
+        duration_seconds: float | None = None,
+    ) -> str | None:
         """Begin a new intent. Returns None on success, error string on failure."""
         if tool not in KNOWN_TOOLS:
             return "unknown_tool"
         if self._active is not None:
             return "busy"
-        self._active = _ActiveIntent(tool=tool, started_at=now)
+        if tool == "diagnostic_turn":
+            if direction not in DIAGNOSTIC_TURN_DIRECTIONS:
+                return "invalid_direction"
+            if (
+                not isinstance(duration_seconds, (int, float))
+                or isinstance(duration_seconds, bool)
+                or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
+            ):
+                return "invalid_duration"
+        self._active = _ActiveIntent(
+            tool=tool,
+            started_at=now,
+            direction=direction,
+            duration_seconds=duration_seconds,
+        )
         return None
 
     def tick(self, now: float, gamepad_active: bool) -> IntentTick:
@@ -98,6 +124,21 @@ class MotionIntentExecutor:
             if elapsed < MOVE_FORWARD_DURATION:
                 return IntentTick(
                     command=MotionCommand(linear_x=MOVE_FORWARD_LINEAR_X, angular_z=0.0),
+                    finished=False,
+                    result=None,
+                )
+            self._active = None
+            return IntentTick(command=None, finished=True, result="completed")
+
+        if self._active.tool == "diagnostic_turn":
+            if elapsed < self._active.duration_seconds:
+                angular_z = (
+                    -DIAGNOSTIC_TURN_ANGULAR_Z
+                    if self._active.direction == "toward_left_wheel"
+                    else DIAGNOSTIC_TURN_ANGULAR_Z
+                )
+                return IntentTick(
+                    command=MotionCommand(linear_x=0.0, angular_z=angular_z),
                     finished=False,
                     result=None,
                 )
@@ -159,7 +200,7 @@ class MotionIntentBridge:
         except FileNotFoundError:
             pass
 
-    def take_pending(self) -> tuple[str, Callable[[dict[str, Any]], None]] | None:
+    def take_pending(self) -> tuple[dict[str, Any], Callable[[dict[str, Any]], None]] | None:
         with self._lock:
             if self._pending is None:
                 return None
@@ -173,7 +214,7 @@ class MotionIntentBridge:
             holder[0] = response
             done_event.set()
 
-        return entry["tool"], complete
+        return entry["request"], complete
 
     def _serve(self) -> None:
         while not self._stop.is_set():
@@ -209,11 +250,27 @@ class MotionIntentBridge:
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._send(conn, {"ok": False, "error": "bad_request"})
             return
+        if not isinstance(request, dict):
+            self._send(conn, {"ok": False, "error": "bad_request"})
+            return
 
         tool = request.get("tool", "")
         if tool not in KNOWN_TOOLS:
             self._send(conn, {"ok": False, "error": "unknown_tool"})
             return
+        if tool == "diagnostic_turn":
+            direction = request.get("direction")
+            duration_seconds = request.get("duration_seconds")
+            if direction not in DIAGNOSTIC_TURN_DIRECTIONS:
+                self._send(conn, {"ok": False, "error": "invalid_direction"})
+                return
+            if (
+                not isinstance(duration_seconds, (int, float))
+                or isinstance(duration_seconds, bool)
+                or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
+            ):
+                self._send(conn, {"ok": False, "error": "invalid_duration"})
+                return
 
         done_event = threading.Event()
         holder: list[dict[str, Any] | None] = [None]
@@ -221,7 +278,7 @@ class MotionIntentBridge:
             if self._pending is not None:
                 self._send(conn, {"ok": False, "error": "busy"})
                 return
-            self._pending = {"tool": tool, "done_event": done_event, "holder": holder}
+            self._pending = {"request": request, "done_event": done_event, "holder": holder}
 
         if not done_event.wait(timeout=self.INTENT_MAX_SECONDS):
             with self._lock:
@@ -244,6 +301,7 @@ def request_motion_intent(
     socket_path: str,
     tool: str,
     timeout: float = 2.0,
+    **parameters: Any,
 ) -> dict[str, Any]:
     """Send a motion intent request over a Unix socket and wait for one reply.
 
@@ -252,7 +310,7 @@ def request_motion_intent(
     handler) speaks the error back through the LLM, so it must always get a
     response it can serialize.
     """
-    request = json.dumps({"tool": tool}, separators=(",", ":")) + "\n"
+    request = json.dumps({"tool": tool, **parameters}, separators=(",", ":")) + "\n"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(timeout)

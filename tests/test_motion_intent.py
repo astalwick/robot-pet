@@ -14,6 +14,9 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from control.commands import MotionCommand
 from control.motion_intent import (
+    DIAGNOSTIC_TURN_ANGULAR_Z,
+    DIAGNOSTIC_TURN_MAX_DURATION,
+    DIAGNOSTIC_TURN_MIN_DURATION,
     MOVE_FORWARD_DURATION,
     MOVE_FORWARD_LINEAR_X,
     WIGGLE_ANGULAR_Z,
@@ -75,6 +78,63 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertIsNone(tick.command)
         self.assertFalse(executor.is_active())
 
+    def test_diagnostic_turn_toward_left_wheel_runs_for_requested_duration(self):
+        executor = MotionIntentExecutor()
+        self.assertIsNone(
+            executor.start(
+                "diagnostic_turn",
+                now=0.0,
+                direction="toward_left_wheel",
+                duration_seconds=0.5,
+            )
+        )
+
+        running = executor.tick(now=0.4, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(0.0, -DIAGNOSTIC_TURN_ANGULAR_Z))
+
+        done = executor.tick(now=0.5, gamepad_active=False)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+
+    def test_diagnostic_turn_toward_right_wheel_uses_opposite_direction(self):
+        executor = MotionIntentExecutor()
+        executor.start(
+            "diagnostic_turn",
+            now=0.0,
+            direction="toward_right_wheel",
+            duration_seconds=0.5,
+        )
+
+        running = executor.tick(now=0.1, gamepad_active=False)
+
+        self.assertEqual(running.command, MotionCommand(0.0, DIAGNOSTIC_TURN_ANGULAR_Z))
+
+    def test_diagnostic_turn_rejects_invalid_parameters(self):
+        executor = MotionIntentExecutor()
+
+        self.assertEqual(
+            executor.start("diagnostic_turn", now=0.0, direction="left", duration_seconds=0.5),
+            "invalid_direction",
+        )
+        self.assertEqual(
+            executor.start(
+                "diagnostic_turn",
+                now=0.0,
+                direction="toward_left_wheel",
+                duration_seconds=DIAGNOSTIC_TURN_MIN_DURATION - 0.01,
+            ),
+            "invalid_duration",
+        )
+        self.assertEqual(
+            executor.start(
+                "diagnostic_turn",
+                now=0.0,
+                direction="toward_left_wheel",
+                duration_seconds=DIAGNOSTIC_TURN_MAX_DURATION + 0.01,
+            ),
+            "invalid_duration",
+        )
+
 
 class MotionIntentBridgeTest(unittest.TestCase):
     def setUp(self):
@@ -87,11 +147,11 @@ class MotionIntentBridgeTest(unittest.TestCase):
         self.bridge.stop()
         self.tmpdir.cleanup()
 
-    def _send_request_threaded(self, tool):
+    def _send_request_threaded(self, tool, **parameters):
         result_holder: list[dict] = []
 
         def worker():
-            result_holder.append(request_motion_intent(self.socket_path, tool, timeout=2.0))
+            result_holder.append(request_motion_intent(self.socket_path, tool, timeout=2.0, **parameters))
 
         thread = threading.Thread(target=worker)
         thread.start()
@@ -108,8 +168,8 @@ class MotionIntentBridgeTest(unittest.TestCase):
                 time.sleep(0.01)
         self.assertIsNotNone(pending)
 
-        tool, complete = pending
-        self.assertEqual(tool, "wiggle")
+        request, complete = pending
+        self.assertEqual(request, {"tool": "wiggle"})
         complete({"ok": True, "result": "completed"})
 
         thread.join(timeout=2.0)
@@ -119,6 +179,56 @@ class MotionIntentBridgeTest(unittest.TestCase):
     def test_unknown_tool_rejected_at_socket(self):
         result = request_motion_intent(self.socket_path, "spin", timeout=2.0)
         self.assertEqual(result, {"ok": False, "error": "unknown_tool"})
+
+    def test_diagnostic_turn_parameters_arrive_at_main_loop(self):
+        thread, holder = self._send_request_threaded(
+            "diagnostic_turn",
+            direction="toward_left_wheel",
+            duration_seconds=0.5,
+        )
+
+        deadline = time.monotonic() + 2.0
+        pending = None
+        while pending is None and time.monotonic() < deadline:
+            pending = self.bridge.take_pending()
+            if pending is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(pending)
+
+        request, complete = pending
+        self.assertEqual(
+            request,
+            {
+                "tool": "diagnostic_turn",
+                "direction": "toward_left_wheel",
+                "duration_seconds": 0.5,
+            },
+        )
+        complete({"ok": True, "result": "completed"})
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_diagnostic_turn_rejects_invalid_parameters_at_socket(self):
+        self.assertEqual(
+            request_motion_intent(
+                self.socket_path,
+                "diagnostic_turn",
+                timeout=2.0,
+                direction="left",
+                duration_seconds=0.5,
+            ),
+            {"ok": False, "error": "invalid_direction"},
+        )
+        self.assertEqual(
+            request_motion_intent(
+                self.socket_path,
+                "diagnostic_turn",
+                timeout=2.0,
+                direction="toward_left_wheel",
+                duration_seconds=3.0,
+            ),
+            {"ok": False, "error": "invalid_duration"},
+        )
 
     def test_completion_failure_result_reaches_client(self):
         thread, holder = self._send_request_threaded("move_forward")

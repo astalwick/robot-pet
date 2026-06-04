@@ -519,8 +519,13 @@ class MotionRunner:
         pending = self.intent_bridge.take_pending()
         if pending is None:
             return
-        tool, complete = pending
-        error = self.intent_executor.start(tool, now)
+        request, complete = pending
+        error = self.intent_executor.start(
+            request["tool"],
+            now,
+            direction=request.get("direction"),
+            duration_seconds=request.get("duration_seconds"),
+        )
         if error is not None:
             complete({"ok": False, "error": error})
             return

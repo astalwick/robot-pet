@@ -6,6 +6,8 @@ import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -59,6 +61,72 @@ class PlaybackPcmBuffer:
 
 class ReSpeakerError(RuntimeError):
     pass
+
+
+RESPEAKER_USB_VID = 0x2886
+RESPEAKER_USB_PID = 0x001E
+USB_VENDOR_DEVICE_IN = 0xC0
+DOA_CMD_ID = 18
+DOA_RESOURCE_ID = 20
+DOA_RESPONSE_LENGTH = 5
+
+
+@dataclass(frozen=True)
+class DoAReading:
+    angle_degrees: int
+    speech_detected: bool
+
+
+def parse_doa_response(response: Any) -> DoAReading:
+    values = response.tolist() if hasattr(response, "tolist") else list(response)
+    if len(values) < 4:
+        raise ReSpeakerError(f"Malformed ReSpeaker DoA response: {values}")
+
+    angle_degrees = values[1] + values[2] * 256
+    if not 0 <= angle_degrees < 360:
+        raise ReSpeakerError(f"Invalid ReSpeaker DoA angle: {angle_degrees}")
+
+    return DoAReading(angle_degrees, bool(values[3]))
+
+
+class ReSpeakerDoA:
+    def __init__(self, device: Any):
+        self.device = device
+
+    @classmethod
+    def open(
+        cls,
+        vid: int = RESPEAKER_USB_VID,
+        pid: int = RESPEAKER_USB_PID,
+    ) -> "ReSpeakerDoA":
+        import usb.core
+
+        device = usb.core.find(idVendor=vid, idProduct=pid)
+        if device is None:
+            raise ReSpeakerError(
+                f"ReSpeaker USB control device not found: {vid:#06x}:{pid:#06x}"
+            )
+        return cls(device)
+
+    def read(self) -> DoAReading:
+        try:
+            response = self.device.ctrl_transfer(
+                USB_VENDOR_DEVICE_IN,
+                0,
+                0x80 | DOA_CMD_ID,
+                DOA_RESOURCE_ID,
+                DOA_RESPONSE_LENGTH,
+                1000,
+            )
+        except Exception as exc:
+            raise ReSpeakerError(f"ReSpeaker DoA read failed: {exc}") from exc
+
+        return parse_doa_response(response)
+
+    def close(self) -> None:
+        import usb.util
+
+        usb.util.dispose_resources(self.device)
 
 
 def format_sounddevice_devices(kind: str) -> str:

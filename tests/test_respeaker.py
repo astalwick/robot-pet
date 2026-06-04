@@ -2,20 +2,25 @@ import array
 import asyncio
 import os
 import sys
+import types
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from drivers.respeaker import (
+    DoAReading,
     MIC_BLOCKSIZE,
     MIC_SUBSCRIBER_QUEUE_SIZE,
     PlaybackPcmBuffer,
     ReSpeakerAudio,
+    ReSpeakerDoA,
     ReSpeakerError,
     apply_pcm16_gain,
     extract_mono_channel,
     format_sounddevice_devices,
+    parse_doa_response,
     sounddevice_selector,
 )
 
@@ -26,6 +31,49 @@ def pcm16(values):
 
 
 class ReSpeakerTest(unittest.TestCase):
+    def test_parses_doa_response(self):
+        self.assertEqual(parse_doa_response([0, 14, 1, 1, 0]), DoAReading(270, True))
+        self.assertEqual(parse_doa_response([0, 100, 1, 0, 0]), DoAReading(356, False))
+
+    def test_rejects_invalid_doa_response(self):
+        with self.assertRaisesRegex(ReSpeakerError, "Malformed"):
+            parse_doa_response([0, 14, 1])
+        with self.assertRaisesRegex(ReSpeakerError, "Invalid"):
+            parse_doa_response([0, 104, 1, 1, 0])
+
+    def test_reads_doa_from_usb_control_device(self):
+        device = mock.Mock()
+        device.ctrl_transfer.return_value = [0, 15, 1, 1, 0]
+
+        reading = ReSpeakerDoA(device).read()
+
+        self.assertEqual(reading, DoAReading(271, True))
+        device.ctrl_transfer.assert_called_once_with(0xC0, 0, 0x80 | 18, 20, 5, 1000)
+
+    def test_reports_doa_usb_read_failure(self):
+        device = mock.Mock()
+        device.ctrl_transfer.side_effect = OSError("USB disconnected")
+
+        with self.assertRaisesRegex(ReSpeakerError, "USB disconnected"):
+            ReSpeakerDoA(device).read()
+
+    def test_opens_respeaker_usb_control_device(self):
+        device = object()
+        usb = types.ModuleType("usb")
+        usb.core = types.ModuleType("usb.core")
+        usb.core.find = mock.Mock(return_value=device)
+
+        with mock.patch.dict(sys.modules, {"usb": usb, "usb.core": usb.core}):
+            doa = ReSpeakerDoA.open()
+
+        self.assertIs(doa.device, device)
+        usb.core.find.assert_called_once_with(idVendor=0x2886, idProduct=0x001E)
+
+        usb.core.find.return_value = None
+        with mock.patch.dict(sys.modules, {"usb": usb, "usb.core": usb.core}):
+            with self.assertRaisesRegex(ReSpeakerError, "not found"):
+                ReSpeakerDoA.open()
+
     def test_extracts_channel_zero(self):
         interleaved = pcm16([10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 25])
 

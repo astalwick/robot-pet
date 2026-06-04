@@ -182,3 +182,15 @@ duration_seconds = abs(relative_degrees) / 55
 
 The bounded timed-turn maximum is `4 seconds`. This permits a full approximately
 `180 degree` turn while remaining time-bounded and gamepad-preemptible.
+
+## Implementation Status
+
+The production `ReSpeakerDoA` reader is implemented in `src/drivers/respeaker.py`.
+It opens the USB control device at `2886:001e` and returns the raw angle plus
+speech-detected state. It is not yet wired into `robot-voice`.
+
+The detailed implementation handoff for the remaining work is:
+
+```text
+docs/plans/2026-06-04 - face-me-remaining-work-handoff.md
+```

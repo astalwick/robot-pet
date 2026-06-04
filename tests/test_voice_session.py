@@ -84,4 +84,7 @@ class AssistantToolsTest(unittest.TestCase):
     def test_assistant_tools_include_switch_voice(self):
         tool_names = {tool["name"] for tool in ASSISTANT_TOOLS if tool.get("type") == "function"}
         self.assertIn("switch_voice", tool_names)
-        self.assertEqual(tool_names, {"switch_voice", "end_session", "wiggle", "move_forward", "look_around"})
+        self.assertEqual(
+            tool_names,
+            {"switch_voice", "end_session", "wiggle", "move_forward", "look_around", "inspect_robot"},
+        )

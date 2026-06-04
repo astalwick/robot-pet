@@ -19,9 +19,15 @@ from control.motion_intent import request_motion_intent
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio
 from lib.log import setup_logging
 from telemetry.messages import voice_update
-from telemetry.paths import DEFAULT_CAMERA_PORT, DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_PUBLISH_SOCKET, DEFAULT_VOICE_COMMAND_SOCKET
+from telemetry.paths import (
+    DEFAULT_CAMERA_PORT,
+    DEFAULT_MOTION_INTENT_SOCKET,
+    DEFAULT_PUBLISH_SOCKET,
+    DEFAULT_SUBSCRIBE_SOCKET,
+    DEFAULT_VOICE_COMMAND_SOCKET,
+)
 from telemetry.messages import encode_json_line
-from telemetry.socket_client import publish_message
+from telemetry.socket_client import publish_message, read_telemetry_snapshot
 from voice.assistant import effective_playback_rms, refresh_barge_in_gate
 from voice.personality import load_personalities
 from voice.session import VoiceSession
@@ -179,6 +185,7 @@ class RobotVoiceService:
         motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET,
         camera_url: str = DEFAULT_CAMERA_SNAPSHOT_URL,
         profile_every: int = 0,
+        telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
@@ -187,6 +194,7 @@ class RobotVoiceService:
         self.motion_intent_socket = motion_intent_socket
         self.camera_url = camera_url
         self.profile_every = profile_every
+        self.telemetry_subscribe_socket = telemetry_subscribe_socket
         self.session: VoiceSession | None = None
         self.usage = UsageTotals()
         self.audio: ReSpeakerAudio | None = None
@@ -543,6 +551,7 @@ class RobotVoiceService:
             motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
             session_end_caller=self.request_end_session,
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
+            robot_inspection_caller=lambda: read_telemetry_snapshot(self.telemetry_subscribe_socket),
             personalities=self.personalities,
             profile_every=self.profile_every,
             usage=self.usage,
@@ -911,6 +920,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot voice assistant service.")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
+    parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
     parser.add_argument("--camera-url", default=DEFAULT_CAMERA_SNAPSHOT_URL)
@@ -932,6 +942,7 @@ async def run_service(args: argparse.Namespace) -> None:
         motion_intent_socket=args.motion_intent_socket,
         camera_url=args.camera_url,
         profile_every=args.profile_every,
+        telemetry_subscribe_socket=args.telemetry_subscribe_socket,
     )
     await service.run(stop_event)
 

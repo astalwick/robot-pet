@@ -29,6 +29,7 @@ END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
 LOOK_AROUND_TOOL_NAME = "look_around"
+INSPECT_ROBOT_TOOL_NAME = "inspect_robot"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
@@ -229,10 +230,116 @@ LOOK_AROUND_TOOL = {
 }
 
 
+INSPECT_ROBOT_TOOL = {
+    "type": "function",
+    "name": INSPECT_ROBOT_TOOL_NAME,
+    "description": (
+        "Inspect the robot's current battery, motor, safety, distance sensor, face detection, "
+        "and computer health status. Use this to answer questions about the robot's body or surroundings."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
-ASSISTANT_TOOLS = [VOICE_SWITCH_TOOL, END_SESSION_TOOL, WIGGLE_TOOL, MOVE_FORWARD_TOOL, LOOK_AROUND_TOOL, WEB_SEARCH_TOOL]
+ASSISTANT_TOOLS = [
+    VOICE_SWITCH_TOOL,
+    END_SESSION_TOOL,
+    WIGGLE_TOOL,
+    MOVE_FORWARD_TOOL,
+    LOOK_AROUND_TOOL,
+    INSPECT_ROBOT_TOOL,
+    WEB_SEARCH_TOOL,
+]
+
+
+def _telemetry_value_available(snapshot: dict[str, Any], source: str, value: object) -> bool:
+    sources = snapshot.get("sources") or {}
+    return (sources.get(source) or {}).get("stale") is False and isinstance(value, dict)
+
+
+def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if snapshot is None:
+        return {"ok": False, "error": "telemetry_unavailable"}
+
+    battery = snapshot.get("motor_battery")
+    drive = snapshot.get("drive_status")
+    motor_rail = snapshot.get("motor_rail")
+    sensors = snapshot.get("sensors")
+    vision = snapshot.get("vision")
+    pi = snapshot.get("pi")
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "battery": {"available": False},
+        "drive": {"available": False},
+        "motor_rail": {"available": False},
+        "sensors": {"available": False},
+        "vision": {"available": False},
+        "pi": {"available": False},
+    }
+
+    if _telemetry_value_available(snapshot, "gamepad_teleop", battery):
+        result["battery"] = {
+            "available": True,
+            "status": battery.get("status"),
+            "pack_voltage": battery.get("pack_voltage"),
+            "cell_voltage": battery.get("cell_voltage"),
+        }
+    if _telemetry_value_available(snapshot, "gamepad_teleop", drive):
+        result["drive"] = {
+            "available": True,
+            "state": drive.get("state"),
+            "stop_reason": drive.get("stop_reason"),
+            "safety_blocked": drive.get("safety_blocked"),
+            "safety_reason": drive.get("safety_reason"),
+            "roboclaw_ready": drive.get("roboclaw_ready"),
+        }
+    if _telemetry_value_available(snapshot, "motor_rail", motor_rail):
+        result["motor_rail"] = {
+            "available": True,
+            "state": motor_rail.get("state"),
+            "reason": motor_rail.get("reason"),
+            "last_pack_voltage": motor_rail.get("last_pack_voltage"),
+        }
+    if _telemetry_value_available(snapshot, "sensors", sensors):
+        result["sensors"] = {
+            "available": True,
+            "status": sensors.get("status"),
+            "readings": [
+                {
+                    "name": reading.get("name"),
+                    "distance_mm": reading.get("distance_mm"),
+                    "ok": reading.get("ok"),
+                }
+                for reading in sensors.get("readings") or []
+                if isinstance(reading, dict)
+            ],
+        }
+    if _telemetry_value_available(snapshot, "vision", vision):
+        result["vision"] = {
+            "available": True,
+            "status": vision.get("status"),
+            "face_count": len(vision.get("faces") or []),
+        }
+    if _telemetry_value_available(snapshot, "system", pi):
+        result["pi"] = {
+            "available": True,
+            "uptime_seconds": pi.get("uptime_seconds"),
+            "load_1m": pi.get("load_1m"),
+            "soc_temp_c": pi.get("soc_temp_c"),
+            "disk_used_percent": pi.get("disk_used_percent"),
+            "throttled_flags": pi.get("throttled_flags"),
+        }
+    return result
 
 
 @dataclass(frozen=True)
@@ -415,6 +522,7 @@ async def stream_openai_words(
     end_session_pending: list[bool] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
+    robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -542,6 +650,16 @@ async def stream_openai_words(
                             }
                         )
                         result = {"ok": True, "image_attached": True}
+            elif name == INSPECT_ROBOT_TOOL_NAME:
+                if robot_inspection_caller is None:
+                    result = {"ok": False, "error": "telemetry_unavailable"}
+                else:
+                    try:
+                        snapshot = await asyncio.to_thread(robot_inspection_caller)
+                    except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
+                        result = {"ok": False, "error": str(exc)}
+                    else:
+                        result = inspect_robot_snapshot(snapshot)
             else:
                 result = {"ok": False, "error": "unsupported tool"}
 
@@ -585,6 +703,7 @@ async def run_assistant_turn(
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
+    robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -600,6 +719,7 @@ async def run_assistant_turn(
             end_session_pending,
             camera_snapshot_caller,
             usage,
+            robot_inspection_caller,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
@@ -637,6 +757,7 @@ async def handle_scribe_events(
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     stop_playback_now: Callable[[], Any] | None = None,
+    robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -853,6 +974,7 @@ async def handle_scribe_events(
                     motion_intent_caller=motion_intent_caller,
                     session_end_caller=session_end_caller,
                     camera_snapshot_caller=camera_snapshot_caller,
+                    robot_inspection_caller=robot_inspection_caller,
                 ),
                 timeout=ASSISTANT_TURN_TIMEOUT_SECS,
             )

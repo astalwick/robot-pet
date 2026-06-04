@@ -11,6 +11,7 @@ from telemetry.messages import decode_json_line, encode_json_line
 
 
 DEFAULT_VOICE_COMMAND_TIMEOUT_SECS = 2.0
+DEFAULT_SNAPSHOT_TIMEOUT_SECS = 1.0
 
 
 def publish_message(socket_path: str, message: dict[str, Any], timeout: float = 0.01) -> bool:
@@ -44,6 +45,27 @@ def send_voice_command(
                 return None
             return ack
     except OSError:
+        return None
+
+
+def read_telemetry_snapshot(
+    socket_path: str,
+    timeout: float = DEFAULT_SNAPSHOT_TIMEOUT_SECS,
+) -> dict[str, Any] | None:
+    """Connect to the telemetry subscriber socket and read its initial snapshot."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(socket_path)
+            with client.makefile("rb") as file_obj:
+                line = file_obj.readline()
+            if not line:
+                return None
+            snapshot = decode_json_line(line)
+            if not isinstance(snapshot, dict) or snapshot.get("type") != "snapshot":
+                return None
+            return snapshot
+    except (OSError, ValueError):
         return None
 
 

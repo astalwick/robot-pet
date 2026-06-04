@@ -25,7 +25,7 @@ from telemetry.messages import (
     voice_update,
     wheel_message,
 )
-from telemetry.socket_client import publish_message, send_voice_command
+from telemetry.socket_client import publish_message, read_telemetry_snapshot, send_voice_command
 
 
 class TelemetryMessagesTest(unittest.TestCase):
@@ -231,6 +231,28 @@ class TelemetryMessagesTest(unittest.TestCase):
 
 
 class SocketClientTest(unittest.TestCase):
+    def test_read_telemetry_snapshot_reads_initial_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            socket_path = os.path.join(tmpdir, "sub.sock")
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(socket_path)
+            server.listen(1)
+            snapshot = {"type": "snapshot", "motor_battery": {"status": "ok"}}
+
+            def accept_once():
+                conn, _addr = server.accept()
+                with conn:
+                    conn.sendall(encode_json_line(snapshot))
+                server.close()
+
+            thread = threading.Thread(target=accept_once)
+            thread.start()
+
+            result = read_telemetry_snapshot(socket_path)
+            thread.join(timeout=1.0)
+
+            self.assertEqual(result, snapshot)
+
     def test_publish_message_sends_one_json_line(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             socket_path = os.path.join(tmpdir, "pub.sock")

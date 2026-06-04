@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import (
     END_SESSION_TOOL_NAME,
+    INSPECT_ROBOT_TOOL_NAME,
     LOOK_AROUND_TOOL_NAME,
     ActiveTurn,
     AudioLevels,
@@ -19,6 +20,7 @@ from voice.assistant import (
     VoiceState,
     decide_barge_in_during_playback,
     handle_scribe_events,
+    inspect_robot_snapshot,
     note_mic_chunk,
     refresh_barge_in_gate,
     run_assistant_turn,
@@ -347,6 +349,108 @@ class ActiveTurnTest(unittest.TestCase):
 
 
 class AssistantStreamingTest(unittest.TestCase):
+    def test_inspect_robot_snapshot_returns_only_live_curated_status(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {
+                    "gamepad_teleop": {"stale": False},
+                    "motor_rail": {"stale": False},
+                    "sensors": {"stale": False},
+                    "vision": {"stale": True},
+                    "system": {"stale": False},
+                },
+                "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                "drive_status": {
+                    "state": "stopped",
+                    "stop_reason": "idle",
+                    "safety_blocked": False,
+                    "safety_reason": None,
+                    "roboclaw_ready": True,
+                    "telemetry_publish_failures": 99,
+                },
+                "motor_rail": {"state": "on", "reason": "motion_power_requested", "last_pack_voltage": 11.8},
+                "sensors": {
+                    "status": "polling",
+                    "readings": [
+                        {"name": "front_center", "distance_mm": 420, "ok": True, "kind": "vl53l1x"},
+                    ],
+                },
+                "vision": {"status": "detecting", "faces": [{}, {}]},
+                "pi": {
+                    "uptime_seconds": 100,
+                    "load_1m": 0.2,
+                    "soc_temp_c": 48.0,
+                    "disk_used_percent": 25.0,
+                    "throttled_flags": "0x0",
+                    "memory_used_mb": 512,
+                },
+            }
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["battery"]["status"], "ok")
+        self.assertEqual(result["drive"]["state"], "stopped")
+        self.assertNotIn("telemetry_publish_failures", result["drive"])
+        self.assertEqual(
+            result["sensors"]["readings"],
+            [{"name": "front_center", "distance_mm": 420, "ok": True}],
+        )
+        self.assertEqual(result["vision"], {"available": False})
+        self.assertNotIn("memory_used_mb", result["pi"])
+
+    def test_stream_openai_words_feeds_robot_inspection_back_to_model(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=INSPECT_ROBOT_TOOL_NAME,
+                                    call_id="call_inspect",
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="I feel fine."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "How are you feeling?"}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                    robot_inspection_caller=lambda: {
+                        "sources": {"gamepad_teleop": {"stale": False}},
+                        "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                    },
+                )
+            ]
+
+            self.assertEqual(chunks, ["I feel fine."])
+            tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
+            self.assertEqual(tool_output["battery"]["status"], "ok")
+            self.assertFalse(tool_output["sensors"]["available"])
+
+        asyncio.run(run())
+
     def test_stream_openai_words_retries_create_once(self):
         async def run():
             class FakeResponses:

@@ -50,6 +50,7 @@ class VoiceSession:
         personalities: dict[str, tuple[str, str]] | None = None,
         profile_every: int = 0,
         usage: UsageTotals | None = None,
+        robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -61,6 +62,7 @@ class VoiceSession:
         self.motion_intent_caller = motion_intent_caller
         self.session_end_caller = session_end_caller
         self.camera_snapshot_caller = camera_snapshot_caller
+        self.robot_inspection_caller = robot_inspection_caller
         self.profile_every = profile_every
         self.usage = usage if usage is not None else UsageTotals()
         self.stop_event = asyncio.Event()
@@ -144,6 +146,7 @@ class VoiceSession:
                     motion_intent_caller=self.motion_intent_caller,
                     session_end_caller=self.session_end_caller,
                     camera_snapshot_caller=self.camera_snapshot_caller,
+                    robot_inspection_caller=self.robot_inspection_caller,
                     stop_playback_now=self.stop_playback_now,
                 )
             ),

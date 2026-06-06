@@ -145,6 +145,7 @@ BASH_LOGIN
 # Install redeploy permissions for the dashboard action.
 echo "[9/14] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
+chmod +x "$REPO_DIR/restart.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 INSTALL_PATH="$(command -v install)"
 APT_PATH="$(command -v apt)"

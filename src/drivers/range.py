@@ -22,6 +22,7 @@ class RangeSensorConfig:
     name: str
     kind: str
     channel: int
+    offset_mm: int = 0
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,10 @@ class RangeDriver:
             channel_bus = mux[config.channel]
             if config.kind == "vl53l0x":
                 sensor = vl53l0x_factory(channel_bus, range_address)
+                # Continuous mode: the sensor keeps measuring on its own clock,
+                # so every sensor integrates in parallel and read() just grabs
+                # the latest result instead of blocking for a fresh measurement.
+                sensor.start_continuous()
             elif config.kind == "vl53l1x":
                 sensor = vl53l1x_factory(channel_bus, range_address)
             else:
@@ -124,11 +129,18 @@ class RangeDriver:
         return readings
 
     def cleanup(self) -> None:
-        pass
+        with self._lock:
+            for config, sensor in self._entries:
+                if config.kind != "vl53l0x":
+                    continue
+                try:
+                    sensor.stop_continuous()
+                except Exception as exc:
+                    log.warning("stop_continuous failed for %s: %s", config.name, exc)
 
     def _read_locked(self, config: RangeSensorConfig, sensor: Any) -> RangeReading:
         try:
-            distance_mm = int(sensor.range)
+            distance_mm = max(0, int(sensor.range) - config.offset_mm)
             return RangeReading(
                 name=config.name,
                 kind=config.kind,

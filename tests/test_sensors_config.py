@@ -121,6 +121,44 @@ class SensorsConfigTest(unittest.TestCase):
         self.assertEqual(forward_stop_mm(config.sensors[1], config.safety), 100)
         self.assertIsNone(forward_stop_mm(config.sensors[0], config.safety))
 
+    def test_offset_round_trips_and_reaches_driver(self):
+        config = SensorsConfig.from_dict(
+            {
+                "sensors": [
+                    {
+                        "name": "cliff_left",
+                        "kind": "vl53l0x",
+                        "mux_channel": 0,
+                        "role": "cliff",
+                        "offset_mm": 20,
+                    },
+                    {
+                        "name": "cliff_right",
+                        "kind": "vl53l0x",
+                        "mux_channel": 1,
+                        "role": "cliff",
+                        "offset_mm": -5,
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(config.sensors[0].offset_mm, 20)
+        self.assertEqual(config.sensors[1].offset_mm, -5)
+        driver_sensors = config.driver_sensors()
+        self.assertEqual(driver_sensors[0].offset_mm, 20)
+        self.assertEqual(driver_sensors[1].offset_mm, -5)
+
+    def test_offset_must_be_an_integer(self):
+        with self.assertRaises(TypeError):
+            SensorsConfig.from_dict(
+                {
+                    "sensors": [
+                        {"name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "offset_mm": 1.5},
+                    ]
+                }
+            )
+
     def test_save_round_trip_includes_safety(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sensors.json")

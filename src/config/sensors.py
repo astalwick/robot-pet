@@ -46,6 +46,7 @@ class SensorEntry:
     role: str | None = None
     trip_above_mm: int | None = None
     stop_below_mm: int | None = None
+    offset_mm: int = 0
 
 
 def _default_sensor_entries() -> tuple[SensorEntry, ...]:
@@ -97,7 +98,12 @@ class SensorsConfig:
 
     def driver_sensors(self) -> list[RangeSensorConfig]:
         return [
-            RangeSensorConfig(name=entry.name, kind=entry.kind, channel=entry.mux_channel)
+            RangeSensorConfig(
+                name=entry.name,
+                kind=entry.kind,
+                channel=entry.mux_channel,
+                offset_mm=entry.offset_mm,
+            )
             for entry in self.sensors
         ]
 
@@ -139,6 +145,8 @@ def _sensor_entry_to_dict(entry: SensorEntry) -> dict[str, Any]:
         data["trip_above_mm"] = entry.trip_above_mm
     if entry.stop_below_mm is not None:
         data["stop_below_mm"] = entry.stop_below_mm
+    if entry.offset_mm:
+        data["offset_mm"] = entry.offset_mm
     return data
 
 
@@ -177,6 +185,9 @@ def _parse_sensors(raw: Any, safety: SafetyConfig) -> tuple[SensorEntry, ...] | 
             raise TypeError(f"sensors[{index}].role must be one of {sorted(SENSOR_ROLES)}")
         trip_above_mm = item.get("trip_above_mm")
         stop_below_mm = item.get("stop_below_mm")
+        offset_mm = item.get("offset_mm", 0)
+        if not isinstance(offset_mm, int) or isinstance(offset_mm, bool):
+            raise TypeError(f"sensors[{index}].offset_mm must be an integer")
         if trip_above_mm is not None:
             trip_above_mm = _parse_positive_mm(trip_above_mm, f"sensors[{index}].trip_above_mm")
         if stop_below_mm is not None:
@@ -195,6 +206,7 @@ def _parse_sensors(raw: Any, safety: SafetyConfig) -> tuple[SensorEntry, ...] | 
                 role=role,
                 trip_above_mm=trip_above_mm,
                 stop_below_mm=stop_below_mm,
+                offset_mm=offset_mm,
             )
         )
     if not entries:

@@ -113,7 +113,6 @@ class GamepadTeleopRunner:
             if controller.connect():
                 log.info("controller connected")
                 return controller
-            log.info("waiting for controller")
             self._sleep_with_status_updates(self.config.retry_interval, connected=False)
         return None
 

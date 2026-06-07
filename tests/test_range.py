@@ -26,6 +26,13 @@ class FakeRangeSensor:
     def __init__(self, distance_mm: int, fail: bool = False):
         self.distance_mm = distance_mm
         self.fail = fail
+        self.continuous = False
+
+    def start_continuous(self) -> None:
+        self.continuous = True
+
+    def stop_continuous(self) -> None:
+        self.continuous = False
 
     @property
     def range(self) -> int:
@@ -54,6 +61,7 @@ class RangeDriverTest(unittest.TestCase):
                 distance,
                 fail=config.channel in fail_channels,
             )
+        self.sensors_by_channel = sensors_by_channel
 
         def vl53l0x_factory(channel_bus, address):
             self.assertEqual(address, 0x29)
@@ -118,6 +126,32 @@ class RangeDriverTest(unittest.TestCase):
         self.assertIsNone(readings[1].distance_mm)
         self.assertTrue(readings[2].ok)
         self.assertEqual(readings[2].distance_mm, 70)
+
+    def test_offset_is_subtracted_from_reading(self):
+        configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0, offset_mm=20)]
+        driver, _mux = self._make_driver(configs, {0: 120})
+
+        reading = driver.read("cliff_left")
+
+        self.assertEqual(reading.distance_mm, 100)
+
+    def test_offset_never_produces_negative_distance(self):
+        configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0, offset_mm=50)]
+        driver, _mux = self._make_driver(configs, {0: 10})
+
+        reading = driver.read("cliff_left")
+
+        self.assertEqual(reading.distance_mm, 0)
+
+    def test_continuous_mode_started_and_stopped(self):
+        configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0)]
+        driver, _mux = self._make_driver(configs, {0: 100})
+
+        self.assertTrue(self.sensors_by_channel[0].continuous)
+
+        driver.cleanup()
+
+        self.assertFalse(self.sensors_by_channel[0].continuous)
 
     def test_unknown_kind_raises_at_init(self):
         configs = [RangeSensorConfig("bad", "vl53l99", 0)]

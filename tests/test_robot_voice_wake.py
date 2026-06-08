@@ -225,6 +225,77 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         audio.play_wav.assert_awaited()
         self.assertFalse(service._wake_event.is_set())
 
+    async def test_wake_activates_before_chime_completes(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "armed"
+        service._detector = mock.Mock()
+        service._detector.check.return_value = True
+        service._detector.last_score = 0.9
+        service._detector.fire_count = 1
+        service._detector.last_fire_at = 0.0
+        service._io_stop_event = asyncio.Event()
+
+        chime_started = asyncio.Event()
+        chime_release = asyncio.Event()
+
+        async def fake_mic_frames(stop_event, queue_size=10, warn_on_drop=False):
+            yield b"\x00" * 2560
+            await asyncio.sleep(3600)
+
+        async def slow_play(_path):
+            chime_started.set()
+            await chime_release.wait()
+
+        audio = mock.Mock()
+        audio.mic_frames = fake_mic_frames
+        audio.play_wav = slow_play
+        service.audio = audio
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "x", "ELEVENLABS_API_KEY": "y"}):
+            with mock.patch("robot_voice.publish_message", return_value=True):
+                loop_task = asyncio.create_task(service._run_wake_loop(VoiceConfig()))
+                await asyncio.wait_for(chime_started.wait(), timeout=1.0)
+                # The session can come up (and Scribe pre-open) while the chime is still playing.
+                self.assertTrue(service._wake_event.is_set())
+                chime_release.set()
+                loop_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await loop_task
+
+    async def test_credentialed_wake_chime_failure_is_published(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "armed"
+        service._detector = mock.Mock()
+        service._detector.check.return_value = True
+        service._detector.last_score = 0.9
+        service._detector.fire_count = 1
+        service._detector.last_fire_at = 0.0
+        service._io_stop_event = asyncio.Event()
+
+        async def fake_mic_frames(stop_event, queue_size=10, warn_on_drop=False):
+            yield b"\x00" * 2560
+            await asyncio.sleep(3600)
+
+        async def failed_play(_path):
+            raise RuntimeError("chime failed")
+
+        audio = mock.Mock()
+        audio.mic_frames = fake_mic_frames
+        audio.play_wav = failed_play
+        service.audio = audio
+
+        published = []
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "x", "ELEVENLABS_API_KEY": "y"}):
+            with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+                loop_task = asyncio.create_task(service._run_wake_loop(VoiceConfig()))
+                await asyncio.sleep(0.05)
+                loop_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await loop_task
+
+        self.assertTrue(service._wake_event.is_set())
+        self.assertTrue(any(message.get("last_error") == "chime failed" for message in published))
+
     async def test_activation_failure_sleeps_before_retry(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=True)

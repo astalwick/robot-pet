@@ -5,8 +5,10 @@ import base64
 import json
 import ssl
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -32,6 +34,21 @@ MIC_SCRIBE_SEND_RMS_MIN = USER_ACTIVE_RMS_THRESHOLD
 MIC_SCRIBE_GATE_HOLD_SECS = 1
 SCRIBE_RECONNECT_BASE_SECS = 0.2
 SCRIBE_RECONNECT_MAX_SECS = 2.0
+
+# How much local audio to keep before upload starts, so first words aren't clipped,
+# and how the socket lingers around a spoken turn. Internal knobs for now (see plan).
+SCRIBE_PREROLL_SECS = 0.5
+SCRIBE_POST_SPEECH_TAIL_SECS = 1.2
+SCRIBE_COMMIT_TIMEOUT_SECS = 2.0
+SCRIBE_HOLD_OPEN_SECS = 1.5
+
+# Scribe websocket lifecycle states (separate from the Hey Bloop session lifecycle).
+SCRIBE_CLOSED = "closed"
+SCRIBE_PREOPEN = "preopen"
+SCRIBE_UPLOADING = "uploading"
+SCRIBE_WAITING_FOR_COMMIT = "waiting_for_commit"
+SCRIBE_HOLD_OPEN = "hold_open"
+SCRIBE_RECONNECTING = "reconnecting"
 
 
 def update_scribe_upload_gate(
@@ -65,6 +82,13 @@ def ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
 
 
+@dataclass
+class _ScribeSocket:
+    ws: Any
+    receive_task: asyncio.Task[None] | None = None
+    got_commit: bool = False
+
+
 async def stream_audio_to_scribe(
     audio_chunks: AsyncIterator[bytes],
     scribe_events: asyncio.Queue[dict[str, object]],
@@ -74,7 +98,17 @@ async def stream_audio_to_scribe(
     audio_levels: AudioLevels | None = None,
     profile_every: int = 0,
     usage: Any = None,
+    on_status: Callable[[dict[str, object]], None] | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> None:
+    """Drain local mic audio for the whole active session, opening a Scribe websocket
+    only while there is real speech to upload.
+
+    The audio loop is always primary: RMS, ``audio_activity`` events, and the local
+    upload gate run every chunk regardless of socket state. The websocket is opened on
+    session start (pre-open), reopened on speech, and closed when an utterance has been
+    committed (or timed out) and the brief hold-open grace expires.
+    """
     import websockets
 
     query = urlencode(
@@ -90,111 +124,239 @@ async def stream_audio_to_scribe(
     )
     url = f"wss://api.elevenlabs.io/v1/speech-to-text/realtime?{query}"
 
+    loop = asyncio.get_running_loop()
+
+    state = SCRIBE_CLOSED
+    open_count = 0
+    last_error: str | None = None
+    link: _ScribeSocket | None = None
+    open_task: asyncio.Task[_ScribeSocket | None] | None = None
+    open_cooldown_until = 0.0
     reconnect_delay = SCRIBE_RECONNECT_BASE_SECS
-    while True:
+
+    pre_roll: deque[bytes] = deque()
+    preroll_frames: int | None = None
+    last_above_at: float | None = None
+    last_activity_log_at = 0.0
+    tail_secs_left = 0.0
+    commit_wait_secs_left = 0.0
+    hold_secs_left = 0.0
+    profile_count = 0
+
+    def publish_status() -> None:
+        if on_status is not None:
+            on_status(
+                {
+                    "scribe_state": state,
+                    "scribe_open_count": open_count,
+                    "scribe_last_error": last_error,
+                }
+            )
+
+    def emit_event(event_type: str) -> None:
+        if on_event is not None:
+            on_event({"type": event_type, "t": time.monotonic()})
+
+    def set_state(next_state: str) -> None:
+        nonlocal state
+        if next_state != state:
+            state = next_state
+            publish_status()
+
+    async def receive_transcripts(socket: _ScribeSocket) -> None:
+        async for message in socket.ws:
+            data = json.loads(message)
+            log_elevenlabs_payload(data, "scribe")
+            message_type = data.get("message_type")
+            text = (data.get("text") or "").strip()
+            if message_type == "partial_transcript" and text:
+                await scribe_events.put({"type": "partial", "text": text})
+            elif message_type in {"committed_transcript", "committed_transcript_with_timestamps"} and text:
+                socket.got_commit = True
+                await scribe_events.put({"type": "commit", "text": text})
+
+    async def connect_scribe() -> _ScribeSocket | None:
+        nonlocal last_error, reconnect_delay
         try:
-            async with websockets.connect(
+            ws = await websockets.connect(
                 url,
                 additional_headers={"xi-api-key": elevenlabs_api_key},
                 ssl=ssl_context(),
-            ) as ws:
-                session_message = json.loads(await ws.recv())
-                log_elevenlabs_payload(session_message, "scribe session")
-                reconnect_delay = SCRIBE_RECONNECT_BASE_SECS
-
-                async def receive_transcripts() -> None:
-                    async for message in ws:
-                        data = json.loads(message)
-                        log_elevenlabs_payload(data, "scribe")
-                        message_type = data.get("message_type")
-                        text = (data.get("text") or "").strip()
-
-                        if message_type == "partial_transcript" and text:
-                            await scribe_events.put({"type": "partial", "text": text})
-                        elif message_type in {"committed_transcript", "committed_transcript_with_timestamps"} and text:
-                            await scribe_events.put({"type": "commit", "text": text})
-
-                last_activity_log_at = 0.0
-                last_above_at: float | None = None
-                silence_message = ""
-                silence_message_bytes = -1
-                profile_count = 0
-                loop = asyncio.get_running_loop()
-                receive_task = asyncio.create_task(receive_transcripts())
-                try:
-                    async for chunk in audio_chunks:
-                        if usage is not None:
-                            usage.stt_audio_seconds += len(chunk) / 2 / sample_rate
-                        if receive_task.done():
-                            receive_task.result()
-                        started = time.perf_counter()
-                        gate_started = time.perf_counter()
-                        rms = pcm16_rms(chunk)
-                        now = loop.time()
-                        gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
-                        if audio_levels is not None:
-                            note_mic_chunk(audio_levels, rms)
-                            audio_levels.scribe_gate_open = gate_open
-                        if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
-                            await scribe_events.put({"type": "audio_activity", "rms": rms})
-                            last_activity_log_at = now
-                        gate_seconds = time.perf_counter() - gate_started
-
-                        encode_started = time.perf_counter()
-                        if gate_open:
-                            message = json.dumps(
-                                {
-                                    "message_type": "input_audio_chunk",
-                                    "audio_base_64": base64.b64encode(chunk).decode("ascii"),
-                                    "commit": False,
-                                    "sample_rate": sample_rate,
-                                }
-                            )
-                        else:
-                            if silence_message_bytes != len(chunk):
-                                silence_message_bytes = len(chunk)
-                                silence_message = json.dumps(
-                                    {
-                                        "message_type": "input_audio_chunk",
-                                        "audio_base_64": base64.b64encode(b"\x00" * len(chunk)).decode("ascii"),
-                                        "commit": False,
-                                        "sample_rate": sample_rate,
-                                    }
-                                )
-                            message = silence_message
-                        encode_seconds = time.perf_counter() - encode_started
-
-                        send_started = time.perf_counter()
-                        await ws.send(message)
-                        if receive_task.done():
-                            receive_task.result()
-                        send_seconds = time.perf_counter() - send_started
-                        profile_count += 1
-                        if profile_every > 0 and profile_count % profile_every == 0:
-                            log.info(
-                                "voice scribe profile: gate_open=%s rms=%d gate=%.1fms encode=%.1fms send=%.1fms total=%.1fms",
-                                gate_open,
-                                rms,
-                                gate_seconds * 1000,
-                                encode_seconds * 1000,
-                                send_seconds * 1000,
-                                (time.perf_counter() - started) * 1000,
-                            )
-                    await receive_task
-                finally:
-                    if not receive_task.done():
-                        receive_task.cancel()
-                    with suppress(asyncio.CancelledError, Exception):
-                        await receive_task
-                return
+            )
+            session_message = json.loads(await ws.recv())
+            log_elevenlabs_payload(session_message, "scribe session")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.warning("elevenlabs scribe failed; reconnecting in %.1fs: %s", reconnect_delay, exc)
-            if audio_levels is not None:
-                audio_levels.scribe_gate_open = False
-            await asyncio.sleep(reconnect_delay)
+            last_error = str(exc)
+            log.warning("elevenlabs scribe open failed: %s", exc)
+            publish_status()
+            return None
+        reconnect_delay = SCRIBE_RECONNECT_BASE_SECS
+        if last_error is not None:
+            last_error = None
+            publish_status()
+        socket = _ScribeSocket(ws=ws)
+        socket.receive_task = asyncio.create_task(receive_transcripts(socket))
+        return socket
+
+    def start_open(now: float) -> None:
+        nonlocal open_task
+        if link is None and open_task is None and now >= open_cooldown_until:
+            open_task = asyncio.create_task(connect_scribe())
+
+    def reap_open(now: float) -> None:
+        nonlocal open_task, link, open_count, open_cooldown_until, reconnect_delay
+        if open_task is None or not open_task.done():
+            return
+        socket = open_task.result()
+        open_task = None
+        if socket is None:
+            open_cooldown_until = now + reconnect_delay
             reconnect_delay = min(reconnect_delay * 2, SCRIBE_RECONNECT_MAX_SECS)
+            return
+        link = socket
+        open_count += 1
+        emit_event("scribe_open")
+        publish_status()
+
+    async def close_link(event_type: str) -> None:
+        nonlocal link
+        if link is None:
+            return
+        socket = link
+        link = None
+        if socket.receive_task is not None and not socket.receive_task.done():
+            socket.receive_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            if socket.receive_task is not None:
+                await socket.receive_task
+        with suppress(Exception):
+            await socket.ws.close()
+        emit_event(event_type)
+
+    async def send_chunk(chunk: bytes, *, silent: bool) -> bool:
+        nonlocal last_error
+        if link is None:
+            return False
+        payload = b"\x00" * len(chunk) if silent else chunk
+        message = json.dumps(
+            {
+                "message_type": "input_audio_chunk",
+                "audio_base_64": base64.b64encode(payload).decode("ascii"),
+                "commit": False,
+                "sample_rate": sample_rate,
+            }
+        )
+        try:
+            await link.ws.send(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            last_error = str(exc)
+            publish_status()
+            await close_link("scribe_close")
+            return False
+        if usage is not None:
+            usage.stt_audio_seconds += len(chunk) / 2 / sample_rate
+        return True
+
+    preopen_started = False
+    try:
+        async for chunk in audio_chunks:
+            now = loop.time()
+            chunk_secs = len(chunk) / 2 / sample_rate
+            rms = pcm16_rms(chunk)
+            gate_open, last_above_at = update_scribe_upload_gate(now, rms, last_above_at)
+            if audio_levels is not None:
+                note_mic_chunk(audio_levels, rms)
+                audio_levels.scribe_gate_open = gate_open
+            if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
+                await scribe_events.put({"type": "audio_activity", "rms": rms})
+                last_activity_log_at = now
+            if preroll_frames is None:
+                preroll_frames = max(1, round(SCRIBE_PREROLL_SECS / max(chunk_secs, 1e-6)))
+                pre_roll = deque(maxlen=preroll_frames)
+            pre_roll.append(chunk)
+
+            if not preopen_started:
+                preopen_started = True
+                start_open(now)
+
+            if link is not None and link.receive_task is not None and link.receive_task.done():
+                reconnect = state == SCRIBE_UPLOADING or gate_open
+                await close_link("scribe_close")
+                if reconnect:
+                    emit_event("scribe_reconnect")
+                    set_state(SCRIBE_RECONNECTING)
+                else:
+                    set_state(SCRIBE_CLOSED)
+            reap_open(now)
+
+            profile_count += 1
+            if profile_every > 0 and profile_count % profile_every == 0:
+                log.info("voice scribe profile: state=%s gate_open=%s rms=%d", state, gate_open, rms)
+
+            if gate_open:
+                start_open(now)
+                reap_open(now)
+                if link is not None:
+                    if state != SCRIBE_UPLOADING:
+                        link.got_commit = False
+                        flushed = all([await send_chunk(buffered, silent=False) for buffered in list(pre_roll)])
+                        set_state(SCRIBE_UPLOADING if flushed else SCRIBE_RECONNECTING)
+                    elif not await send_chunk(chunk, silent=False):
+                        set_state(SCRIBE_RECONNECTING)
+                continue
+
+            if state == SCRIBE_UPLOADING:
+                set_state(SCRIBE_WAITING_FOR_COMMIT)
+                tail_secs_left = SCRIBE_POST_SPEECH_TAIL_SECS
+                commit_wait_secs_left = SCRIBE_COMMIT_TIMEOUT_SECS
+
+            if state == SCRIBE_WAITING_FOR_COMMIT:
+                if link is None:
+                    set_state(SCRIBE_CLOSED)
+                elif link.got_commit:
+                    set_state(SCRIBE_HOLD_OPEN)
+                    hold_secs_left = SCRIBE_HOLD_OPEN_SECS
+                elif tail_secs_left > 0:
+                    await send_chunk(chunk, silent=True)
+                    tail_secs_left -= chunk_secs
+                elif commit_wait_secs_left > 0:
+                    commit_wait_secs_left -= chunk_secs
+                else:
+                    emit_event("scribe_commit_timeout")
+                    await close_link("scribe_close")
+                    set_state(SCRIBE_CLOSED)
+                continue
+
+            if state == SCRIBE_HOLD_OPEN:
+                if link is None:
+                    set_state(SCRIBE_CLOSED)
+                else:
+                    hold_secs_left -= chunk_secs
+                    if hold_secs_left <= 0:
+                        await close_link("scribe_close")
+                        set_state(SCRIBE_CLOSED)
+                continue
+
+            # Quiet and not mid-utterance: settle into preopen (idle socket) or closed.
+            if state == SCRIBE_RECONNECTING:
+                set_state(SCRIBE_CLOSED)
+            if link is not None and state == SCRIBE_CLOSED:
+                set_state(SCRIBE_PREOPEN)
+    finally:
+        if open_task is not None:
+            if not open_task.done():
+                open_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                leftover = await open_task
+                if leftover is not None and link is None:
+                    link = leftover
+        await close_link("scribe_close")
+        if audio_levels is not None:
+            audio_levels.scribe_gate_open = False
 
 
 async def speak_with_eleven_flash(

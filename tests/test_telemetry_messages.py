@@ -241,6 +241,36 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(with_doa["doa"]["relative_degrees"], 90)
         self.assertTrue(with_doa["doa"]["fresh"])
 
+    def test_voice_update_omits_scribe_fields_when_absent_and_carries_them_when_present(self):
+        without_scribe = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+        )
+        self.assertNotIn("scribe_state", without_scribe)
+        self.assertNotIn("scribe_open_count", without_scribe)
+        self.assertNotIn("scribe_last_error", without_scribe)
+
+        with_scribe = voice_update(
+            enabled=True,
+            status="listening",
+            input_device="hw:0,0",
+            output_device="plughw:0,0",
+            sample_rate=16000,
+            capture_channels=6,
+            capture_channel_index=1,
+            scribe_state="uploading",
+            scribe_open_count=3,
+            scribe_last_error="boom",
+        )
+        self.assertEqual(with_scribe["scribe_state"], "uploading")
+        self.assertEqual(with_scribe["scribe_open_count"], 3)
+        self.assertEqual(with_scribe["scribe_last_error"], "boom")
+
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)
 

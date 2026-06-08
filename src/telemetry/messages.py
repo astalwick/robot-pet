@@ -292,6 +292,9 @@ def voice_update(
     doa: dict[str, Any] | None = None,
     timeline: dict[str, Any] | None = None,
     cost: dict[str, Any] | None = None,
+    scribe_state: str | None = None,
+    scribe_open_count: int | None = None,
+    scribe_last_error: str | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -351,6 +354,12 @@ def voice_update(
         payload["timeline"] = timeline
     if cost is not None:
         payload["cost"] = cost
+    if scribe_state is not None:
+        payload["scribe_state"] = scribe_state
+    if scribe_open_count is not None:
+        payload["scribe_open_count"] = scribe_open_count
+    if scribe_last_error is not None:
+        payload["scribe_last_error"] = scribe_last_error
     return payload
 
 

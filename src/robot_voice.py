@@ -236,6 +236,9 @@ class RobotVoiceService:
             "wake_fire_count": None,
             "wake_last_fire_at": None,
             "personality": None,
+            "scribe_state": None,
+            "scribe_open_count": None,
+            "scribe_last_error": None,
         }
         self.last_logged_error: str | None = None
         self.timeline = TimelineBuffer()
@@ -692,16 +695,22 @@ class RobotVoiceService:
                 wake_fire_count=detector.fire_count,
                 wake_last_fire_at=detector.last_fire_at,
             )
+            if not self.has_credentials():
+                log.info("wake detected but API keys missing: chime-only, staying armed")
+                try:
+                    await audio.play_wav(config.wake_chime_path)
+                except Exception as exc:
+                    log.warning("wake chime playback failed: %s", exc)
+                    self.publish(config, status="error", last_error=str(exc))
+                continue
+            # Activate first so the session (and Scribe pre-open) come up behind the
+            # chime, hiding the connect latency. The orchestrator runs in its own task.
+            self._wake_event.set()
             try:
                 await audio.play_wav(config.wake_chime_path)
             except Exception as exc:
                 log.warning("wake chime playback failed: %s", exc)
-                self.publish(config, status="error", last_error=str(exc))
-                continue
-            if not self.has_credentials():
-                log.info("wake detected but API keys missing: chime-only, staying armed")
-                continue
-            self._wake_event.set()
+                self.publish(config, last_error=str(exc))
 
     def _open_doa_reader(self) -> ReSpeakerDoA:
         # Hardware boundary, kept tiny so tests can swap in a fake reader.
@@ -918,6 +927,9 @@ class RobotVoiceService:
             doa=self.doa_snapshot(now),
             timeline=timeline,
             cost=cost_snapshot(self.usage),
+            scribe_state=optional_text(self.status["scribe_state"]),
+            scribe_open_count=optional_int(self.status["scribe_open_count"]),
+            scribe_last_error=optional_text(self.status["scribe_last_error"]),
         )
         message_seconds = time.perf_counter() - message_started
         publish_started = time.perf_counter()

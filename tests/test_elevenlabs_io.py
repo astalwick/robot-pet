@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import VoiceSwitch
 from voice.elevenlabs_io import speak_with_eleven_flash, stream_audio_to_scribe
+from voice.usage import UsageTotals
 
 
 class FakeClosed(Exception):
@@ -249,39 +251,408 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(sockets[0].sent[-1]), {"text": ""})
         self.assertTrue(sockets[0].closed)
 
-    async def test_scribe_reconnects_after_websocket_failure(self):
-        committed = json.dumps({"message_type": "committed_transcript", "text": "hello"})
-        sockets = [
-            FakeScribeWebsocket([], fail_after_messages=True),
-            FakeScribeWebsocket([committed]),
-        ]
 
-        def connect(*_args, **_kwargs):
-            return sockets.pop(0)
+# --- Speech-triggered Scribe streaming ---------------------------------------
 
-        fake_websockets = types.SimpleNamespace(connect=connect)
-        scribe_events = asyncio.Queue()
+SAMPLES = 320
+LOUD = (20480).to_bytes(2, "little") * SAMPLES  # rms 20480, well above the 100 gate
+SOFT = (50).to_bytes(2, "little") * SAMPLES  # rms 50, below the gate but non-silent
+QUIET = b"\x00\x00" * SAMPLES  # rms 0
+CHUNK_SECS = SAMPLES / 16000
 
-        async def audio_chunks():
-            while True:
-                await asyncio.sleep(0)
-                yield b"\x01\x00" * 160
+STOP = object()
+FAIL = object()
 
-        with (
+
+def committed_message(text):
+    return json.dumps({"message_type": "committed_transcript", "text": text})
+
+
+def decode_payload(message):
+    return base64.b64decode(json.loads(message)["audio_base_64"])
+
+
+def is_silent(message):
+    return set(decode_payload(message)) <= {0}
+
+
+class FakeScribe:
+    """A Scribe websocket the test drives directly: deliver transcripts, fail, or
+    close on demand, and inspect what was uploaded."""
+
+    def __init__(self):
+        self.inbox = asyncio.Queue()
+        self.sent = []
+        self.closed = False
+
+    async def recv(self):
+        return json.dumps({"message_type": "session_started"})
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    async def close(self):
+        self.closed = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        message = await self.inbox.get()
+        if message is FAIL:
+            raise FakeClosed()
+        if message is STOP:
+            raise StopAsyncIteration
+        return message
+
+    def deliver(self, message):
+        self.inbox.put_nowait(message)
+
+    def fail(self):
+        self.inbox.put_nowait(FAIL)
+
+    def stop(self):
+        self.inbox.put_nowait(STOP)
+
+
+class Connector:
+    def __init__(self, sockets):
+        self.sockets = list(sockets)
+        self.calls = 0
+
+    async def __call__(self, *_args, **_kwargs):
+        self.calls += 1
+        item = self.sockets.pop(0)
+        if isinstance(item, type) and issubclass(item, Exception):
+            raise item()
+        return item
+
+
+class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.chunk_queue = asyncio.Queue()
+        self.scribe_events = asyncio.Queue()
+        self.events = []
+        self.statuses = []
+        self.usage = UsageTotals()
+
+    async def _chunks(self):
+        while True:
+            chunk = await self.chunk_queue.get()
+            if chunk is None:
+                return
+            yield chunk
+
+    def push(self, *chunks):
+        for chunk in chunks:
+            self.chunk_queue.put_nowait(chunk)
+
+    def end(self):
+        self.chunk_queue.put_nowait(None)
+
+    async def settle(self, cycles=20):
+        for _ in range(cycles):
+            await asyncio.sleep(0)
+
+    def drain_events(self):
+        events = []
+        while not self.scribe_events.empty():
+            events.append(self.scribe_events.get_nowait())
+        return events
+
+    def start(self, connector, **patches):
+        fake_websockets = types.SimpleNamespace(connect=connector)
+        defaults = dict(MIC_SCRIBE_GATE_HOLD_SECS=0, SCRIBE_RECONNECT_BASE_SECS=0)
+        defaults.update(patches)
+        self._patches = [
             mock.patch.dict(sys.modules, {"websockets": fake_websockets}),
-            mock.patch("voice.elevenlabs_io.SCRIBE_RECONNECT_BASE_SECS", 0),
-        ):
-            task = asyncio.create_task(stream_audio_to_scribe(audio_chunks(), scribe_events, "key"))
-            try:
-                event = await asyncio.wait_for(scribe_events.get(), timeout=1.0)
-                while event["type"] != "commit":
-                    event = await asyncio.wait_for(scribe_events.get(), timeout=1.0)
-            finally:
-                task.cancel()
-                with self.assertRaises(asyncio.CancelledError):
-                    await task
+            mock.patch.multiple("voice.elevenlabs_io", **defaults),
+        ]
+        for patch in self._patches:
+            patch.start()
+        return asyncio.create_task(
+            stream_audio_to_scribe(
+                self._chunks(),
+                self.scribe_events,
+                "key",
+                usage=self.usage,
+                on_status=self.statuses.append,
+                on_event=self.events.append,
+            )
+        )
 
-        self.assertEqual(event, {"type": "commit", "text": "hello"})
+    async def finish(self, task):
+        self.end()
+        await asyncio.wait_for(task, timeout=1.0)
+        for patch in self._patches:
+            patch.stop()
+
+    def event_types(self):
+        return [event["type"] for event in self.events]
+
+    async def test_quiet_emits_activity_but_uploads_nothing(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]))
+        self.push(QUIET, QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(socket.sent, [])
+        self.assertIn("audio_activity", [event["type"] for event in self.drain_events()])
+
+    async def test_preopen_attempts_connect(self):
+        connector = Connector([FakeScribe()])
+        task = self.start(connector)
+        self.push(QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(connector.calls, 1)
+
+    async def test_preopen_failure_does_not_stop_streamer(self):
+        connector = Connector([RuntimeError, FakeScribe()])
+        task = self.start(connector)
+        self.push(QUIET)
+        await self.settle()
+        self.assertFalse(task.done())
+
+        self.push(QUIET, QUIET)
+        await self.settle()
+        self.assertFalse(task.done())
+        await self.finish(task)
+        self.assertIn("audio_activity", [event["type"] for event in self.drain_events()])
+
+    async def test_threshold_crossing_opens_scribe(self):
+        socket = FakeScribe()
+        connector = Connector([socket])
+        task = self.start(connector)
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(connector.calls, 1)
+        self.assertTrue(socket.sent)
+
+    async def test_sends_preroll_before_live_audio(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]), SCRIBE_PREROLL_SECS=0.1)
+        self.push(SOFT, SOFT, SOFT)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(len(socket.sent), 4)
+        self.assertEqual(decode_payload(socket.sent[0]), SOFT)
+        self.assertEqual(decode_payload(socket.sent[-1]), LOUD)
+
+    async def test_usage_counts_only_sent_bytes(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]), SCRIBE_PREROLL_SECS=0.02)
+        self.push(QUIET, QUIET, QUIET, QUIET, QUIET)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertAlmostEqual(self.usage.stt_audio_seconds, CHUNK_SECS)
+
+    async def test_speech_end_sends_quiet_tail(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]), SCRIBE_POST_SPEECH_TAIL_SECS=0.04)
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET, QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        silent = [message for message in socket.sent if is_silent(message)]
+        self.assertGreaterEqual(len(silent), 1)
+        self.assertTrue(all(is_silent(message) for message in silent))
+
+    async def test_commit_after_tail_is_forwarded(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.04,
+            SCRIBE_COMMIT_TIMEOUT_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        socket.deliver(committed_message("hello there"))
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        commits = [event for event in self.drain_events() if event["type"] == "commit"]
+        self.assertEqual(commits, [{"type": "commit", "text": "hello there"}])
+
+    async def test_commit_before_local_gate_closes_enters_hold_open(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.04,
+            SCRIBE_COMMIT_TIMEOUT_SECS=0.04,
+            SCRIBE_HOLD_OPEN_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        socket.deliver(committed_message("early commit"))
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        sent_after_commit = len(socket.sent)
+
+        self.push(QUIET, QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertNotIn("scribe_commit_timeout", self.event_types())
+        self.assertEqual(len(socket.sent), sent_after_commit)
+        commits = [event for event in self.drain_events() if event["type"] == "commit"]
+        self.assertEqual(commits, [{"type": "commit", "text": "early commit"}])
+
+    async def test_commit_timeout_closes_without_synthetic_commit(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.0,
+            SCRIBE_COMMIT_TIMEOUT_SECS=0.04,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET, QUIET, QUIET, QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertIn("scribe_commit_timeout", self.event_types())
+        self.assertTrue(socket.closed)
+        self.assertNotIn("commit", [event["type"] for event in self.drain_events()])
+
+    async def test_hold_open_does_not_upload_quiet(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.0,
+            SCRIBE_COMMIT_TIMEOUT_SECS=10.0,
+            SCRIBE_HOLD_OPEN_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        socket.deliver(committed_message("done"))
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        sent_after_commit = len(socket.sent)
+
+        self.push(QUIET, QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(len(socket.sent), sent_after_commit)
+
+    async def test_speech_during_hold_open_uploads_without_new_connect(self):
+        socket = FakeScribe()
+        connector = Connector([socket])
+        task = self.start(
+            connector,
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.0,
+            SCRIBE_COMMIT_TIMEOUT_SECS=10.0,
+            SCRIBE_HOLD_OPEN_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        socket.deliver(committed_message("done"))
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        sent_after_commit = len(socket.sent)
+
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(connector.calls, 1)
+        self.assertGreater(len(socket.sent), sent_after_commit)
+
+    async def test_idle_socket_close_is_normal(self):
+        socket = FakeScribe()
+        connector = Connector([socket])
+        task = self.start(connector)
+        self.push(QUIET)
+        await self.settle()
+        socket.stop()
+        await self.settle()
+        self.push(QUIET, QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertTrue(socket.closed)
+        self.assertEqual(connector.calls, 1)
+        self.assertNotIn("scribe_reconnect", self.event_types())
+
+    async def test_successful_open_clears_previous_scribe_error(self):
+        connector = Connector([RuntimeError, FakeScribe()])
+        task = self.start(connector, SCRIBE_RECONNECT_BASE_SECS=0)
+        self.push(QUIET)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        errors = [status.get("scribe_last_error") for status in self.statuses if "scribe_last_error" in status]
+        self.assertIn("", [error or "" for error in errors])
+        self.assertIsNone(self.statuses[-1]["scribe_last_error"])
+
+    async def test_midspeech_failure_reconnects_while_speech_active(self):
+        first = FakeScribe()
+        second = FakeScribe()
+        connector = Connector([first, second])
+        task = self.start(connector)
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.assertTrue(first.sent)
+
+        first.fail()
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        second.deliver(committed_message("continued"))
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(connector.calls, 2)
+        self.assertIn("scribe_reconnect", self.event_types())
+        self.assertTrue(second.sent)
+        commits = [event for event in self.drain_events() if event["type"] == "commit"]
+        self.assertEqual(commits, [{"type": "commit", "text": "continued"}])
 
 
 if __name__ == "__main__":

@@ -129,6 +129,8 @@ class VoiceSession:
                     audio_levels=self.audio_levels,
                     profile_every=self.profile_every,
                     usage=self.usage,
+                    on_status=self.status_callback,
+                    on_event=self.event_callback,
                 )
             ),
             asyncio.create_task(

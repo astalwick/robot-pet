@@ -48,7 +48,7 @@ Add `personality: str = "default"` to `VoiceConfig` in `src/config/voice.py`. Lo
 
 ## Voice binding
 
-Card's `voice_id` becomes the session's voice. Replaces the current `voice_id` / `alternate_voice_id` fields in `voice.json`. The existing `switch_voice` tool is retired — voices are owned by characters, no mid-session swapping.
+Card's `voice_id` becomes the session's default voice, replacing the `voice_id` field in `voice.json`.
 
 ## Bilingual rule
 
@@ -58,21 +58,15 @@ Stays in the operational block. All characters speak both languages.
 
 Minimum: show the active character's name in voice telemetry. Stretch: dropdown to pick which card is active (writes `personality` to `voice.json`, takes effect on next `robot-voice` restart).
 
-## Vibe-check file
-
-`docs/personality/vibe-check.md` with ~10 prompts that should produce visibly different answers across characters (greeting, "what do you think of X", "move forward", "what are you", a French prompt, an awkward-silence prompt, a fail-the-tool prompt). Not a formal eval — a checklist to run by hand. If we hit three uses, consider scripting it.
-
 ## Implementation steps
 
 1. **Loader.** New `src/voice/personality.py`. `load_personalities(dir)` walks `config/personality/*.md`, splits frontmatter (one `voice_id` key), returns `dict[name, (voice_id, prose)]`. Tiny — no YAML library needed for one key.
 2. **Compose prompt.** Move operational text into a constant in `assistant.py`. Add `compose_system_prompt(prose)` that concatenates `<prose>\n\n<operational>`. Replace `DEFAULT_SYSTEM_PROMPT` usage.
 3. **Wire VoiceConfig.** Add `personality: str = "default"`. `VoiceSession.__init__` looks up the card; missing → built-in default + warning. Use card's `voice_id` for `voice_state`.
-4. **Retire `switch_voice`.** Drop tool definition and handler. Remove `alternate_voice_id` from `VoiceConfig`. Update tests.
-5. **Seed cards.** `default.md` (current behavior preserved) plus 3 contrasting picks from the brainstorm — proposed: **stoic** (#4), **off-duty scientist** (#3), **companionable lurker** (#8).
-6. **README.** `config/personality/README.md` with the format spec and a list of suggested sections (forbidden phrases, example exchanges, likes/dislikes, speech style) — as guidance, not schema.
-7. **Logging.** Log active personality on session start; emit it as a status event so the dashboard sees it.
-8. **Vibe-check doc.** Write the prompts. Run them once per seed card and capture impressions.
-9. **Tests.** Loader splits frontmatter correctly. `compose_system_prompt` includes both blocks in order. Missing card name falls back to default.
+4. **Seed cards.** `default.md` (current behavior preserved) plus 3 contrasting picks from the brainstorm — proposed: **stoic** (#4), **off-duty scientist** (#3), **companionable lurker** (#8).
+5. **README.** `config/personality/README.md` with the format spec and a list of suggested sections (forbidden phrases, example exchanges, likes/dislikes, speech style) — as guidance, not schema.
+6. **Logging.** Log active personality on session start; emit it as a status event so the dashboard sees it.
+7. **Tests.** Loader splits frontmatter correctly. `compose_system_prompt` includes both blocks in order. Missing card name falls back to default.
 
 ## Out of scope
 

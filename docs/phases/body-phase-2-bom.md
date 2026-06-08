@@ -67,16 +67,20 @@ Do not use GPIO2/GPIO3 because they are the I2C bus for the mux. Do not use GPIO
 
 Front bump switch path:
 
+We do not care *which* bumper is hit, only "all clear" vs "something is touching." So the three SPDT microswitches are wired as a single fail-safe series chain into **one** Pi GPIO, using each switch's **COM** and **NC** terminals (NO is unused).
+
 ```text
-Left bump switch   one terminal → Pi GND
-Left bump switch   other        → free Pi GPIO
-Center bump switch one terminal → Pi GND
-Center bump switch other        → free Pi GPIO
-Right bump switch  one terminal → Pi GND
-Right bump switch  other        → free Pi GPIO
+Pi GPIO ── NC·COM ── NC·COM ── NC·COM ── Pi GND
+            sw1        sw2        sw3
 ```
 
-Use Pi internal pull-ups so each switch reads high normally and low when pressed. If using a 3-terminal SPDT switch, use COM and NO. These switches do not use I2C, so they do not consume channels on the 8-channel mux.
+Enable the Pi internal pull-up on that GPIO. Logic is inverted from the obvious case, on purpose:
+
+- At rest every NC contact is closed, so the chain is an unbroken path to GND → GPIO reads **LOW** = all clear.
+- Pressing any switch opens its NC contact, breaking the chain → GPIO floats up → reads **HIGH** = stop.
+- A broken wire or unplugged connector also breaks the chain → reads **HIGH** = stop. This is the reason for the series-NC arrangement: a wiring fault fails toward "stop," not toward "blind but pretends fine," which is what a parallel NO wiring would do.
+
+Wiring notes: 22–24 AWG stranded wire, female Dupont on the GPIO/GND end, soldered + heat-shrunk at the switch lugs for strain relief (they live on the bumper and get knocked repeatedly). These switches do not use I2C, so they do not consume channels on the 8-channel mux.
 
 ## Intended Behavior
 

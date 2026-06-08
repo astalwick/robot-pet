@@ -1,6 +1,7 @@
 import {
   row,
   doubleRow,
+  trendRow,
   setRows,
   renderBar,
   bipolarBar,
@@ -179,7 +180,7 @@ function renderBattery(battery, motorRail, motorRailSource) {
     row('pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
     row('cell est', '', fmt(cell, 'V', 2)),
     row('last rail v', '', fmt(railVoltage, 'V', 2)),
-    row('trend', sparkline(history.pack_voltage, 14), ''),
+    row('trend', sparkline(history.pack_voltage), ''),
     row('peak amps', '', fmt(maxCurrentAmps, 'A', 2)),
     row('status', '', status.toUpperCase(), batteryClass(status)),
   ]);
@@ -230,8 +231,8 @@ function renderWheels(wheels) {
     doubleRow('error', fmt(left.error, '', 0), fmt(right.error, '', 0), left.errorCls, right.errorCls),
     doubleRow('amps', fmt(left.amps, 'A', 2), fmt(right.amps, 'A', 2)),
     doubleRow('load', renderBar(left.amps, 5), renderBar(right.amps, 5)),
-    doubleRow('speed trend', sparkline(history.left_actual, 13, maxAbsSpeedQpps, true), sparkline(history.right_actual, 13, maxAbsSpeedQpps, true)),
-    doubleRow('amp trend', sparkline(history.left_current, 13), sparkline(history.right_current, 13)),
+    trendRow('speed trend', sparkline(history.left_actual, maxAbsSpeedQpps, true), sparkline(history.right_actual, maxAbsSpeedQpps, true)),
+    trendRow('amp trend', sparkline(history.left_current), sparkline(history.right_current)),
   ]);
 }
 

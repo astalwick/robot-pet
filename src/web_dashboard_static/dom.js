@@ -1,4 +1,4 @@
-const SPARK_BLOCKS = '▁▂▃▄▅▆▇█';
+const SPARK_POINTS = 24;
 
 export function on(id, eventName, handler) {
   const element = document.getElementById(id);
@@ -32,6 +32,18 @@ export function doubleRow(label, leftVal, rightVal, leftCls = '', rightCls = '')
     `;
 }
 
+export function trendRow(label, leftSpark, rightSpark) {
+  return `
+      <div class="row trend-row">
+        <span class="label">${escapeHtml(label)}</span>
+        <span class="trend-pair">
+          <span class="trend-cell"><span class="trend-side">L</span>${leftSpark}</span>
+          <span class="trend-cell"><span class="trend-side">R</span>${rightSpark}</span>
+        </span>
+      </div>
+    `;
+}
+
 export function setRows(id, rows) {
   document.getElementById(id).innerHTML = Array.isArray(rows) ? rows.join('') : rows;
 }
@@ -56,19 +68,20 @@ export function bipolarBar(value) {
     `;
 }
 
-export function sparkline(values, width = 12, limit = null, absolute = false) {
+export function sparkline(values, limit = null, absolute = false) {
   const clean = values.filter((value) => value != null).map((value) => absolute ? Math.abs(value) : value);
-  if (!clean.length) return '<span class="sparkline">────────────</span>';
-  const recent = clean.slice(-width);
-  if (recent.length < 2) return `<span class="sparkline">${'─'.repeat(width)}</span>`;
-  const low = limit == null ? Math.min(...recent) : 0;
-  const high = limit == null ? Math.max(...recent) : limit;
-  if (high === low) return `<span class="sparkline">${SPARK_BLOCKS[4].repeat(recent.length)}${'─'.repeat(width - recent.length)}</span>`;
-  const text = recent.map((value) => {
-    const ratio = Math.max(0, Math.min(1, (value - low) / (high - low)));
-    return SPARK_BLOCKS[Math.floor(ratio * (SPARK_BLOCKS.length - 1))];
-  }).join('');
-  return `<span class="sparkline">${text}${'─'.repeat(width - recent.length)}</span>`;
+  const points = clean.slice(-SPARK_POINTS);
+  if (points.length < 2) return '<span class="sparkline sparkline-empty"></span>';
+
+  const low = limit == null ? Math.min(...points) : 0;
+  const high = limit == null ? Math.max(...points) : limit;
+  const span = high - low;
+  const stepX = 100 / (points.length - 1);
+  const coords = points.map((value, index) => {
+    const ratio = span === 0 ? 0.5 : Math.max(0, Math.min(1, (value - low) / span));
+    return `${(index * stepX).toFixed(1)},${(100 - ratio * 100).toFixed(1)}`;
+  }).join(' ');
+  return `<svg class="sparkline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${coords}"></polyline></svg>`;
 }
 
 export function fmt(value, suffix, digits) {

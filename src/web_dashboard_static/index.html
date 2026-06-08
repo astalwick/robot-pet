@@ -37,6 +37,34 @@
         <div id="face-overlay" aria-hidden="true"></div>
       </section>
 
+      <section id="voice-timeline-section" class="panel">
+        <h2>Voice Timeline</h2>
+        <div id="voice-timeline-toolbar">
+          <span class="legend">
+            <span class="legend-item"><span class="legend-swatch swatch-mic"></span>mic peak (own scale)</span>
+            <span class="legend-item"><span class="legend-swatch swatch-scribe-rms"></span>scribe RMS min (100)</span>
+            <span class="legend-item"><span class="legend-swatch swatch-scribe-send"></span>sending to scribe</span>
+            <span class="legend-item"><span class="legend-swatch swatch-playback"></span>playback</span>
+            <span class="legend-item"><span class="legend-swatch swatch-threshold"></span>barge-in threshold (with playback)</span>
+            <span class="legend-item"><span class="legend-swatch swatch-barge-gate"></span>barge-in gate</span>
+          </span>
+          <button id="voice-timeline-toggle-button" class="voice-toggle muted voice-timeline-toggle" type="button" title="Toggle voice assistant listening" aria-label="Voice assistant off">
+            <span class="record-dot" aria-hidden="true"></span>
+            <span class="voice-toggle-label">Voice Off</span>
+          </button>
+          <button id="voice-timeline-pause" type="button">Pause</button>
+          <button id="voice-timeline-maximize" type="button">Maximize</button>
+        </div>
+        <div id="voice-timeline-canvas-wrap">
+          <canvas id="voice-timeline-canvas"></canvas>
+          <div id="voice-timeline-hover" class="hidden"></div>
+        </div>
+        <div id="voice-turn-stats">
+          <div id="voice-turn-stats-tally" class="muted">no turns yet</div>
+          <div id="voice-turn-stats-list"></div>
+        </div>
+      </section>
+
       <section id="panels">
         <article class="panel">
           <h2>Core Systems</h2>
@@ -70,43 +98,14 @@
           <h2>Range Sensors</h2>
           <div class="rows" id="sensors-rows"></div>
         </article>
-      </section>
-
-      <section id="voice-timeline-section" class="panel">
-        <h2>Voice Timeline</h2>
-        <div id="voice-timeline-toolbar">
-          <span class="legend">
-            <span class="legend-swatch swatch-mic"></span>mic peak (own scale)
-            <span class="legend-swatch swatch-scribe-rms"></span>scribe RMS min (100)
-            <span class="legend-swatch swatch-scribe-send"></span>sending to scribe
-            <span class="legend-swatch swatch-playback"></span>playback
-            <span class="legend-swatch swatch-threshold"></span>barge-in threshold (with playback)
-            <span class="legend-swatch swatch-barge-gate"></span>barge-in gate
-          </span>
-          <button id="voice-timeline-toggle-button" class="voice-toggle muted voice-timeline-toggle" type="button" title="Toggle voice assistant listening" aria-label="Voice assistant off">
-            <span class="record-dot" aria-hidden="true"></span>
-            <span class="voice-toggle-label">Voice Off</span>
-          </button>
-          <button id="voice-timeline-pause" type="button">Pause</button>
-          <button id="voice-timeline-maximize" type="button">Maximize</button>
-        </div>
-        <div id="voice-timeline-canvas-wrap">
-          <canvas id="voice-timeline-canvas"></canvas>
-          <div id="voice-timeline-hover" class="hidden"></div>
-        </div>
-        <div id="voice-turn-stats">
-          <div id="voice-turn-stats-tally" class="muted">no turns yet</div>
-          <div id="voice-turn-stats-list"></div>
-        </div>
-      </section>
-
-      <section id="logs-section" class="panel">
-        <h2>Logs</h2>
-        <div id="logs-toolbar">
-          <button id="logs-clear" type="button">Clear</button>
-          <button id="logs-pause" type="button">Pause</button>
-        </div>
-        <pre id="logs-output" aria-live="polite"></pre>
+        <section id="logs-section" class="panel">
+          <h2>Logs</h2>
+          <div id="logs-toolbar">
+            <button id="logs-clear" type="button">Clear</button>
+            <button id="logs-pause" type="button">Pause</button>
+          </div>
+          <pre id="logs-output" aria-live="polite"></pre>
+        </section>
       </section>
     </main>
 

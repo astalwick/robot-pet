@@ -120,19 +120,31 @@ class MotorDriver:
 
     def read_wheel_speeds(self) -> tuple[int | None, int | None]:
         """Read actual closed-loop wheel speeds from RoboClaw encoders."""
-        left = self.controller.ReadSpeedM1(self.address)
-        right = self.controller.ReadSpeedM2(self.address)
-        left_qpps = left[1] if left[0] else None
-        right_qpps = right[1] if right[0] else None
-        return left_qpps, right_qpps
+        try:
+            left = self.controller.ReadSpeedM1(self.address)
+            right = self.controller.ReadSpeedM2(self.address)
+            left_qpps = left[1] if left[0] else None
+            right_qpps = right[1] if right[0] else None
+            return left_qpps, right_qpps
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw speed read timed out: %s", exc)
+                return None, None
+            raise
 
     def read_max_qpps(self) -> tuple[int | None, int | None]:
         """Read configured velocity PID max speeds in encoder counts per second."""
-        left = self.controller.ReadM1VelocityPID(self.address)
-        right = self.controller.ReadM2VelocityPID(self.address)
-        left_qpps = left[4] if left[0] else None
-        right_qpps = right[4] if right[0] else None
-        return left_qpps, right_qpps
+        try:
+            left = self.controller.ReadM1VelocityPID(self.address)
+            right = self.controller.ReadM2VelocityPID(self.address)
+            left_qpps = left[4] if left[0] else None
+            right_qpps = right[4] if right[0] else None
+            return left_qpps, right_qpps
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw max QPPS read timed out: %s", exc)
+                return None, None
+            raise
     
     def stop(self):
         """Immediately stop both motors."""
@@ -147,18 +159,30 @@ class MotorDriver:
     
     def get_battery_voltage(self) -> float | None:
         """Read main battery voltage. Returns None on read failure."""
-        result = self.controller.ReadMainBatteryVoltage(self.address)
-        if result[0]:
-            return result[1] / 10.0
-        return None
+        try:
+            result = self.controller.ReadMainBatteryVoltage(self.address)
+            if result[0]:
+                return result[1] / 10.0
+            return None
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw battery read timed out: %s", exc)
+                return None
+            raise
     
     def get_currents(self) -> tuple[float, float] | None:
         """Read motor currents in amps. Returns (m1, m2) or None on failure."""
-        result = self.controller.ReadCurrents(self.address)
-        if result[0]:
-            # Returns in 10mA units
-            return (result[1] / 100.0, result[2] / 100.0)
-        return None
+        try:
+            result = self.controller.ReadCurrents(self.address)
+            if result[0]:
+                # Returns in 10mA units
+                return (result[1] / 100.0, result[2] / 100.0)
+            return None
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw current read timed out: %s", exc)
+                return None
+            raise
     
     def cleanup(self):
         """Stop motors and release resources."""

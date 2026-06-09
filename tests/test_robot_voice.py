@@ -16,6 +16,8 @@ import robot_voice
 from robot_voice import RobotVoiceService, TimelineBuffer
 from config.voice import load_voice_config
 from drivers.respeaker import DoAReading
+from voice.assistant import AudioLevels
+from voice.turn_policy import TurnPolicy
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -333,6 +335,22 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
             await service.stop_all()
 
         self.assertIs(captured["personalities"], cards)
+
+    async def test_sample_timeline_zeros_stale_playback_rms(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        levels = AudioLevels(mic_peak=321, playback_rms=900, playback_at=0.0)
+        service.session = types.SimpleNamespace(audio_levels=levels, policy=TurnPolicy())
+
+        with (
+            mock.patch("robot_voice.time.monotonic", return_value=1.0),
+            mock.patch("robot_voice.asyncio.sleep", new=mock.AsyncMock(side_effect=[None, asyncio.CancelledError])),
+        ):
+            with suppress(asyncio.CancelledError):
+                await service._sample_timeline()
+
+        self.assertEqual(service.timeline.levels[-1][1], 321)
+        self.assertEqual(service.timeline.levels[-1][2], 0)
+        self.assertEqual(levels.mic_peak, 0)
 
 
 class TimelineBufferTest(unittest.TestCase):

@@ -24,7 +24,7 @@ from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
-from control.safety_gate import apply_safety_to_qpps, evaluate_safety
+from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
 from telemetry.messages import (
@@ -335,7 +335,7 @@ class MotionRunner:
                 readings = list(self._sensor_readings)
                 sensors_live = self._sensors_live
             safety = evaluate_safety(readings, self.sensors_config, sensors_live=sensors_live)
-            left_qpps, right_qpps = apply_safety_to_qpps(left_qpps, right_qpps, safety)
+            left_qpps, right_qpps = cancel_forward_qpps_when_blocked(left_qpps, right_qpps, safety)
             self._last_safety_blocked = safety.blocked
             self._last_safety_reason = safety.reason
 

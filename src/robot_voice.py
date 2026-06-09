@@ -48,7 +48,6 @@ TIMELINE_PUBLISH_HZ = 5.0
 TIMELINE_MAX_SIGNAL_EVENTS = 100
 TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
-PLAYBACK_RMS_STALE_SECS = 0.25
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
 DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
@@ -848,7 +847,7 @@ class RobotVoiceService:
                 assistant_speaking,
                 mic,
             )
-            playback_rms = levels.playback_rms if now - levels.playback_at <= PLAYBACK_RMS_STALE_SECS else 0
+            playback_rms = effective_playback_rms(levels, now)
             self.timeline.add_sample(
                 now,
                 mic,

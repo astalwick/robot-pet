@@ -51,11 +51,12 @@ def evaluate_safety(
     return SafetyState(blocked=False)
 
 
-def apply_safety_to_qpps(
+def cancel_forward_qpps_when_blocked(
     left_qpps: int,
     right_qpps: int,
     safety: SafetyState,
 ) -> tuple[int, int]:
+    """Cancel unsafe forward motion while preserving rotation and reverse."""
     if not safety.blocked:
         return left_qpps, right_qpps
     if not is_forward_motion(left_qpps, right_qpps):

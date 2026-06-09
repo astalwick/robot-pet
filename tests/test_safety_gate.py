@@ -6,7 +6,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
-from control.safety_gate import SafetyState, apply_safety_to_qpps, evaluate_safety, is_forward_motion
+from control.safety_gate import SafetyState, cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
 
 
 class SafetyGateTest(unittest.TestCase):
@@ -76,22 +76,22 @@ class SafetyGateTest(unittest.TestCase):
 
         self.assertFalse(state.blocked)
 
-    def test_apply_safety_removes_forward_motion(self):
+    def test_blocked_safety_cancels_forward_but_preserves_rotation_and_reverse(self):
         blocked = SafetyState(blocked=True, reason="test")
 
-        left, right = apply_safety_to_qpps(200, 200, blocked)
+        left, right = cancel_forward_qpps_when_blocked(200, 200, blocked)
 
         self.assertEqual((left, right), (0, 0))
 
-        left, right = apply_safety_to_qpps(-200, 200, blocked)
+        left, right = cancel_forward_qpps_when_blocked(-200, 200, blocked)
 
         self.assertEqual((left, right), (-200, 200))
 
-        left, right = apply_safety_to_qpps(200, 0, blocked)
+        left, right = cancel_forward_qpps_when_blocked(200, 0, blocked)
 
         self.assertEqual((left, right), (100, -100))
 
-        left, right = apply_safety_to_qpps(-200, -200, blocked)
+        left, right = cancel_forward_qpps_when_blocked(-200, -200, blocked)
 
         self.assertEqual((left, right), (-200, -200))
 

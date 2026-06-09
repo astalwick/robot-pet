@@ -54,6 +54,14 @@ class FakeRoboClaw:
         self.calls.append(("ReadM2VelocityPID", address))
         return True, 1.0, 0.5, 0.25, 11190
 
+    def ReadMainBatteryVoltage(self, address):
+        self.calls.append(("ReadMainBatteryVoltage", address))
+        return True, 123
+
+    def ReadCurrents(self, address):
+        self.calls.append(("ReadCurrents", address))
+        return True, 150, 175
+
 
 class PacketTimeoutError(Exception):
     pass
@@ -83,6 +91,30 @@ class SerialErrorRoboClaw(FakeRoboClaw):
     def SpeedM1M2(self, address, left_qpps, right_qpps):
         self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
         raise SerialException("serial link dropped")
+
+
+class ReadTimeoutRoboClaw(FakeRoboClaw):
+    def ReadSpeedM1(self, address):
+        self.calls.append(("ReadSpeedM1", address))
+        raise PacketTimeoutError("timed out")
+
+    def ReadM1VelocityPID(self, address):
+        self.calls.append(("ReadM1VelocityPID", address))
+        raise PacketTimeoutError("timed out")
+
+    def ReadMainBatteryVoltage(self, address):
+        self.calls.append(("ReadMainBatteryVoltage", address))
+        raise PacketTimeoutError("timed out")
+
+    def ReadCurrents(self, address):
+        self.calls.append(("ReadCurrents", address))
+        raise PacketTimeoutError("timed out")
+
+
+class NonRecoverableReadRoboClaw(FakeRoboClaw):
+    def ReadSpeedM1(self, address):
+        self.calls.append(("ReadSpeedM1", address))
+        raise RuntimeError("unexpected read failure")
 
 
 class MotorDriverTest(unittest.TestCase):
@@ -116,6 +148,18 @@ class MotorDriverTest(unittest.TestCase):
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertEqual(driver.read_max_qpps(), (11180, 11190))
+
+    def test_get_battery_voltage_reads_main_pack_voltage(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.get_battery_voltage(), 12.3)
+
+    def test_get_currents_reads_motor_currents(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.get_currents(), (1.5, 1.75))
 
     def test_stop_preserves_existing_zero_duty_behavior(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
@@ -158,6 +202,37 @@ class MotorDriverTest(unittest.TestCase):
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertFalse(driver.set_speed(0.5, 0.5))
+
+    def test_read_wheel_speeds_returns_none_on_roboclaw_timeout(self):
+        fake = ReadTimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.read_wheel_speeds(), (None, None))
+
+    def test_read_max_qpps_returns_none_on_roboclaw_timeout(self):
+        fake = ReadTimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.read_max_qpps(), (None, None))
+
+    def test_get_battery_voltage_returns_none_on_roboclaw_timeout(self):
+        fake = ReadTimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertIsNone(driver.get_battery_voltage())
+
+    def test_get_currents_returns_none_on_roboclaw_timeout(self):
+        fake = ReadTimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertIsNone(driver.get_currents())
+
+    def test_read_wheel_speeds_reraises_unexpected_error(self):
+        fake = NonRecoverableReadRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        with self.assertRaises(RuntimeError):
+            driver.read_wheel_speeds()
 
     def test_cleanup_ignores_roboclaw_timeout_while_closing(self):
         fake = TimeoutRoboClaw("/dev/fake", 38400)

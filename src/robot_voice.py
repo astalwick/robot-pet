@@ -641,9 +641,10 @@ class RobotVoiceService:
             self.session = None
         self._idle_started_at = None
         self._end_session_event.clear()
+        if self._detector is not None:
+            self._detector.reset()
+        self._mode = "armed"
         self._close_timeline_phases()
-        # Play the end chime before arming, otherwise the wake loop hears the chime
-        # and false-fires, bouncing us straight back into a new session.
         if config is not None and config.wake_word_enabled and audio is not None:
             chime_path = config.session_end_chime_path
             if Path(chime_path).is_file():
@@ -653,7 +654,6 @@ class RobotVoiceService:
                     log.warning("session end chime failed: %s", exc)
             else:
                 log.warning("session end chime not found: %s", chime_path)
-        self._mode = "armed"
         if config is not None:
             self.publish(
                 config,

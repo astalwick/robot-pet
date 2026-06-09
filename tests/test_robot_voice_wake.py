@@ -102,6 +102,21 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         service.publish(service.active_config, status="waiting", assistant_speaking=False)
         self.assertIn("timeline", published[-1])
 
+    async def test_deactivate_resets_detector_before_arming(self):
+        # The detector is not fed during a session, so its streaming buffer holds
+        # stale pre-session audio. Re-arming must reset it, or that stale audio
+        # plus the end-chime tail fires a spurious wake right at session end.
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service.active_config = VoiceConfig(wake_word_enabled=False)
+        service._mode = "active"
+        service._detector = mock.Mock()
+
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            await service._deactivate_session()
+
+        service._detector.reset.assert_called_once()
+        self.assertEqual(service._mode, "armed")
+
     async def test_armed_mode_suppresses_wake_scoring(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service._mode = "active"

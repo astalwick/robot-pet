@@ -48,6 +48,15 @@ class WakeWordDetector:
         self._wake_name = names[0]
         return self._wake_name
 
+    def reset(self) -> None:
+        # Called when re-arming after a session. The model is not fed during a
+        # session, so its streaming buffer holds stale pre-session audio that
+        # would score spuriously on the first frames back. Clear it, and start a
+        # debounce window so the session-end chime tail can't fire a wake either.
+        if self._model is not None:
+            self._model.reset()
+        self.last_fire_at = time.monotonic()
+
     def score(self, frame: bytes) -> float:
         if self._model is None or self._wake_name is None:
             raise RuntimeError("WakeWordDetector.load() must be called first")

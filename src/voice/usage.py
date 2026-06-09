@@ -19,8 +19,9 @@ from voice.elevenlabs_io import ELEVEN_FLASH_MODEL, SCRIBE_MODEL
 LLM_INPUT_USD_PER_MTOK = 0.75
 LLM_CACHED_INPUT_USD_PER_MTOK = 0.075
 LLM_OUTPUT_USD_PER_MTOK = 4.50
-# ElevenLabs Scribe v2 realtime STT: https://elevenlabs.io/pricing/api  (per audio minute)
-STT_USD_PER_MINUTE = 0.080
+# ElevenLabs Scribe v2 realtime STT: https://elevenlabs.io/pricing/api
+# $0.39 per audio hour -> $0.0065 per audio minute.
+STT_USD_PER_MINUTE = 0.0065
 # ElevenLabs Flash v2.5 TTS: https://elevenlabs.io/pricing/api  (per 1000 characters)
 TTS_USD_PER_1K_CHARS = 0.050
 

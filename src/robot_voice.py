@@ -53,6 +53,9 @@ DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
 FACE_ME_MOTION_TIMEOUT_SECONDS = 5.0
 DEFAULT_CAMERA_SNAPSHOT_URL = f"http://127.0.0.1:{DEFAULT_CAMERA_PORT}/snapshot.jpg"
+VOICE_STOPPED: str | None = None
+VOICE_ARMED = "armed"
+VOICE_ACTIVE = "active"
 
 log = setup_logging("robot-voice")
 
@@ -331,17 +334,17 @@ class RobotVoiceService:
             return {"ok": True, "accepted": False, "reason": "invalid_payload"}
         cmd = payload.get("cmd")
         if cmd == "talk_now":
-            if self._mode == "active":
+            if self._mode == VOICE_ACTIVE:
                 log.info("talk-now ignored: session already active")
                 return {"ok": True, "accepted": False, "reason": "session_already_active"}
-            if self._mode != "armed":
+            if self._mode != VOICE_ARMED:
                 log.info("talk-now ignored: voice is not armed")
                 return {"ok": True, "accepted": False, "reason": "not_armed"}
             log.info("talk-now command received")
             self._wake_event.set()
             return {"ok": True, "accepted": True, "reason": None}
         if cmd == "end_session":
-            if self._mode != "active":
+            if self._mode != VOICE_ACTIVE:
                 log.info("end-session ignored: no active session")
                 return {"ok": True, "accepted": False, "reason": "no_active_session"}
             log.info("end-session command received")
@@ -407,7 +410,7 @@ class RobotVoiceService:
         await asyncio.sleep(self.poll_seconds)
 
     def request_end_session(self) -> None:
-        if self._mode == "active":
+        if self._mode == VOICE_ACTIVE:
             self._end_session_event.set()
 
     def _latch_orchestrator_startup(self, config: VoiceConfig, error: str) -> None:
@@ -481,7 +484,7 @@ class RobotVoiceService:
         self._detector = detector
         self._wake_task = asyncio.create_task(self._run_wake_loop(config))
 
-        self._mode = "armed"
+        self._mode = VOICE_ARMED
         self._idle_started_at = None
         self._orchestrator_task = asyncio.create_task(self._run_orchestrator())
         self.publish(
@@ -500,7 +503,7 @@ class RobotVoiceService:
 
     async def _run_orchestrator(self) -> None:
         while True:
-            self._mode = "armed"
+            self._mode = VOICE_ARMED
             config = self.active_config
             if config is None:
                 return
@@ -551,7 +554,7 @@ class RobotVoiceService:
             self.publish(config, status="error", last_error=f"Missing Python dependency: {exc.name}")
             return False
 
-        self._mode = "active"
+        self._mode = VOICE_ACTIVE
         self._idle_started_at = time.monotonic()
         self._wake_event.clear()
         self._end_session_event.clear()
@@ -582,7 +585,7 @@ class RobotVoiceService:
         except Exception as exc:
             log.warning("voice session start failed: %s", exc)
             self.session = None
-            self._mode = "armed"
+            self._mode = VOICE_ARMED
             self.publish(config, status="error", last_error=str(exc))
             return False
         self._sampler_task = asyncio.create_task(self._sample_timeline())
@@ -615,7 +618,7 @@ class RobotVoiceService:
         if config is None or config.session_idle_secs <= 0 or not config.wake_word_enabled:
             await asyncio.Event().wait()
             return
-        while self._mode == "active":
+        while self._mode == VOICE_ACTIVE:
             await asyncio.sleep(0.5)
             if bool(self.status.get("assistant_speaking")):
                 continue
@@ -642,7 +645,7 @@ class RobotVoiceService:
         self._end_session_event.clear()
         if self._detector is not None:
             self._detector.reset()
-        self._mode = "armed"
+        self._mode = VOICE_ARMED
         self._close_timeline_phases()
         if config is not None and config.wake_word_enabled and audio is not None:
             chime_path = config.session_end_chime_path
@@ -680,7 +683,7 @@ class RobotVoiceService:
             queue_size=WAKE_MIC_QUEUE_SIZE,
             warn_on_drop=False,
         ):
-            if self._mode != "armed":
+            if self._mode != VOICE_ARMED:
                 continue
             started = time.perf_counter()
             woke = detector.check(frame)
@@ -800,7 +803,7 @@ class RobotVoiceService:
                 with suppress(asyncio.CancelledError):
                     await wake_task
         self._detector = None
-        self._mode = None
+        self._mode = VOICE_STOPPED
         self._wake_event.clear()
         self._end_session_event.clear()
         self._idle_started_at = None
@@ -861,14 +864,14 @@ class RobotVoiceService:
     def publish(self, config: VoiceConfig, *, force_timeline: bool = False, **updates: object) -> None:
         started = time.perf_counter()
         was_idle = (
-            self._mode == "active"
+            self._mode == VOICE_ACTIVE
             and self.status.get("status") == "listening"
             and not bool(self.status.get("assistant_speaking"))
         )
         next_status = updates.get("status", self.status.get("status"))
         next_assistant_speaking = updates.get("assistant_speaking", self.status.get("assistant_speaking"))
         self.status.update(updates)
-        is_idle = self._mode == "active" and next_status == "listening" and not bool(next_assistant_speaking)
+        is_idle = self._mode == VOICE_ACTIVE and next_status == "listening" and not bool(next_assistant_speaking)
         if is_idle and not was_idle:
             self._idle_started_at = time.monotonic()
         elif not is_idle:

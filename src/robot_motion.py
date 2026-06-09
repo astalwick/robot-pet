@@ -294,42 +294,12 @@ class MotionRunner:
                     self.sleep(self.config.loop_interval)
                     continue
 
-                tuning = DriveTuning()
-                drive = DriveCommand(
-                    left_qpps=0,
-                    right_qpps=0,
-                    controller={"connected": False, "buttons": {}},
-                    wheels={"left_command": 0.0, "right_command": 0.0},
-                    drive_tuning=tuning.to_dict(),
-                    drive_status={"state": self.drive_state, "controller_reader_alive": None},
-                    link_loop={},
-                )
+                drive = self._intent_only_drive_command()
             else:
                 gamepad_active = self._gamepad_active_from_wheels(drive.wheels)
                 intent_command = self._tick_intent(now, gamepad_active)
 
-            if intent_command is not None:
-                tuning = DriveTuning.from_dict(drive.drive_tuning)
-                intent_mixer = DifferentialDriveMixer(
-                    qpps=self.config.qpps,
-                    speed_scale=tuning.speed_scale,
-                    turbo_scale=tuning.turbo_scale,
-                )
-                mixed_wheels = intent_mixer.mix(intent_command)
-                wheels = {
-                    "left_command": mixed_wheels.left,
-                    "right_command": mixed_wheels.right,
-                }
-                intent_target = intent_mixer.to_wheel_speeds(
-                    intent_command,
-                    turbo=drive.controller.get("buttons", {}).get("lb", False),
-                )
-                left_qpps = intent_target.left_qpps
-                right_qpps = intent_target.right_qpps
-            else:
-                left_qpps = drive.left_qpps
-                right_qpps = drive.right_qpps
-                wheels = drive.wheels
+            wheels, left_qpps, right_qpps = self._target_from_drive_or_intent(drive, intent_command)
 
             with self._sensors_lock:
                 readings = list(self._sensor_readings)
@@ -390,6 +360,43 @@ class MotionRunner:
         left = wheels.get("left_command", 0.0) or 0.0
         right = wheels.get("right_command", 0.0) or 0.0
         return left != 0.0 or right != 0.0
+
+    def _intent_only_drive_command(self) -> DriveCommand:
+        tuning = DriveTuning()
+        return DriveCommand(
+            left_qpps=0,
+            right_qpps=0,
+            controller={"connected": False, "buttons": {}},
+            wheels={"left_command": 0.0, "right_command": 0.0},
+            drive_tuning=tuning.to_dict(),
+            drive_status={"state": self.drive_state, "controller_reader_alive": None},
+            link_loop={},
+        )
+
+    def _target_from_drive_or_intent(
+        self,
+        drive: DriveCommand,
+        intent_command: MotionCommand | None,
+    ) -> tuple[dict[str, Any], int, int]:
+        if intent_command is None:
+            return drive.wheels, drive.left_qpps, drive.right_qpps
+
+        tuning = DriveTuning.from_dict(drive.drive_tuning)
+        intent_mixer = DifferentialDriveMixer(
+            qpps=self.config.qpps,
+            speed_scale=tuning.speed_scale,
+            turbo_scale=tuning.turbo_scale,
+        )
+        mixed_wheels = intent_mixer.mix(intent_command)
+        intent_target = intent_mixer.to_wheel_speeds(
+            intent_command,
+            turbo=drive.controller.get("buttons", {}).get("lb", False),
+        )
+        return (
+            {"left_command": mixed_wheels.left, "right_command": mixed_wheels.right},
+            intent_target.left_qpps,
+            intent_target.right_qpps,
+        )
 
     def _publish_waiting_telemetry(self, drive: DriveCommand | None = None, roboclaw_ready: bool = False) -> None:
         drive_status = self._drive_status_payload(roboclaw_ready=roboclaw_ready)

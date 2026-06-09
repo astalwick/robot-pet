@@ -23,7 +23,7 @@ from config.sensors import (
 from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, DriveCommandListener
-from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
+from control.motion_intent import MotionIntentBridge, MotionIntentExecutor, START_ACK_TOOLS
 from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
@@ -340,6 +340,7 @@ class MotionRunner:
                     stop_reason = "RoboClaw speed command was not acknowledged"
                     log.error("%s", stop_reason)
                     break
+                self._complete_intent_if_started()
                 closed_loop_active = True
                 idle_released = False
 
@@ -562,6 +563,15 @@ class MotionRunner:
             else:
                 complete({"ok": False, "error": tick.result or "unknown"})
         return tick.command
+
+    def _complete_intent_if_started(self) -> None:
+        if self.pending_intent_complete is None:
+            return
+        if self.intent_executor.active_tool() not in START_ACK_TOOLS:
+            return
+        complete = self.pending_intent_complete
+        self.pending_intent_complete = None
+        complete({"ok": True, "result": "started"})
 
     def _fail_pending_intent(self, reason: str) -> None:
         if self.pending_intent_complete is None:

@@ -529,7 +529,10 @@ class RobotVoiceDoATest(unittest.IsolatedAsyncioTestCase):
             result = service.face_me_caller()
 
         request.assert_called_once_with(
-            service.motion_intent_socket, "face_me", timeout=5.0, relative_degrees=90
+            service.motion_intent_socket,
+            "face_me",
+            timeout=robot_voice.FACE_ME_MOTION_TIMEOUT_SECONDS,
+            relative_degrees=90,
         )
         self.assertEqual(result, {"ok": True, "result": "completed"})
 

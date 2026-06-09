@@ -193,6 +193,7 @@ class RobotMotionTest(unittest.TestCase):
         runner._run_motor_loop(motor)
 
         self.assertTrue(any(left > 0 and right > 0 for left, right in motor.commands))
+        self.assertEqual(completed, [{"ok": True, "result": "started"}])
 
     def test_motion_service_starts_parameterized_diagnostic_turn(self):
         motor = FakeMotor()
@@ -360,7 +361,7 @@ class RobotMotionTest(unittest.TestCase):
         self.assertFalse(runner.intent_executor.is_active())
         self.assertFalse(runner._motion_power_requested())
 
-    def test_motion_intent_publishes_telemetry_and_completes(self):
+    def test_motion_intent_publishes_telemetry_and_reports_started(self):
         motor = FakeMotor()
         completed = []
         published = []
@@ -387,8 +388,36 @@ class RobotMotionTest(unittest.TestCase):
 
         runner._run_motor_loop(motor)
 
-        self.assertIn({"ok": True, "result": "completed"}, completed)
+        self.assertEqual(completed, [{"ok": True, "result": "started"}])
         self.assertTrue(published)
+
+    def test_face_me_reports_completion_after_motion_finishes(self):
+        motor = FakeMotor()
+        completed = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.1
+            if current_time > 2.0:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.intent_executor.start("face_me", now=0.0, relative_degrees=30)
+        runner.pending_intent_complete = completed.append
+
+        runner._run_motor_loop(motor)
+
+        self.assertIn({"ok": True, "result": "completed"}, completed)
 
 
 if __name__ == "__main__":

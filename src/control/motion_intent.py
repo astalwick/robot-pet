@@ -43,6 +43,8 @@ FACE_ME_MAX_RELATIVE_DEGREES = 180
 
 KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn", "face_me")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
+START_ACK_TOOLS = ("wiggle", "move_forward", "diagnostic_turn")
+MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 10.0
 
 
 def valid_relative_degrees(value: Any) -> bool:
@@ -196,12 +198,12 @@ class MotionIntentBridge:
     """Unix-socket server thread that hands intents to the main control loop.
 
     The main loop polls `take_pending()` each tick; if a request is waiting it
-    runs through the executor and reports the outcome via the returned
-    completion callback. The server thread blocks the client connection until
-    completion is signaled, so the LLM sees a final result.
+    runs through the executor and reports the outcome via the returned callback.
+    Some tools answer when motion starts; result-sensitive tools can answer when
+    they finish.
     """
 
-    INTENT_MAX_SECONDS = 5.0
+    INTENT_MAX_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
     _ACCEPT_TIMEOUT = 0.5
 
     def __init__(self, socket_path: str) -> None:
@@ -346,7 +348,7 @@ class MotionIntentBridge:
 def request_motion_intent(
     socket_path: str,
     tool: str,
-    timeout: float = 2.0,
+    timeout: float = MOTION_INTENT_REPLY_TIMEOUT_SECONDS,
     **parameters: Any,
 ) -> dict[str, Any]:
     """Send a motion intent request over a Unix socket and wait for one reply.

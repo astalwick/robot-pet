@@ -15,7 +15,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
-from control.motion_intent import request_motion_intent
+from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_motion_intent
 from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from lib.log import setup_logging
 from telemetry.messages import voice_update
@@ -51,7 +51,7 @@ TIMELINE_MAX_PARTIAL_EVENTS = 400
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
 DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
-FACE_ME_MOTION_TIMEOUT_SECONDS = 5.0
+FACE_ME_MOTION_TIMEOUT_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
 DEFAULT_CAMERA_SNAPSHOT_URL = f"http://127.0.0.1:{DEFAULT_CAMERA_PORT}/snapshot.jpg"
 VOICE_STOPPED: str | None = None
 VOICE_ARMED = "armed"
@@ -569,7 +569,11 @@ class RobotVoiceService:
             lambda update: self.publish(config, **update),
             audio=self.audio,
             event_callback=self.timeline.add_event,
-            motion_intent_caller=lambda tool: request_motion_intent(motion_socket, tool, timeout=2.0),
+            motion_intent_caller=lambda tool: request_motion_intent(
+                motion_socket,
+                tool,
+                timeout=MOTION_INTENT_REPLY_TIMEOUT_SECONDS,
+            ),
             session_end_caller=self.request_end_session,
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             robot_inspection_caller=lambda: read_telemetry_snapshot(self.telemetry_subscribe_socket),

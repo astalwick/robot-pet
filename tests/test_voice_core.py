@@ -22,8 +22,12 @@ from voice.assistant import (
     decide_barge_in_during_playback,
     handle_scribe_events,
     inspect_robot_snapshot,
+    note_recent_barge_in_audio,
+    note_utterance_barge_in_audio,
     note_mic_chunk,
     refresh_barge_in_gate,
+    reset_recent_barge_in_audio,
+    reset_utterance_barge_in_audio,
     run_assistant_turn,
     stream_openai_words,
 )
@@ -315,6 +319,94 @@ class DecideBargeInDuringPlaybackTest(unittest.TestCase):
 
         self.assertFalse(outcome.accepted)
         self.assertEqual(outcome.reason, "assistant_echo")
+
+
+class BargeInAudioMemoryTest(unittest.TestCase):
+    def test_reset_recent_barge_in_audio_clears_recent_fields(self):
+        state = TurnRuntimeState(
+            recent_barge_in_mic_rms=900,
+            recent_barge_in_gate_open=True,
+            recent_barge_in_gate_reason="substantial_partial",
+            recent_barge_in_audio_at=3.0,
+        )
+
+        reset_recent_barge_in_audio(state)
+
+        self.assertEqual(state.recent_barge_in_mic_rms, 0)
+        self.assertFalse(state.recent_barge_in_gate_open)
+        self.assertEqual(state.recent_barge_in_gate_reason, "assistant_not_speaking")
+        self.assertEqual(state.recent_barge_in_audio_at, 0.0)
+
+    def test_reset_utterance_barge_in_audio_clears_utterance_fields(self):
+        state = TurnRuntimeState(
+            utterance_barge_in_mic_rms=900,
+            utterance_barge_in_gate_open=True,
+            utterance_barge_in_gate_reason="substantial_partial",
+            utterance_barge_in_audio_at=3.0,
+        )
+
+        reset_utterance_barge_in_audio(state)
+
+        self.assertEqual(state.utterance_barge_in_mic_rms, 0)
+        self.assertFalse(state.utterance_barge_in_gate_open)
+        self.assertEqual(state.utterance_barge_in_gate_reason, "assistant_not_speaking")
+        self.assertEqual(state.utterance_barge_in_audio_at, 0.0)
+
+    def test_note_utterance_barge_in_audio_keeps_peak_rms_and_open_gate(self):
+        state = TurnRuntimeState(
+            last_local_speech_rms=700,
+            gate_open=True,
+            gate_last_reason="substantial_partial",
+        )
+
+        note_utterance_barge_in_audio(state, now=1.0)
+        state.last_local_speech_rms = 500
+        state.gate_open = False
+        state.gate_last_reason = "low_rms"
+        note_utterance_barge_in_audio(state, now=1.2)
+
+        self.assertEqual(state.utterance_barge_in_mic_rms, 700)
+        self.assertTrue(state.utterance_barge_in_gate_open)
+        self.assertEqual(state.utterance_barge_in_gate_reason, "low_rms")
+        self.assertEqual(state.utterance_barge_in_audio_at, 1.2)
+
+    def test_note_recent_barge_in_audio_keeps_peak_inside_window(self):
+        state = TurnRuntimeState(
+            last_local_speech_rms=500,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_audio_at=1.0,
+            recent_barge_in_mic_rms=800,
+            recent_barge_in_gate_open=True,
+            recent_barge_in_gate_reason="substantial_partial",
+        )
+        policy = TurnPolicy(local_speech_window_secs=1.0)
+
+        note_recent_barge_in_audio(state, now=1.5, policy=policy)
+
+        self.assertEqual(state.recent_barge_in_mic_rms, 800)
+        self.assertTrue(state.recent_barge_in_gate_open)
+        self.assertEqual(state.recent_barge_in_gate_reason, "low_rms")
+        self.assertEqual(state.recent_barge_in_audio_at, 1.5)
+
+    def test_note_recent_barge_in_audio_resets_gate_when_window_is_stale(self):
+        state = TurnRuntimeState(
+            last_local_speech_rms=500,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_audio_at=1.0,
+            recent_barge_in_mic_rms=800,
+            recent_barge_in_gate_open=True,
+            recent_barge_in_gate_reason="substantial_partial",
+        )
+        policy = TurnPolicy(local_speech_window_secs=0.5)
+
+        note_recent_barge_in_audio(state, now=2.0, policy=policy)
+
+        self.assertEqual(state.recent_barge_in_mic_rms, 500)
+        self.assertFalse(state.recent_barge_in_gate_open)
+        self.assertEqual(state.recent_barge_in_gate_reason, "low_rms")
+        self.assertEqual(state.recent_barge_in_audio_at, 2.0)
 
 
 class ActiveTurnTest(unittest.TestCase):

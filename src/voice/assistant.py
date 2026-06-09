@@ -495,6 +495,41 @@ class TurnRuntimeState:
     barge_in_hearing_reported: bool = False
 
 
+def reset_recent_barge_in_audio(state: TurnRuntimeState) -> None:
+    state.recent_barge_in_mic_rms = 0
+    state.recent_barge_in_gate_open = False
+    state.recent_barge_in_gate_reason = "assistant_not_speaking"
+    state.recent_barge_in_audio_at = 0.0
+
+
+def reset_utterance_barge_in_audio(state: TurnRuntimeState) -> None:
+    state.utterance_barge_in_mic_rms = 0
+    state.utterance_barge_in_gate_open = False
+    state.utterance_barge_in_gate_reason = "assistant_not_speaking"
+    state.utterance_barge_in_audio_at = 0.0
+
+
+def note_utterance_barge_in_audio(state: TurnRuntimeState, now: float) -> None:
+    if state.last_local_speech_rms > state.utterance_barge_in_mic_rms:
+        state.utterance_barge_in_mic_rms = state.last_local_speech_rms
+    if state.gate_open:
+        state.utterance_barge_in_gate_open = True
+    state.utterance_barge_in_gate_reason = state.gate_last_reason
+    state.utterance_barge_in_audio_at = now
+
+
+def note_recent_barge_in_audio(state: TurnRuntimeState, now: float, policy: TurnPolicy) -> None:
+    fresh = now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs
+    if not fresh or state.last_local_speech_rms > state.recent_barge_in_mic_rms:
+        state.recent_barge_in_mic_rms = state.last_local_speech_rms
+    if not fresh:
+        state.recent_barge_in_gate_open = False
+    if state.gate_open:
+        state.recent_barge_in_gate_open = True
+    state.recent_barge_in_gate_reason = state.gate_last_reason
+    state.recent_barge_in_audio_at = now
+
+
 @dataclass
 class BargeInOutcome:
     accepted: bool
@@ -903,20 +938,6 @@ async def handle_scribe_events(
         state.barge_in_hearing_reported = True
         publish_barge_in_event(source, "hearing")
 
-    def reset_utterance_barge_in_audio() -> None:
-        state.utterance_barge_in_mic_rms = 0
-        state.utterance_barge_in_gate_open = False
-        state.utterance_barge_in_gate_reason = "assistant_not_speaking"
-        state.utterance_barge_in_audio_at = 0.0
-
-    def note_utterance_barge_in_audio(now: float) -> None:
-        if state.last_local_speech_rms > state.utterance_barge_in_mic_rms:
-            state.utterance_barge_in_mic_rms = state.last_local_speech_rms
-        if state.gate_open:
-            state.utterance_barge_in_gate_open = True
-        state.utterance_barge_in_gate_reason = state.gate_last_reason
-        state.utterance_barge_in_audio_at = now
-
     def trigger_stop_playback_now() -> None:
         if not stop_playback_now:
             return
@@ -990,11 +1011,8 @@ async def handle_scribe_events(
     async def start_turn(prompt: str, speculative: bool) -> None:
         await cancel_active_turn("new_turn")
         state.barge_in_hearing_reported = False
-        state.recent_barge_in_mic_rms = 0
-        state.recent_barge_in_gate_open = False
-        state.recent_barge_in_gate_reason = "assistant_not_speaking"
-        state.recent_barge_in_audio_at = 0.0
-        reset_utterance_barge_in_audio()
+        reset_recent_barge_in_audio(state)
+        reset_utterance_barge_in_audio(state)
         state.next_turn_id += 1
         new_turn_id = state.next_turn_id
         playback_event = asyncio.Event()
@@ -1220,7 +1238,7 @@ async def handle_scribe_events(
                     return
                 await start_turn(text, speculative=False)
         finally:
-            reset_utterance_barge_in_audio()
+            reset_utterance_barge_in_audio(state)
 
     def is_recent_assistant_echo(text: str, now: float) -> bool:
         if policy.has_explicit_interrupt(text):
@@ -1258,17 +1276,9 @@ async def handle_scribe_events(
                 levels.mic_rms = state.last_local_speech_rms
                 publish_barge_in_state(now, state.last_local_speech_rms)
                 if state.active_turn and state.active_turn.is_playing_back():
-                    fresh = now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs
                     if state.last_local_speech_rms >= policy.user_active_rms_threshold or state.gate_open:
-                        note_utterance_barge_in_audio(now)
-                        if not fresh or state.last_local_speech_rms > state.recent_barge_in_mic_rms:
-                            state.recent_barge_in_mic_rms = state.last_local_speech_rms
-                        if not fresh:
-                            state.recent_barge_in_gate_open = False
-                        if state.gate_open:
-                            state.recent_barge_in_gate_open = True
-                        state.recent_barge_in_gate_reason = state.gate_last_reason
-                        state.recent_barge_in_audio_at = now
+                        note_utterance_barge_in_audio(state, now)
+                        note_recent_barge_in_audio(state, now, policy)
                 continue
 
             if event_type == "partial":

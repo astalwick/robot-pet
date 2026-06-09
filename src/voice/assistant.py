@@ -484,6 +484,10 @@ class TurnRuntimeState:
     recent_barge_in_gate_open: bool = False
     recent_barge_in_gate_reason: str = "assistant_not_speaking"
     recent_barge_in_audio_at: float = 0.0
+    utterance_barge_in_mic_rms: int = 0
+    utterance_barge_in_gate_open: bool = False
+    utterance_barge_in_gate_reason: str = "assistant_not_speaking"
+    utterance_barge_in_audio_at: float = 0.0
     local_audio_seq: int = 0
     last_partial_text: str = ""
     last_partial_audio_seq: int = -1
@@ -515,6 +519,10 @@ def decide_barge_in_during_playback(
         mic_rms = state.recent_barge_in_mic_rms
         gate_open = state.recent_barge_in_gate_open
         gate_reason = state.recent_barge_in_gate_reason
+    elif state.utterance_barge_in_audio_at > 0:
+        mic_rms = state.utterance_barge_in_mic_rms
+        gate_open = state.utterance_barge_in_gate_open
+        gate_reason = state.utterance_barge_in_gate_reason
     accepted, reason = policy.barge_in_decision(
         text,
         assistant_speaking=True,
@@ -895,6 +903,20 @@ async def handle_scribe_events(
         state.barge_in_hearing_reported = True
         publish_barge_in_event(source, "hearing")
 
+    def reset_utterance_barge_in_audio() -> None:
+        state.utterance_barge_in_mic_rms = 0
+        state.utterance_barge_in_gate_open = False
+        state.utterance_barge_in_gate_reason = "assistant_not_speaking"
+        state.utterance_barge_in_audio_at = 0.0
+
+    def note_utterance_barge_in_audio(now: float) -> None:
+        if state.last_local_speech_rms > state.utterance_barge_in_mic_rms:
+            state.utterance_barge_in_mic_rms = state.last_local_speech_rms
+        if state.gate_open:
+            state.utterance_barge_in_gate_open = True
+        state.utterance_barge_in_gate_reason = state.gate_last_reason
+        state.utterance_barge_in_audio_at = now
+
     def trigger_stop_playback_now() -> None:
         if not stop_playback_now:
             return
@@ -972,6 +994,7 @@ async def handle_scribe_events(
         state.recent_barge_in_gate_open = False
         state.recent_barge_in_gate_reason = "assistant_not_speaking"
         state.recent_barge_in_audio_at = 0.0
+        reset_utterance_barge_in_audio()
         state.next_turn_id += 1
         new_turn_id = state.next_turn_id
         playback_event = asyncio.Event()
@@ -1119,82 +1142,85 @@ async def handle_scribe_events(
         now = asyncio.get_running_loop().time()
         emit("commit", text=text)
         end_user_speech()
-        if is_end_session_request(text, policy):
-            status(status="listening", partial_transcript=None, last_committed_transcript=text)
-            if session_end_caller:
-                session_end_caller()
-            return
-        if is_recent_assistant_echo(text, now):
-            emit("echo_suppressed", source="commit", text=text)
-            status(status="listening")
-            return
-
-        should_start_from_commit, commit_reason = policy.commit_decision(text)
-        emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
-
-        active_turn = state.active_turn
-        if (
-            active_turn
-            and active_turn.is_playing_back()
-            and not policy.transcript_matches(text, active_turn.prompt)
-        ):
-            active_turn.mark_speech_started(now)
-            publish_barge_in_state(now)
-            outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
-            report_barge_in("commit", outcome)
-            if not outcome.accepted:
-                emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
-                log.info(
-                    "commit rejected during playback: reason=%s text=%r",
-                    outcome.reason,
-                    text,
-                )
-                return
-
-            publish_barge_in_hearing("stt")
-            publish_barge_in_event("commit", outcome.reason)
-            await cancel_active_turn("barge_in_commit")
-            if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
+        try:
+            if is_end_session_request(text, policy):
                 status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                if session_end_caller:
+                    session_end_caller()
                 return
+            if is_recent_assistant_echo(text, now):
+                emit("echo_suppressed", source="commit", text=text)
+                status(status="listening")
+                return
+
+            should_start_from_commit, commit_reason = policy.commit_decision(text)
+            emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
+
+            active_turn = state.active_turn
+            if (
+                active_turn
+                and active_turn.is_playing_back()
+                and not policy.transcript_matches(text, active_turn.prompt)
+            ):
+                active_turn.mark_speech_started(now)
+                publish_barge_in_state(now)
+                outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
+                report_barge_in("commit", outcome)
+                if not outcome.accepted:
+                    emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
+                    log.info(
+                        "commit rejected during playback: reason=%s text=%r",
+                        outcome.reason,
+                        text,
+                    )
+                    return
+
+                publish_barge_in_hearing("stt")
+                publish_barge_in_event("commit", outcome.reason)
+                await cancel_active_turn("barge_in_commit")
+                if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
+                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                    return
+                status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+                await start_turn(text, speculative=False)
+                return
+
             status(status="thinking", partial_transcript=None, last_committed_transcript=text)
-            await start_turn(text, speculative=False)
-            return
 
-        status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+            if active_turn and not active_turn.speculative and not active_turn.playback_event.is_set():
+                if policy.normalized_transcript(text) == policy.normalized_transcript(active_turn.prompt):
+                    active_turn.committed_text = text
+                    active_turn.prompt = text
+                    await maybe_commit_history(active_turn)
+                    return
+                if active_turn.is_speaking():
+                    return
+                if not should_start_from_commit:
+                    return
+                await cancel_active_turn("commit_continuation")
+                await start_turn(text, speculative=False)
+                return
 
-        if active_turn and not active_turn.speculative and not active_turn.playback_event.is_set():
-            if policy.normalized_transcript(text) == policy.normalized_transcript(active_turn.prompt):
-                active_turn.committed_text = text
-                active_turn.prompt = text
-                await maybe_commit_history(active_turn)
-                return
-            if active_turn.is_speaking():
-                return
-            if not should_start_from_commit:
-                return
-            await cancel_active_turn("commit_continuation")
-            await start_turn(text, speculative=False)
-            return
-
-        if active_turn and active_turn.is_active():
-            if policy.transcript_matches(text, active_turn.prompt):
+            if active_turn and active_turn.is_active():
+                if policy.transcript_matches(text, active_turn.prompt):
+                    await active_turn.confirm(text)
+                    emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
+                    await maybe_commit_history(active_turn)
+                else:
+                    if not should_start_from_commit:
+                        return
+                    await cancel_active_turn("commit_mismatch")
+                    await start_turn(text, speculative=False)
+            elif active_turn and policy.transcript_matches(text, active_turn.prompt):
                 await active_turn.confirm(text)
                 emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
                 await maybe_commit_history(active_turn)
             else:
                 if not should_start_from_commit:
                     return
-                await cancel_active_turn("commit_mismatch")
                 await start_turn(text, speculative=False)
-        elif active_turn and policy.transcript_matches(text, active_turn.prompt):
-            await active_turn.confirm(text)
-            emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
-            await maybe_commit_history(active_turn)
-        else:
-            if not should_start_from_commit:
-                return
-            await start_turn(text, speculative=False)
+        finally:
+            reset_utterance_barge_in_audio()
 
     def is_recent_assistant_echo(text: str, now: float) -> bool:
         if policy.has_explicit_interrupt(text):
@@ -1234,6 +1260,7 @@ async def handle_scribe_events(
                 if state.active_turn and state.active_turn.is_playing_back():
                     fresh = now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs
                     if state.last_local_speech_rms >= policy.user_active_rms_threshold or state.gate_open:
+                        note_utterance_barge_in_audio(now)
                         if not fresh or state.last_local_speech_rms > state.recent_barge_in_mic_rms:
                             state.recent_barge_in_mic_rms = state.last_local_speech_rms
                         if not fresh:

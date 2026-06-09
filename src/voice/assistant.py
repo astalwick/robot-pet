@@ -1086,6 +1086,18 @@ async def handle_scribe_events(
             await start_turn(text, speculative=True)
             return
 
+    def consider_playback_barge_in(
+        source: str,
+        text: str,
+        now: float,
+        active_turn: ActiveTurn,
+    ) -> BargeInOutcome:
+        active_turn.mark_speech_started(now)
+        publish_barge_in_state(now)
+        outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
+        report_barge_in(source, outcome)
+        return outcome
+
     async def handle_partial(text: str) -> None:
         now = asyncio.get_running_loop().time()
         normalized_partial = policy.normalized_transcript(text)
@@ -1108,10 +1120,7 @@ async def handle_scribe_events(
 
         active_turn = state.active_turn
         if active_turn and active_turn.is_playing_back():
-            active_turn.mark_speech_started(now)
-            publish_barge_in_state(now)
-            outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
-            report_barge_in("partial", outcome)
+            outcome = consider_playback_barge_in("partial", text, now, active_turn)
             if outcome.accepted:
                 publish_barge_in_hearing("stt")
                 status(status="hearing", partial_transcript=text)
@@ -1180,10 +1189,7 @@ async def handle_scribe_events(
                 and active_turn.is_playing_back()
                 and not policy.transcript_matches(text, active_turn.prompt)
             ):
-                active_turn.mark_speech_started(now)
-                publish_barge_in_state(now)
-                outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
-                report_barge_in("commit", outcome)
+                outcome = consider_playback_barge_in("commit", text, now, active_turn)
                 if not outcome.accepted:
                     emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
                     log.info(

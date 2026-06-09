@@ -491,6 +491,50 @@ class AssistantStreamingTest(unittest.TestCase):
         self.assertEqual(result["vision"], {"available": False})
         self.assertNotIn("memory_used_mb", result["pi"])
 
+    def test_inspect_robot_snapshot_reads_battery_and_drive_from_robot_motion(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {
+                    "robot_motion": {"stale": False},
+                    "gamepad_teleop": {"stale": True},
+                },
+                "motor_battery": {"status": "ok", "pack_voltage": 11.6, "cell_voltage": 3.87},
+                "drive_status": {"state": "stopped", "roboclaw_ready": True},
+            }
+        )
+
+        self.assertTrue(result["battery"]["available"])
+        self.assertEqual(result["battery"]["pack_voltage"], 11.6)
+        self.assertTrue(result["drive"]["available"])
+        self.assertEqual(result["drive"]["state"], "stopped")
+
+    def test_inspect_robot_snapshot_falls_back_to_gamepad_teleop_battery_and_drive(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {"gamepad_teleop": {"stale": False}},
+                "motor_battery": {"status": "ok", "pack_voltage": 11.9},
+                "drive_status": {"state": "driving"},
+            }
+        )
+
+        self.assertTrue(result["battery"]["available"])
+        self.assertTrue(result["drive"]["available"])
+
+    def test_inspect_robot_snapshot_does_not_fall_back_after_motion_stales(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {
+                    "robot_motion": {"stale": True, "last_seen": 100.0},
+                    "gamepad_teleop": {"stale": False},
+                },
+                "motor_battery": {"status": "ok", "pack_voltage": 11.9},
+                "drive_status": {"state": "driving"},
+            }
+        )
+
+        self.assertFalse(result["battery"]["available"])
+        self.assertFalse(result["drive"]["available"])
+
     def test_stream_openai_words_feeds_robot_inspection_back_to_model(self):
         async def run():
             class FakeResponses:

@@ -42,6 +42,15 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertIsNone(executor.start("wiggle", now=0.0))
         self.assertEqual(executor.start("wiggle", now=0.05), "busy")
 
+    def test_cancel_clears_active_intent(self):
+        executor = MotionIntentExecutor()
+        executor.start("wiggle", now=0.0)
+        self.assertTrue(executor.is_active())
+
+        executor.cancel()
+
+        self.assertFalse(executor.is_active())
+
     def test_wiggle_emits_left_then_right_then_completes(self):
         executor = MotionIntentExecutor()
         executor.start("wiggle", now=0.0)

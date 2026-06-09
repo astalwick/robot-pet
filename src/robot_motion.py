@@ -29,9 +29,9 @@ from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
 from telemetry.messages import (
     drive_status_message,
-    gamepad_teleop_update,
     link_loop_message,
     motor_battery_message,
+    robot_motion_update,
     wheel_message,
 )
 from telemetry.paths import (
@@ -56,6 +56,7 @@ class MotionConfig:
     qpps: int = DEFAULT_QPPS
     loop_interval: float = 0.05
     retry_interval: float = 1.0
+    intent_wait_timeout: float = 8.0
     telemetry_interval: float = 0.2
     idle_release_delay: float = 0.25
     roboclaw_timeout: float = 0.5
@@ -98,6 +99,7 @@ class MotionRunner:
         self.intent_executor = MotionIntentExecutor()
         self.intent_bridge: MotionIntentBridge | None = None
         self.pending_intent_complete: Callable[[dict[str, Any]], None] | None = None
+        self._intent_wait_started_at: float | None = None
 
         self.mixer = DifferentialDriveMixer(qpps=config.qpps, speed_scale=1.0, turbo_scale=1.0)
         self.stop_requested = False
@@ -239,6 +241,7 @@ class MotionRunner:
         while not self.stop_requested:
             now = self.clock()
             self._service_intent_requests(now)
+            self._fail_intent_if_roboclaw_wait_timed_out(now)
             drive = self._get_drive_command()
             self._publish_waiting_telemetry(drive, roboclaw_ready=False)
             if drive is None and not self._motion_power_requested():
@@ -252,6 +255,7 @@ class MotionRunner:
                 continue
             if self._set_wheel_speeds(motor, 0, 0):
                 log.info("RoboClaw ready")
+                self._intent_wait_started_at = None
                 return motor
             log.warning("initial zero-speed command was not acknowledged")
             motor.cleanup()
@@ -401,9 +405,7 @@ class MotionRunner:
     def _publish_waiting_telemetry(self, drive: DriveCommand | None = None, roboclaw_ready: bool = False) -> None:
         drive_status = self._drive_status_payload(roboclaw_ready=roboclaw_ready)
         if drive is None:
-            controller = {"connected": False}
             wheels = {"read_ok": False}
-            drive_tuning = None
             link_loop = link_loop_message(
                 read_success_rate=None,
                 consecutive_read_failures=0,
@@ -412,19 +414,15 @@ class MotionRunner:
                 command_loop_hz=None,
             )
         else:
-            controller = drive.controller
             wheels = dict(drive.wheels)
             wheels["read_ok"] = False
-            drive_tuning = drive.drive_tuning
             link_loop = drive.link_loop
             drive_status["controller_reader_alive"] = drive.drive_status.get("controller_reader_alive")
 
-        message = gamepad_teleop_update(
-            controller=controller,
+        message = robot_motion_update(
             wheels=wheels,
             motor_battery=motor_battery_message(None),
             link_loop=link_loop,
-            drive_tuning=drive_tuning,
             drive_status=drive_status,
         )
         self._publish_message(message)
@@ -460,8 +458,7 @@ class MotionRunner:
         drive_status["motion_power_requested"] = self._motion_power_requested()
         drive_status["roboclaw_ready"] = True
 
-        message = gamepad_teleop_update(
-            controller=drive.controller,
+        message = robot_motion_update(
             wheels=wheel_message(
                 left_command=wheels.get("left_command", 0.0),
                 right_command=wheels.get("right_command", 0.0),
@@ -477,7 +474,6 @@ class MotionRunner:
             ),
             motor_battery=motor_battery_message(self._last_pack_voltage),
             link_loop=link_loop,
-            drive_tuning=drive.drive_tuning,
             drive_status=drive_status,
         )
         self._publish_message(message)
@@ -519,6 +515,20 @@ class MotionRunner:
 
     def _motion_power_requested(self) -> bool:
         return self.intent_executor.is_active() or self.pending_intent_complete is not None
+
+    def _fail_intent_if_roboclaw_wait_timed_out(self, now: float) -> None:
+        if not self._motion_power_requested():
+            self._intent_wait_started_at = None
+            return
+        if self._intent_wait_started_at is None:
+            self._intent_wait_started_at = now
+            return
+        if now - self._intent_wait_started_at < self.config.intent_wait_timeout:
+            return
+        log.warning("RoboClaw unavailable after %.1fs; failing motion intent", self.config.intent_wait_timeout)
+        self._fail_pending_intent("roboclaw_unavailable")
+        self.intent_executor.cancel()
+        self._intent_wait_started_at = None
 
     def _service_intent_requests(self, now: float) -> None:
         if self.intent_bridge is None or self.pending_intent_complete is not None:
@@ -656,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--qpps", type=int, default=DEFAULT_QPPS)
     parser.add_argument("--loop-interval", type=float, default=0.05)
     parser.add_argument("--retry-interval", type=float, default=1.0)
+    parser.add_argument("--intent-wait-timeout", type=float, default=8.0)
     parser.add_argument("--telemetry-interval", type=float, default=0.2)
     parser.add_argument("--idle-release-delay", type=float, default=0.25)
     parser.add_argument("--roboclaw-timeout", type=float, default=0.5)
@@ -677,6 +688,7 @@ def main() -> None:
             qpps=args.qpps,
             loop_interval=args.loop_interval,
             retry_interval=args.retry_interval,
+            intent_wait_timeout=args.intent_wait_timeout,
             telemetry_interval=args.telemetry_interval,
             idle_release_delay=args.idle_release_delay,
             roboclaw_timeout=args.roboclaw_timeout,

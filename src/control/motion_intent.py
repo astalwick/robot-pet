@@ -81,6 +81,9 @@ class MotionIntentExecutor:
     def is_active(self) -> bool:
         return self._active is not None
 
+    def cancel(self) -> None:
+        self._active = None
+
     def active_tool(self) -> str | None:
         return self._active.tool if self._active else None
 

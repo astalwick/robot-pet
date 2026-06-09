@@ -48,10 +48,15 @@ export function connectTelemetry() {
 function render(snapshot) {
   const sources = snapshot.sources || {};
   const gamepadStale = (sources.gamepad_teleop || {}).stale !== false;
+  const motionSource = sources.robot_motion || {};
+  const motionStale = motionSource.stale !== false;
   const systemStale = (sources.system || {}).stale !== false;
-  const gamepadLive = !gamepadStale;
+  // Battery/wheels/link/drive are owned by robot_motion once it has published.
+  // gamepad_teleop is only the startup/old-snapshot fallback.
+  const motionOwnsMotor = motionSource.last_seen != null || motionSource.stale === false;
+  const motorStale = motionOwnsMotor ? motionStale : gamepadStale;
 
-  recordHistory(snapshot, gamepadLive);
+  recordHistory(snapshot, !motorStale);
 
   const controller = snapshot.controller || {};
   const wheels = snapshot.wheels || {};
@@ -61,7 +66,7 @@ function render(snapshot) {
   const driveStatusPayload = snapshot.drive_status || {};
   const pi = snapshot.pi || {};
 
-  renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
+  renderHud(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
   renderPi(pi);
   renderBattery(battery, motorRail, sources.motor_rail || {});
   renderController(controller);
@@ -101,8 +106,8 @@ function pushHistory(key, value) {
   if (history[key].length > HISTORY_LENGTH) history[key].shift();
 }
 
-function renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
-  const status = driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
+function renderHud(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
+  const status = driveStatus(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
   const driveEl = document.getElementById('drive-status');
   driveEl.textContent = status.label.toUpperCase();
   driveEl.className = `value ${status.cls}`;
@@ -113,7 +118,7 @@ function renderHud(gamepadStale, systemStale, controller, wheels, battery, pi, d
   voltageEl.className = `value ${batteryClass(battery.status)}`;
 }
 
-function driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
+function driveStatus(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
   const batteryStatus = battery.status || 'unknown';
   const throttled = pi.throttled_flags;
   const state = driveStatusPayload.state;
@@ -121,7 +126,7 @@ function driveStatus(gamepadStale, systemStale, controller, wheels, battery, pi,
   if (state === 'waiting_for_controller' || state === 'waiting_for_roboclaw') {
     return { label: state.replaceAll('_', ' '), cls: 'warn' };
   }
-  if (gamepadStale) return { label: 'hold', cls: 'err' };
+  if (motorStale) return { label: 'hold', cls: 'err' };
   if (state === 'motor_command_failed' || state === 'controller_lost') return { label: 'hold', cls: 'err' };
   if (batteryStatus === 'critical' || batteryStatus === 'unknown') return { label: 'hold', cls: 'err' };
   if (!controller.connected) return { label: 'hold', cls: 'err' };

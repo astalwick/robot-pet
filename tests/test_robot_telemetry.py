@@ -14,6 +14,7 @@ from telemetry.messages import (
     gamepad_update,
     gamepad_teleop_update,
     motor_rail_update,
+    robot_motion_update,
     sensors_update,
     vision_update,
     voice_update,
@@ -289,6 +290,63 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["motor_rail"]["state"], "on")
         self.assertEqual(snapshot["motor_rail"]["mosfet_gpio"], 24)
         self.assertFalse(snapshot["sources"]["motor_rail"]["stale"])
+
+    async def test_snapshot_composes_motion_and_gamepad_fields_from_owners(self):
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                gamepad_teleop_update(
+                    controller={"connected": True},
+                    wheels={"left_target_qpps": 50},
+                    motor_battery={"pack_voltage": None, "status": "unknown"},
+                    drive_tuning={"speed_scale": 0.25},
+                    drive_status={"state": "driving"},
+                ),
+            )
+        )
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                robot_motion_update(
+                    wheels={"left_target_qpps": 100},
+                    motor_battery={"pack_voltage": 11.7, "status": "ok"},
+                    link_loop={"command_loop_hz": 20.0},
+                    drive_status={"state": "driving", "motion_power_requested": True},
+                ),
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        snapshot = self.hub.build_snapshot()
+
+        self.assertFalse(snapshot["sources"]["robot_motion"]["stale"])
+        self.assertEqual(snapshot["controller"], {"connected": True})
+        self.assertEqual(snapshot["drive_tuning"], {"speed_scale": 0.25})
+        self.assertTrue(snapshot["drive_status"]["motion_power_requested"])
+        self.assertEqual(snapshot["motor_battery"]["pack_voltage"], 11.7)
+        self.assertEqual(snapshot["wheels"]["left_target_qpps"], 100)
+
+    async def test_snapshot_falls_back_to_gamepad_fields_before_motion_publishes(self):
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                gamepad_teleop_update(
+                    controller={"connected": True},
+                    wheels={"left_target_qpps": 50},
+                    motor_battery={"pack_voltage": 11.9, "status": "ok"},
+                    drive_tuning={"speed_scale": 0.25},
+                    drive_status={"state": "driving"},
+                ),
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        snapshot = self.hub.build_snapshot()
+
+        self.assertTrue(snapshot["sources"]["robot_motion"]["stale"])
+        self.assertEqual(snapshot["wheels"]["left_target_qpps"], 50)
+        self.assertEqual(snapshot["motor_battery"]["pack_voltage"], 11.9)
+        self.assertEqual(snapshot["drive_status"]["state"], "driving")
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

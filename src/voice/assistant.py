@@ -285,6 +285,15 @@ def _telemetry_value_available(snapshot: dict[str, Any], source: str, value: obj
     return (sources.get(source) or {}).get("stale") is False and isinstance(value, dict)
 
 
+def _motion_value_available(snapshot: dict[str, Any], value: object) -> bool:
+    """Motion owns battery and drive now; fall back to gamepad_teleop for old snapshots."""
+    sources = snapshot.get("sources") or {}
+    motion_source = sources.get("robot_motion") or {}
+    if motion_source.get("last_seen") is not None or motion_source.get("stale") is False:
+        return motion_source.get("stale") is False and isinstance(value, dict)
+    return _telemetry_value_available(snapshot, "gamepad_teleop", value)
+
+
 def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     if snapshot is None:
         return {"ok": False, "error": "telemetry_unavailable"}
@@ -306,14 +315,14 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "pi": {"available": False},
     }
 
-    if _telemetry_value_available(snapshot, "gamepad_teleop", battery):
+    if _motion_value_available(snapshot, battery):
         result["battery"] = {
             "available": True,
             "status": battery.get("status"),
             "pack_voltage": battery.get("pack_voltage"),
             "cell_voltage": battery.get("cell_voltage"),
         }
-    if _telemetry_value_available(snapshot, "gamepad_teleop", drive):
+    if _motion_value_available(snapshot, drive):
         result["drive"] = {
             "available": True,
             "state": drive.get("state"),

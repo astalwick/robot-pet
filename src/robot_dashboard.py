@@ -614,9 +614,15 @@ class RobotDashboard(App):
         self.last_snapshot = snapshot
         sources = snapshot.get("sources", {})
         gamepad_status = self._source_label(sources.get("gamepad_teleop", {}))
+        motion_status = self._source_label(sources.get("robot_motion", {}))
         system_status = self._source_label(sources.get("system", {}))
-        gamepad_live = gamepad_status == "live"
-        self._record_history(snapshot, gamepad_live)
+        motion_source = sources.get("robot_motion") or {}
+        if motion_source.get("last_seen") is not None or motion_source.get("stale") is False:
+            motor_status = motion_status
+        else:
+            motor_status = gamepad_status
+        motor_live = motor_status == "live"
+        self._record_history(snapshot, motor_live)
 
         controller = snapshot.get("controller") or {}
         wheels = snapshot.get("wheels") or {}
@@ -635,6 +641,8 @@ class RobotDashboard(App):
                 snapshot,
                 sources,
                 gamepad_status,
+                motion_status,
+                motor_status,
                 system_status,
                 controller,
                 wheels,
@@ -677,6 +685,8 @@ class RobotDashboard(App):
         snapshot: dict[str, Any],
         sources: dict[str, Any],
         gamepad_status: str,
+        motion_status: str,
+        motor_status: str,
         system_status: str,
         controller: dict[str, Any],
         wheels: dict[str, Any],
@@ -686,7 +696,7 @@ class RobotDashboard(App):
         now = time.time()
         pi = snapshot.get("pi") or {}
         drive_status, drive_notes = self._drive_status(
-            gamepad_status,
+            motor_status,
             system_status,
             controller,
             wheels,
@@ -715,8 +725,10 @@ class RobotDashboard(App):
 
         # Gamepad/system status with age
         gp_age = fmt_age((sources.get("gamepad_teleop") or {}).get("last_seen"), now)
+        motion_age = fmt_age((sources.get("robot_motion") or {}).get("last_seen"), now)
         sys_age = fmt_age((sources.get("system") or {}).get("last_seen"), now)
         gp_color = "green" if gamepad_status == "live" else "yellow"
+        motion_color = "green" if motion_status == "live" else "yellow"
         sys_color = "green" if system_status == "live" else "yellow"
 
         notes_str = " │ ".join(drive_notes) if drive_notes else "all systems nominal"
@@ -725,7 +737,9 @@ class RobotDashboard(App):
             f"[bold white]R O B O - P E T[/]   [{status_color}]{status_glyph} {drive_status.upper()}[/]    "
             f"[bold yellow]{GLYPH_POWER}[/] {voltage_str}    [magenta]⏱ {session}[/]",
             f"[dim]{notes_str}[/]",
-            f"[{gp_color}]{GLYPH_GAMEPAD} gamepad {gp_age}[/]    [{sys_color}]{GLYPH_SIGNAL} system {sys_age}[/]",
+            f"[{gp_color}]{GLYPH_GAMEPAD} gamepad {gp_age}[/]    "
+            f"[{motion_color}]{GLYPH_SIGNAL} motion {motion_age}[/]    "
+            f"[{sys_color}]{GLYPH_SIGNAL} system {sys_age}[/]",
         ]
         return Text.from_markup("\n".join(lines))
 
@@ -738,7 +752,7 @@ class RobotDashboard(App):
 
     def _drive_status(
         self,
-        gamepad_status: str,
+        motor_status: str,
         system_status: str,
         controller: dict[str, Any],
         wheels: dict[str, Any],
@@ -755,11 +769,11 @@ class RobotDashboard(App):
 
         if drive_state in {"waiting_for_controller", "waiting_for_roboclaw"}:
             label = drive_state.replace("_", " ")
-            if gamepad_status != "live":
+            if motor_status != "live":
                 notes.append("drive telemetry stale")
             return label, notes
 
-        if gamepad_status != "live":
+        if motor_status != "live":
             notes.append("drive telemetry stale")
             return "hold", notes
         if battery_status in {"critical", "unknown"}:

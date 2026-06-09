@@ -213,6 +213,8 @@ class TelemetryHub:
         gamepad_status_data = gamepad_status["data"] if gamepad_status else None
         gamepad = self.latest.get("gamepad_teleop")
         gamepad_data = gamepad["data"] if gamepad else {}
+        motion = self.latest.get("robot_motion")
+        motion_data = motion["data"] if motion else {}
         vision = self.latest.get("vision")
         vision_data = vision["data"] if vision else None
         voice = self.latest.get("voice")
@@ -228,6 +230,7 @@ class TelemetryHub:
             "sources": {
                 "gamepad": self._source_status(gamepad_status, now),
                 "gamepad_teleop": self._source_status(gamepad, now),
+                "robot_motion": self._source_status(motion, now),
                 "vision": self._source_status(vision, now),
                 "voice": self._source_status(voice, now),
                 "sensors": self._source_status(sensors, now),
@@ -236,11 +239,11 @@ class TelemetryHub:
             },
             "controller": gamepad_data.get("controller"),
             "gamepad": gamepad_status_data,
-            "wheels": gamepad_data.get("wheels"),
-            "motor_battery": gamepad_data.get("motor_battery"),
-            "link_loop": gamepad_data.get("link_loop"),
+            "wheels": _prefer_motion(motion_data, gamepad_data, "wheels"),
+            "motor_battery": _prefer_motion(motion_data, gamepad_data, "motor_battery"),
+            "link_loop": _prefer_motion(motion_data, gamepad_data, "link_loop"),
             "drive_tuning": gamepad_data.get("drive_tuning"),
-            "drive_status": gamepad_data.get("drive_status"),
+            "drive_status": _prefer_motion(motion_data, gamepad_data, "drive_status"),
             "vision": vision_data,
             "voice": voice_data,
             "sensors": sensors_data,
@@ -274,6 +277,12 @@ class TelemetryHub:
             os.unlink(socket_path)
         except FileNotFoundError:
             pass
+
+
+def _prefer_motion(motion_data: dict[str, Any], gamepad_data: dict[str, Any], field: str) -> Any:
+    """Motion owns this field once it publishes; fall back to gamepad before then."""
+    value = motion_data.get(field)
+    return value if value is not None else gamepad_data.get(field)
 
 
 async def close_writer(writer: asyncio.StreamWriter) -> None:

@@ -149,6 +149,7 @@ class RobotMotionTest(unittest.TestCase):
             )
 
         self.assertEqual(motor.telemetry_reads, ["speeds", "battery", "currents"])
+        self.assertEqual(published[0]["source"], "robot_motion")
         self.assertEqual(published[0]["wheels"]["left_actual_qpps"], 100)
         self.assertEqual(published[1]["wheels"]["left_actual_qpps"], 100)
         self.assertEqual(published[1]["motor_battery"]["pack_voltage"], 11.5)
@@ -269,11 +270,12 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
 
+        self.assertEqual(published[0]["source"], "robot_motion")
         self.assertTrue(published[0]["drive_status"]["motion_power_requested"])
         self.assertFalse(published[0]["drive_status"]["roboclaw_ready"])
         self.assertEqual(motor.commands[0], (0, 0))
 
-    def test_wait_for_roboclaw_publishes_connected_gamepad(self):
+    def test_wait_for_roboclaw_publishes_motion_source_while_waiting(self):
         motor = FakeMotor()
         published = []
         runner = MotionRunner(
@@ -287,8 +289,41 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
 
-        self.assertTrue(published[0]["controller"]["connected"])
+        self.assertEqual(published[0]["source"], "robot_motion")
+        self.assertNotIn("drive_tuning", published[0])
         self.assertFalse(published[0]["drive_status"]["roboclaw_ready"])
+
+    def test_stuck_intent_fails_after_wait_timeout(self):
+        motor = FakeMotor()
+        motor.set_wheel_speeds = lambda _left, _right: False
+        completed = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 2.0
+            if current_time > 12.0:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=2.0, intent_wait_timeout=8.0),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.intent_executor.start("wiggle", now=0.0)
+        runner.pending_intent_complete = completed.append
+
+        self.assertIsNone(runner._wait_for_roboclaw())
+
+        self.assertIn({"ok": False, "error": "roboclaw_unavailable"}, completed)
+        self.assertIsNone(runner.pending_intent_complete)
+        self.assertFalse(runner.intent_executor.is_active())
+        self.assertFalse(runner._motion_power_requested())
 
     def test_motion_intent_publishes_telemetry_and_completes(self):
         motor = FakeMotor()

@@ -27,6 +27,7 @@ class BatteryConfig:
     low_voltage_seconds: float = 2.0
     cutoff_log_interval: float = 30.0
     telemetry_interval: float = 1.0
+    motion_power_hold_seconds: float = 5.0
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
     telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET
 
@@ -53,6 +54,7 @@ class BatteryRunner:
         self.low_voltage_seen_at: float | None = None
         self.next_cutoff_log_at = 0.0
         self.next_telemetry_at = 0.0
+        self.motion_power_hold_until = 0.0
         self.mosfet = None
 
     def request_stop(self, *_args) -> None:
@@ -83,7 +85,7 @@ class BatteryRunner:
             self.low_voltage_seen_at = None
         else:
             self._handle_voltage(voltage, now)
-        self._sync_power(snapshot)
+        self._sync_power(snapshot, now)
         if self.state == "low_battery_cutoff" and now >= self.next_cutoff_log_at:
             log.warning(
                 "motor LiPo discharged; motor rail is off until robot-battery restarts "
@@ -124,7 +126,7 @@ class BatteryRunner:
             self._publish_status()
 
     def _fresh_pack_voltage(self, snapshot: dict[str, Any]) -> float | None:
-        source = (snapshot.get("sources") or {}).get("gamepad_teleop") or {}
+        source = (snapshot.get("sources") or {}).get("robot_motion") or {}
         if source.get("stale") is not False:
             return None
 
@@ -136,14 +138,17 @@ class BatteryRunner:
             return None
         return float(voltage)
 
-    def _sync_power(self, snapshot: dict[str, Any]) -> None:
+    def _sync_power(self, snapshot: dict[str, Any], now: float) -> None:
         if self.state == "low_battery_cutoff":
             return
 
         if self._gamepad_connected(snapshot):
             self._rail_on("gamepad_connected")
         elif self._motion_power_requested(snapshot):
+            self.motion_power_hold_until = now + self.config.motion_power_hold_seconds
             self._rail_on("motion_power_requested")
+        elif now < self.motion_power_hold_until:
+            self._rail_on("motion_power_hold")
         elif self.state != "off":
             self._rail_off("idle_no_gamepad")
 
@@ -155,7 +160,7 @@ class BatteryRunner:
         return isinstance(gamepad, dict) and gamepad.get("connected") is True
 
     def _motion_power_requested(self, snapshot: dict[str, Any]) -> bool:
-        source = (snapshot.get("sources") or {}).get("gamepad_teleop") or {}
+        source = (snapshot.get("sources") or {}).get("robot_motion") or {}
         if source.get("stale") is not False:
             return False
         drive_status = snapshot.get("drive_status")
@@ -220,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--low-voltage-seconds", type=float, default=2.0)
     parser.add_argument("--cutoff-log-interval", type=float, default=30.0)
     parser.add_argument("--telemetry-interval", type=float, default=1.0)
+    parser.add_argument("--motion-power-hold-seconds", type=float, default=5.0)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     return parser
@@ -235,6 +241,7 @@ def main() -> None:
             low_voltage_seconds=args.low_voltage_seconds,
             cutoff_log_interval=args.cutoff_log_interval,
             telemetry_interval=args.telemetry_interval,
+            motion_power_hold_seconds=args.motion_power_hold_seconds,
             telemetry_socket=args.telemetry_socket,
             telemetry_subscribe_socket=args.telemetry_subscribe_socket,
         )

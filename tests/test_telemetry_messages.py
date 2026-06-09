@@ -19,6 +19,7 @@ from telemetry.messages import (
     motor_battery_message,
     motor_battery_status,
     motor_rail_update,
+    robot_motion_update,
     stale_label,
     sensors_update,
     vision_update,
@@ -270,6 +271,24 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(with_scribe["scribe_state"], "uploading")
         self.assertEqual(with_scribe["scribe_open_count"], 3)
         self.assertEqual(with_scribe["scribe_last_error"], "boom")
+
+    def test_robot_motion_update_uses_its_own_source(self):
+        message = robot_motion_update(
+            wheels={"left_target_qpps": 100},
+            motor_battery={"pack_voltage": 11.7},
+            link_loop={"command_loop_hz": 20.0},
+            drive_status={"motion_power_requested": True},
+            now=2000.0,
+        )
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "robot_motion")
+        self.assertEqual(message["time"], 2000.0)
+        self.assertEqual(message["wheels"], {"left_target_qpps": 100})
+        self.assertEqual(message["motor_battery"], {"pack_voltage": 11.7})
+        self.assertEqual(message["link_loop"], {"command_loop_hz": 20.0})
+        self.assertEqual(message["drive_status"], {"motion_power_requested": True})
+        self.assertNotIn("drive_tuning", message)
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)

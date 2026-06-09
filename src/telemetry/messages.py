@@ -383,3 +383,21 @@ def gamepad_teleop_update(
         "drive_tuning": drive_tuning,
         "drive_status": drive_status,
     }
+
+
+def robot_motion_update(
+    wheels: dict[str, Any],
+    motor_battery: dict[str, Any],
+    now: float | None = None,
+    link_loop: dict[str, Any] | None = None,
+    drive_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "robot_motion",
+        "time": now if now is not None else time.time(),
+        "wheels": wheels,
+        "motor_battery": motor_battery,
+        "link_loop": link_loop,
+        "drive_status": drive_status,
+    }

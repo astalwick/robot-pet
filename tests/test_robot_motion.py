@@ -275,6 +275,41 @@ class RobotMotionTest(unittest.TestCase):
         self.assertFalse(published[0]["drive_status"]["roboclaw_ready"])
         self.assertEqual(motor.commands[0], (0, 0))
 
+    def test_wait_for_roboclaw_restarts_intent_timer_when_motor_becomes_ready(self):
+        motor = FakeMotor()
+        current_time = 0.0
+        attempts = 0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 1.0
+
+        def motor_factory():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("not ready")
+            return motor
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=1.0),
+            motor_factory=motor_factory,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.intent_executor.start("wiggle", now=0.0)
+        runner.pending_intent_complete = lambda _result: None
+
+        self.assertIs(runner._wait_for_roboclaw(), motor)
+        command = runner._tick_intent(now=1.1, gamepad_active=False)
+
+        self.assertEqual(command.linear_x, 0.0)
+        self.assertGreater(command.angular_z, 0.0)
+
     def test_wait_for_roboclaw_publishes_motion_source_while_waiting(self):
         motor = FakeMotor()
         published = []

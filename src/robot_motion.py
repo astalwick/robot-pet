@@ -255,6 +255,7 @@ class MotionRunner:
                 continue
             if self._set_wheel_speeds(motor, 0, 0):
                 log.info("RoboClaw ready")
+                self.intent_executor.reset_active_start(self.clock())
                 self._intent_wait_started_at = None
                 return motor
             log.warning("initial zero-speed command was not acknowledged")

@@ -51,6 +51,16 @@ class MotionIntentExecutorTest(unittest.TestCase):
 
         self.assertFalse(executor.is_active())
 
+    def test_reset_active_start_restarts_elapsed_time(self):
+        executor = MotionIntentExecutor()
+        executor.start("wiggle", now=0.0)
+
+        executor.reset_active_start(now=2.0)
+        tick = executor.tick(now=2.1, gamepad_active=False)
+
+        self.assertEqual(tick.command, MotionCommand(0.0, WIGGLE_ANGULAR_Z))
+        self.assertFalse(tick.finished)
+
     def test_wiggle_emits_left_then_right_then_completes(self):
         executor = MotionIntentExecutor()
         executor.start("wiggle", now=0.0)

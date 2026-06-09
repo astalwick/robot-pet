@@ -84,6 +84,10 @@ class MotionIntentExecutor:
     def cancel(self) -> None:
         self._active = None
 
+    def reset_active_start(self, now: float) -> None:
+        if self._active is not None:
+            self._active.started_at = now
+
     def active_tool(self) -> str | None:
         return self._active.tool if self._active else None
 

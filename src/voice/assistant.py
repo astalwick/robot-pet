@@ -595,6 +595,7 @@ async def stream_openai_words(
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    playback_event: asyncio.Event | None = None,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -698,6 +699,12 @@ async def stream_openai_words(
                 if motion_intent_caller is None:
                     result = {"ok": False, "error": "motion_caller_missing"}
                 else:
+                    # Physical motion must not fire for a speculative turn that
+                    # gets discarded. Wait until this turn is actually speaking;
+                    # if it's cancelled first, this await is cancelled and the
+                    # motion never happens.
+                    if playback_event is not None:
+                        await playback_event.wait()
                     result = await asyncio.to_thread(motion_intent_caller, name)
             elif name == LOOK_AROUND_TOOL_NAME:
                 if camera_snapshot_caller is None:
@@ -736,6 +743,10 @@ async def stream_openai_words(
                 if face_me_caller is None:
                     result = {"ok": False, "error": "face_me_unavailable"}
                 else:
+                    # Physical turn — defer until this turn actually speaks (see
+                    # the motion tools above).
+                    if playback_event is not None:
+                        await playback_event.wait()
                     result = await asyncio.to_thread(face_me_caller)
             else:
                 result = {"ok": False, "error": "unsupported tool"}
@@ -799,6 +810,7 @@ async def run_assistant_turn(
             usage,
             robot_inspection_caller,
             face_me_caller,
+            playback_event,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
@@ -960,6 +972,7 @@ async def handle_scribe_events(
             task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
     async def cancel_active_turn(reason: str) -> None:
+        nonlocal recent_assistant_text, recent_assistant_echo_until
         turn = state.active_turn
         state.active_turn = None
         if turn and (turn.is_active() or (turn.playback_release_task and not turn.playback_release_task.done())):
@@ -967,6 +980,15 @@ async def handle_scribe_events(
             streamed = turn.assistant_streamed_text().strip()
             if streamed:
                 emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
+            # If the turn actually reached the speaker, record what it said so
+            # history reflects reality — even on barge-in/cancel. Must read
+            # playback_event before turn.cancel() clears it.
+            if streamed and turn.playback_event.is_set() and not turn.history_committed:
+                turn.assistant_text = streamed
+                recent_assistant_text = streamed
+                recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
+                history.append_exchange(turn.committed_text or turn.prompt, streamed)
+                turn.history_committed = True
             if stop_playback_now and turn.is_playing_back():
                 trigger_stop_playback_now()
             await turn.cancel(reason)
@@ -977,6 +999,10 @@ async def handle_scribe_events(
             quiet_remaining_secs = policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), state.last_local_speech_at)
             if quiet_remaining_secs <= 0:
                 turn.open_playback()
+                # If the turn already finished generating before playback
+                # opened, commit it now — assistant_done has already fired and
+                # won't fire again.
+                await maybe_commit_history(turn)
                 return
             await asyncio.sleep(quiet_remaining_secs)
 
@@ -992,10 +1018,12 @@ async def handle_scribe_events(
 
     async def maybe_commit_history(turn: ActiveTurn) -> None:
         nonlocal recent_assistant_text, recent_assistant_echo_until
+        # A speculative turn that actually spoke (playback opened) still belongs
+        # in history even if no commit ever confirmed it — we record it once the
+        # turn finishes, using its triggering partial as the user text.
         if (
             state.active_turn is not turn
             or turn.history_committed
-            or turn.speculative
             or not turn.playback_event.is_set()
             or not turn.task.done()
         ):

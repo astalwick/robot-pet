@@ -2310,6 +2310,118 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_spoken_speculative_turn_without_commit_reaches_history(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_playback_delay_secs=0.01,
+                speculative_local_quiet_secs=0.01,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                if on_assistant_chunk:
+                    on_assistant_chunk("Batteries store energy for the robot.")
+                # Real TTS stays gated on playback before it finishes.
+                await playback_event.wait()
+                return "Batteries store energy for the robot."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            # Speculative trigger via a stable partial, and no commit ever arrives.
+            await scribe_events.put({"type": "partial", "text": "Tell me about batteries."})
+            await asyncio.sleep(0.05)
+
+            exchanges = history.exchanges()
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "Tell me about batteries.")
+            self.assertEqual(exchanges[0].assistant_text, "Batteries store energy for the robot.")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_barged_in_turn_records_what_it_spoke(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_event.set()
+                if on_assistant_chunk:
+                    on_assistant_chunk("Once upon a time there was a robot")
+                await asyncio.Event().wait()
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    stop_playback_now=lambda: None,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story please"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "partial", "text": "Wait"})
+            await asyncio.sleep(0.05)
+
+            exchanges = history.exchanges()
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "Tell me a story please")
+            self.assertEqual(exchanges[0].assistant_text, "Once upon a time there was a robot")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

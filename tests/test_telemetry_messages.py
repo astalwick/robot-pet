@@ -17,6 +17,7 @@ from telemetry.messages import (
     gamepad_update,
     link_loop_message,
     motor_battery_message,
+    motor_battery_percent_estimate,
     motor_battery_status,
     motor_rail_update,
     pi_battery_message,
@@ -48,6 +49,21 @@ class TelemetryMessagesTest(unittest.TestCase):
 
     def test_motor_battery_message_includes_cell_voltage(self):
         self.assertEqual(motor_battery_message(11.7)["cell_voltage"], 3.9)
+
+    def test_motor_battery_percent_estimate_uses_3s_lipo_curve(self):
+        self.assertEqual(motor_battery_percent_estimate(None), None)
+        self.assertEqual(motor_battery_percent_estimate(12.6), 100)
+        self.assertEqual(motor_battery_percent_estimate(11.7), 60)
+        self.assertEqual(motor_battery_percent_estimate(11.1), 20)
+        self.assertEqual(motor_battery_percent_estimate(10.8), 10)
+
+    def test_motor_battery_message_includes_estimate_metadata(self):
+        message = motor_battery_message(11.7)
+
+        self.assertEqual(message["chemistry"], "lipo")
+        self.assertEqual(message["cell_count"], 3)
+        self.assertEqual(message["capacity_mah"], 2200)
+        self.assertEqual(message["percent_estimate"], 60)
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")

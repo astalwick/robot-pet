@@ -323,6 +323,10 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "status": battery.get("status"),
             "pack_voltage": battery.get("pack_voltage"),
             "cell_voltage": battery.get("cell_voltage"),
+            "percent_estimate": battery.get("percent_estimate"),
+            "chemistry": battery.get("chemistry"),
+            "cell_count": battery.get("cell_count"),
+            "capacity_mah": battery.get("capacity_mah"),
         }
     if _telemetry_value_available(snapshot, "pi_battery", pi_battery):
         result["pi_battery"] = {

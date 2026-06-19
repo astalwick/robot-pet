@@ -865,16 +865,19 @@ class RobotDashboard(App):
 
         pack_v = battery.get("pack_voltage")
         cell_v = battery.get("cell_voltage")
+        percent_estimate = battery.get("percent_estimate")
 
         GW, VW = 14, 8
 
         # Voltage bar (assuming 3S LiPo: 9.0V empty, 12.6V full)
         v_bar = bar(pack_v - 9.0, limit=3.6, width=GW, absolute=False) if pack_v is not None else " " * GW
+        percent_bar = bar(percent_estimate, limit=100, width=GW) if percent_estimate is not None else " " * GW
         v_spark = sparkline(self.history["pack_voltage"], width=GW)
 
         lines = [
             f"[bold yellow]{GLYPH_POWER} POWER RAIL[/]  [{status_style(status)}]{status_glyph} {status.upper()}[/]",
             self._row("pack", v_bar, fmt(pack_v, "V", 2), gauge_w=GW, value_w=VW, value_style="bold"),
+            self._row("est", percent_bar, fmt(percent_estimate, "%", 0), gauge_w=GW, value_w=VW),
             self._row("cell est", "", fmt(cell_v, "V", 2), gauge_w=GW, value_w=VW),
             self._row("trend", v_spark, "", gauge_w=GW, value_w=VW, gauge_style="cyan"),
             self._row("peak amps", "", fmt(self.max_current_amps, "A", 2), gauge_w=GW, value_w=VW),

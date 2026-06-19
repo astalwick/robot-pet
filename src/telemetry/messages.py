@@ -23,6 +23,20 @@ BUTTON_FIELDS = (
 
 PI_BATTERY_WARNING_VOLTAGE = 13.3
 PI_BATTERY_SHUTDOWN_VOLTAGE = 13.0
+MOTOR_BATTERY_CHEMISTRY = "lipo"
+MOTOR_BATTERY_CELL_COUNT = 3
+MOTOR_BATTERY_CAPACITY_MAH = 2200
+MOTOR_BATTERY_PERCENT_CURVE = (
+    (4.20, 100),
+    (4.10, 90),
+    (4.00, 80),
+    (3.90, 60),
+    (3.80, 40),
+    (3.70, 20),
+    (3.60, 10),
+    (3.50, 5),
+    (3.30, 0),
+)
 
 
 def encode_json_line(message: dict[str, Any]) -> bytes:
@@ -45,11 +59,30 @@ def motor_battery_status(pack_voltage: float | None) -> str:
     return "ok"
 
 
+def motor_battery_percent_estimate(pack_voltage: float | None) -> int | None:
+    if pack_voltage is None:
+        return None
+    cell_voltage = pack_voltage / MOTOR_BATTERY_CELL_COUNT
+    if cell_voltage >= MOTOR_BATTERY_PERCENT_CURVE[0][0]:
+        return 100
+    for index in range(1, len(MOTOR_BATTERY_PERCENT_CURVE)):
+        high_voltage, high_percent = MOTOR_BATTERY_PERCENT_CURVE[index - 1]
+        low_voltage, low_percent = MOTOR_BATTERY_PERCENT_CURVE[index]
+        if cell_voltage >= low_voltage:
+            ratio = (cell_voltage - low_voltage) / (high_voltage - low_voltage)
+            return round(low_percent + ratio * (high_percent - low_percent))
+    return 0
+
+
 def motor_battery_message(pack_voltage: float | None) -> dict[str, Any]:
     return {
         "pack_voltage": pack_voltage,
-        "cell_voltage": pack_voltage / 3.0 if pack_voltage is not None else None,
+        "cell_voltage": pack_voltage / MOTOR_BATTERY_CELL_COUNT if pack_voltage is not None else None,
         "status": motor_battery_status(pack_voltage),
+        "chemistry": MOTOR_BATTERY_CHEMISTRY,
+        "cell_count": MOTOR_BATTERY_CELL_COUNT,
+        "capacity_mah": MOTOR_BATTERY_CAPACITY_MAH,
+        "percent_estimate": motor_battery_percent_estimate(pack_voltage),
     }
 
 

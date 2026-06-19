@@ -453,7 +453,15 @@ class AssistantStreamingTest(unittest.TestCase):
                     "vision": {"stale": True},
                     "system": {"stale": False},
                 },
-                "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                "motor_battery": {
+                    "status": "ok",
+                    "pack_voltage": 11.8,
+                    "cell_voltage": 3.93,
+                    "percent_estimate": 67,
+                    "chemistry": "lipo",
+                    "cell_count": 3,
+                    "capacity_mah": 2200,
+                },
                 "pi_battery": {
                     "status": "low",
                     "pack_voltage": 13.3,
@@ -494,6 +502,8 @@ class AssistantStreamingTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["battery"]["status"], "ok")
+        self.assertEqual(result["battery"]["percent_estimate"], 67)
+        self.assertEqual(result["battery"]["capacity_mah"], 2200)
         self.assertEqual(result["pi_battery"]["status"], "low")
         self.assertEqual(result["pi_battery"]["pack_voltage"], 13.3)
         self.assertEqual(result["pi_battery"]["shutdown_voltage"], 13.0)
@@ -514,13 +524,22 @@ class AssistantStreamingTest(unittest.TestCase):
                     "robot_motion": {"stale": False},
                     "gamepad_teleop": {"stale": True},
                 },
-                "motor_battery": {"status": "ok", "pack_voltage": 11.6, "cell_voltage": 3.87},
+                "motor_battery": {
+                    "status": "ok",
+                    "pack_voltage": 11.6,
+                    "cell_voltage": 3.87,
+                    "percent_estimate": 53,
+                    "chemistry": "lipo",
+                    "cell_count": 3,
+                    "capacity_mah": 2200,
+                },
                 "drive_status": {"state": "stopped", "roboclaw_ready": True},
             }
         )
 
         self.assertTrue(result["battery"]["available"])
         self.assertEqual(result["battery"]["pack_voltage"], 11.6)
+        self.assertEqual(result["battery"]["percent_estimate"], 53)
         self.assertTrue(result["drive"]["available"])
         self.assertEqual(result["drive"]["state"], "stopped")
 

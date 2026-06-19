@@ -194,6 +194,7 @@ function renderBattery(battery, motorRail, motorRailSource, piBattery, piBattery
     row('rail', '', railState.toUpperCase().replaceAll('_', ' '), railClass(railState)),
     row('rail reason', '', railReason.replaceAll('_', ' '), railReason === '--' ? 'muted' : ''),
     row('motor pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
+    row('motor est', battery.percent_estimate != null ? renderBar(battery.percent_estimate, 100) : '', fmt(battery.percent_estimate, '%', 0), batteryClass(status)),
     row('motor cell est', '', fmt(cell, 'V', 2)),
     row('last rail v', '', fmt(railVoltage, 'V', 2)),
     row('motor trend', sparkline(history.pack_voltage), ''),

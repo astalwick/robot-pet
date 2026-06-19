@@ -18,6 +18,7 @@ from voice.assistant import (
     MOVE_FORWARD_TOOL_NAME,
     START_GOAL_TOOL_NAME,
     VOICE_SWITCH_TOOL_NAME,
+    ActiveGoal,
     ActiveTurn,
     AgentGoalRequest,
     AudioLevels,
@@ -1376,6 +1377,401 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(handoffs[0]["goal"], "move toward me and stop when close")
             # The goal records its own result later, so nothing lands in history here.
             self.assertEqual(list(history.exchanges()), [])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_goal_handoff_starts_runner_and_defers_history(self):
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            captured = {}
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="patrol the room")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                captured["goal"] = goal
+                captured["stop_event"] = stop_event
+                goal_started.set()
+                await stop_event.wait()
+                return ""
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            self.assertEqual(captured["goal"], "patrol the room")
+            self.assertTrue(any(event["type"] == "goal_start" for event in events))
+            # The handoff turn must not commit history; only a terminal goal does.
+            self.assertEqual(list(history.exchanges()), [])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_goal_task_not_wrapped_by_assistant_turn_timeout(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="long goal")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                # Longer than the (patched) per-turn timeout: if the goal were wrapped
+                # in asyncio.wait_for(ASSISTANT_TURN_TIMEOUT_SECS) it would be cancelled
+                # and never commit history.
+                await asyncio.sleep(0.06)
+                return "Done patrolling."
+
+            with mock.patch("voice.assistant.ASSISTANT_TURN_TIMEOUT_SECS", 0.01):
+                handler_task = asyncio.create_task(
+                    handle_scribe_events(
+                        scribe_events,
+                        openai_client=object(),
+                        elevenlabs_api_key="test-key",
+                        voice_state=VoiceState("test-voice"),
+                        stop_event=stop_event,
+                        system_prompt="test system prompt",
+                        policy=TurnPolicy(),
+                        conversation_history=history,
+                        assistant_runner=fake_run_assistant_turn,
+                        goal_runner=fake_goal_runner,
+                    )
+                )
+
+                await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+                for _ in range(50):
+                    if list(history.exchanges()):
+                        break
+                    await asyncio.sleep(0.01)
+
+                exchanges = list(history.exchanges())
+                self.assertEqual(len(exchanges), 1)
+                self.assertEqual(exchanges[0].user_text, "Patrol the room.")
+                self.assertEqual(exchanges[0].assistant_text, "Done patrolling.")
+
+                stop_event.set()
+                handler_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await handler_task
+
+        asyncio.run(run())
+
+    def test_committed_stop_cancels_goal_and_returns_to_listening(self):
+        async def run():
+            events = []
+            statuses = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            captured = {}
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="follow me")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                captured["stop_event"] = stop_event
+                goal_started.set()
+                await stop_event.wait()
+                return "interrupted"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    on_event=events.append,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Follow me around."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            await scribe_events.put({"type": "commit", "text": "Stop."})
+            for _ in range(50):
+                if any(event["type"] == "goal_cancel" for event in events):
+                    break
+                await asyncio.sleep(0.01)
+
+            cancels = [event for event in events if event["type"] == "goal_cancel"]
+            self.assertEqual(len(cancels), 1)
+            self.assertTrue(captured["stop_event"].is_set())
+            # An explicit interrupt returns to listening without committing history.
+            self.assertEqual(list(history.exchanges()), [])
+            last_status = [s for s in statuses if "status" in s][-1]
+            self.assertEqual(last_status["status"], "listening")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_committed_new_request_cancels_goal_and_starts_turn(self):
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            prompts = []
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                prompt = openai_input[-1]["content"]
+                prompts.append(prompt)
+                if prompt == "Patrol the room.":
+                    return AgentGoalRequest(goal="patrol the room")
+                playback_event.set()
+                return "The weather is fine."
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                goal_started.set()
+                await stop_event.wait()
+                return "interrupted"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            await scribe_events.put({"type": "commit", "text": "What is the weather?"})
+            for _ in range(50):
+                if list(history.exchanges()):
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(any(event["type"] == "goal_cancel" for event in events))
+            self.assertIn("What is the weather?", prompts)
+            exchanges = list(history.exchanges())
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "What is the weather?")
+            self.assertEqual(exchanges[0].assistant_text, "The weather is fine.")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_shutdown_cancels_active_goal(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            captured = {}
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="patrol the room")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                captured["stop_event"] = stop_event
+                goal_started.set()
+                await stop_event.wait()
+                return "interrupted"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            # Shutdown tears the handler down; its cleanup must cancel the goal.
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await asyncio.wait_for(handler_task, 1.0)
+
+            self.assertTrue(captured["stop_event"].is_set())
+            self.assertEqual(list(history.exchanges()), [])
+
+        asyncio.run(run())
+
+    def test_end_session_commit_cancels_active_goal(self):
+        async def run():
+            events = []
+            ended = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            captured = {}
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="patrol the room")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                captured["stop_event"] = stop_event
+                goal_started.set()
+                await stop_event.wait()
+                return "interrupted"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    session_end_caller=lambda: ended.append(True),
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            await scribe_events.put({"type": "commit", "text": "Goodbye."})
+            for _ in range(50):
+                if any(event["type"] == "goal_cancel" for event in events):
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(any(event["type"] == "goal_cancel" for event in events))
+            self.assertTrue(captured["stop_event"].is_set())
+            self.assertEqual(ended, [True])
+            self.assertEqual(list(history.exchanges()), [])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_goal_completion_appends_one_exchange(self):
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                return AgentGoalRequest(goal="find the ball")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                return "Found the ball by the couch."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Find the ball."})
+            for _ in range(50):
+                if list(history.exchanges()):
+                    break
+                await asyncio.sleep(0.01)
+
+            exchanges = list(history.exchanges())
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "Find the ball.")
+            self.assertEqual(exchanges[0].assistant_text, "Found the ball by the couch.")
+            done = [event for event in events if event["type"] == "goal_done"]
+            self.assertEqual(len(done), 1)
+            self.assertEqual(done[0]["text"], "Found the ball by the couch.")
 
             stop_event.set()
             handler_task.cancel()

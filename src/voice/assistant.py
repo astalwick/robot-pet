@@ -436,6 +436,25 @@ class AgentGoalRequest:
 
 
 @dataclass
+class ActiveGoal:
+    """An iterative goal running outside the normal turn lifecycle.
+
+    The goal runner drives its own tool loop with no speculative turns and no
+    per-turn timeout. This is the orchestration state that lets a committed
+    utterance cancel the goal and lets a terminal result commit one history
+    exchange, using the original request as the user text.
+    """
+
+    goal: str
+    user_text: str
+    stop_event: asyncio.Event
+    started_at: float
+    task: asyncio.Task[str] | None = None
+    final_text: str | None = None
+    terminal_reason: str | None = None
+
+
+@dataclass
 class VoiceState:
     default_voice_id: str
     alternate_voice_id: str = ALTERNATE_VOICE_ID
@@ -541,6 +560,7 @@ class ActiveTurn:
 @dataclass
 class TurnRuntimeState:
     active_turn: ActiveTurn | None = None
+    active_goal: ActiveGoal | None = None
     next_turn_id: int = 0
     debounce_task: asyncio.Task[None] | None = None
     last_local_speech_at: float = 0.0
@@ -902,6 +922,7 @@ async def handle_scribe_events(
     on_status: Callable[[dict[str, object]], None] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     assistant_runner: Callable[..., Any] = run_assistant_turn,
+    goal_runner: Callable[..., Any] | None = None,
     motion_intent_caller: Callable[[str], Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
@@ -1116,6 +1137,17 @@ async def handle_scribe_events(
             return None
         return result if isinstance(result, AgentGoalRequest) else None
 
+    async def cancel_active_goal(reason: str) -> None:
+        goal = state.active_goal
+        state.active_goal = None
+        if goal is None:
+            return
+        goal.terminal_reason = "cancelled"
+        goal.stop_event.set()
+        emit("goal_cancel", goal=goal.goal, reason=reason)
+        log.info("goal cancelled: reason=%s goal=%r", reason, goal.goal)
+        await cancel_task(goal.task)
+
     async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
         # The normal turn is finished and is handing off to an iterative goal. Drop
         # it as the active turn so it is not treated as a speaking turn, and surface
@@ -1125,6 +1157,61 @@ async def handle_scribe_events(
             state.active_turn = None
         emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)
         log.info("goal handoff received: %s", goal_request.goal)
+        if goal_runner is None:
+            return
+        await cancel_active_goal("superseded")
+        goal = ActiveGoal(
+            goal=goal_request.goal,
+            user_text=turn.committed_text or turn.prompt,
+            stop_event=asyncio.Event(),
+            started_at=asyncio.get_running_loop().time(),
+        )
+
+        async def run_goal() -> str:
+            return await goal_runner(
+                goal=goal.goal,
+                stop_event=goal.stop_event,
+                openai_client=openai_client,
+                openai_model=openai_model,
+                voice_state=voice_state,
+                motion_intent_caller=motion_intent_caller,
+                session_end_caller=session_end_caller,
+                camera_snapshot_caller=camera_snapshot_caller,
+                robot_inspection_caller=robot_inspection_caller,
+                face_me_caller=face_me_caller,
+            )
+
+        goal.task = asyncio.create_task(run_goal())
+        goal.task.add_done_callback(
+            lambda _done, g=goal: scribe_events.put_nowait({"type": "goal_task_done", "goal": g})
+        )
+        state.active_goal = goal
+        emit("goal_start", goal=goal.goal)
+        status(status="thinking")
+
+    async def finish_goal(goal: ActiveGoal) -> None:
+        nonlocal recent_assistant_text, recent_assistant_echo_until
+        if state.active_goal is not goal or goal.task is None:
+            return
+        state.active_goal = None
+        try:
+            final_text = goal.task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log.exception("goal task failed: %s", exc)
+            status(status="error", last_error=str(exc))
+            return
+        final_text = (final_text or "").strip()
+        goal.final_text = final_text
+        goal.terminal_reason = "done"
+        if final_text:
+            history.append_exchange(goal.user_text, final_text)
+            recent_assistant_text = final_text
+            recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
+            emit("assistant", text=final_text)
+        emit("goal_done", goal=goal.goal, text=final_text)
+        status(status="listening", assistant_speaking=False, last_assistant_text=final_text)
 
     async def start_turn(prompt: str, speculative: bool) -> None:
         await cancel_active_turn("new_turn")
@@ -1291,6 +1378,8 @@ async def handle_scribe_events(
         end_user_speech()
         try:
             if is_end_session_request(text, policy):
+                if state.active_goal is not None:
+                    await cancel_active_goal("committed_speech")
                 status(status="listening", partial_transcript=None, last_committed_transcript=text)
                 if session_end_caller:
                     session_end_caller()
@@ -1302,6 +1391,15 @@ async def handle_scribe_events(
 
             should_start_from_commit, commit_reason = policy.commit_decision(text)
             emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
+
+            if state.active_goal is not None:
+                await cancel_active_goal("committed_speech")
+                if should_start_from_commit and not policy.has_explicit_interrupt(text):
+                    status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+                    await start_turn(text, speculative=False)
+                else:
+                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                return
 
             active_turn = state.active_turn
             if (
@@ -1389,6 +1487,10 @@ async def handle_scribe_events(
                     await maybe_commit_history(turn)
                 continue
 
+            if event_type == "goal_task_done":
+                await finish_goal(event["goal"])
+                continue
+
             text = str(event.get("text", ""))
 
             if event_type == "audio_activity":
@@ -1422,3 +1524,5 @@ async def handle_scribe_events(
         await cancel_task(state.debounce_task)
         if state.active_turn:
             await state.active_turn.cancel("shutdown")
+        if state.active_goal:
+            await cancel_active_goal("shutdown")

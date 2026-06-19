@@ -237,6 +237,175 @@ class AgentRunnerTest(unittest.TestCase):
         self.assertEqual(result, TIMEOUT_FINAL)
         self.assertEqual(moves, [])
 
+    def test_narration_before_tool_sets_speaking_on_then_off(self):
+        speaking = {"value": False}
+        speaking_seen: list[bool] = []
+
+        async def speak_progress(_text):
+            speaking["value"] = True
+            await asyncio.sleep(0)
+            speaking["value"] = False
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            # Snapshot whether speaking is set at the moment the model is consulted;
+            # it must be false between batches, never left stuck on.
+            speaking_seen.append(speaking["value"])
+            if steps["n"] >= 2:
+                return decision(done=True, final="All done.")
+            return decision(narration="Heading over now.", tool_calls=[call_tool("move_forward")])
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Come here.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: speaking["value"],
+            )
+        )
+
+        # Speaking was off each time we asked the model, so narration toggled it on
+        # and back off rather than leaving it set.
+        self.assertEqual(speaking_seen, [False, False])
+        self.assertFalse(speaking["value"])
+
+    def test_tool_not_started_until_narration_finishes(self):
+        order: list[str] = []
+
+        async def speak_progress(_text):
+            order.append("narrate_start")
+            await asyncio.sleep(0.01)
+            order.append("narrate_done")
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return decision(done=True, final="Done.")
+            return decision(narration="On my way.", tool_calls=[call_tool("move_forward")])
+
+        def move(_name):
+            order.append("tool")
+            return {"ok": True}
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=move,
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
+            )
+        )
+
+        self.assertEqual(order[:3], ["narrate_start", "narrate_done", "tool"])
+
+    def test_narration_skipped_when_already_speaking(self):
+        spoken: list[str] = []
+
+        async def speak_progress(text):
+            spoken.append(text)
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return decision(done=True, final="Done.")
+            return decision(narration="On my way.", tool_calls=[call_tool("move_forward")])
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: True,
+            )
+        )
+
+        # Interim narration is suppressed while speaking, but the final is always said.
+        self.assertEqual(spoken, ["Done."])
+
+    def test_tool_completion_while_speaking_does_not_narrate(self):
+        spoken: list[str] = []
+
+        async def speak_progress(text):
+            spoken.append(text)
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 3:
+                return decision(done=True, final="Done.")
+            return decision(narration="Still going.", tool_calls=[call_tool("move_forward")])
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: True,
+            )
+        )
+
+        self.assertEqual(spoken, ["Done."])
+
+    def test_final_speech_does_not_overlap_with_progress_speech(self):
+        concurrency = {"now": 0, "max": 0}
+
+        async def speak_progress(_text):
+            concurrency["now"] += 1
+            concurrency["max"] = max(concurrency["max"], concurrency["now"])
+            await asyncio.sleep(0.01)
+            concurrency["now"] -= 1
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return decision(done=True, final="Done.")
+            return decision(narration="Working on it.", tool_calls=[call_tool("move_forward")])
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
+            )
+        )
+
+        self.assertEqual(concurrency["max"], 1)
+
     def test_stop_event_cancels_the_goal(self):
         stop_event = asyncio.Event()
         stop_event.set()

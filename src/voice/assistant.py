@@ -558,9 +558,44 @@ class ActiveTurn:
 
 
 @dataclass
+class ProgressSpeaker:
+    """Playback for a goal's progress narration and final result.
+
+    Goal narration is spoken outside the normal turn, but barge-in still has to
+    interrupt it the same way it interrupts an assistant turn. This mirrors the
+    handful of ActiveTurn methods the barge-in checks read, so the same accessor
+    can treat either source as the current interruptible playback.
+    """
+
+    text: str
+    playback_event: asyncio.Event = field(default_factory=asyncio.Event)
+    speaking_event: asyncio.Event = field(default_factory=asyncio.Event)
+    speech_started_at: float | None = None
+
+    def is_speaking(self) -> bool:
+        return self.speaking_event.is_set()
+
+    def is_playing_back(self) -> bool:
+        return self.playback_event.is_set()
+
+    def mark_speech_started(self, now: float) -> None:
+        if self.speech_started_at is None:
+            self.speech_started_at = now
+
+    def speech_elapsed_secs(self, now: float) -> float | None:
+        if self.speech_started_at is None:
+            return None
+        return now - self.speech_started_at
+
+    def assistant_streamed_text(self) -> str:
+        return self.text
+
+
+@dataclass
 class TurnRuntimeState:
     active_turn: ActiveTurn | None = None
     active_goal: ActiveGoal | None = None
+    progress: ProgressSpeaker | None = None
     next_turn_id: int = 0
     debounce_task: asyncio.Task[None] | None = None
     last_local_speech_at: float = 0.0
@@ -630,7 +665,7 @@ class BargeInOutcome:
 def decide_barge_in_during_playback(
     text: str,
     now: float,
-    active_turn: ActiveTurn,
+    active_turn: ActiveTurn | ProgressSpeaker,
     state: TurnRuntimeState,
     levels: AudioLevels,
     policy: TurnPolicy,
@@ -909,6 +944,18 @@ async def run_assistant_turn(
     return "".join(assistant_chunks).strip()
 
 
+async def _speak_progress_default(
+    text_chunks: AsyncIterator[str],
+    elevenlabs_api_key: str,
+    voice_id: str,
+    playback_event: asyncio.Event,
+    speaking_event: asyncio.Event,
+) -> None:
+    from voice.elevenlabs_io import speak_with_eleven_flash
+
+    await speak_with_eleven_flash(text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event)
+
+
 async def handle_scribe_events(
     scribe_events: asyncio.Queue[dict[str, object]],
     openai_client: Any,
@@ -929,6 +976,7 @@ async def handle_scribe_events(
     stop_playback_now: Callable[[], Any] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    progress_speaker: Callable[..., Any] | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
@@ -983,7 +1031,7 @@ async def handle_scribe_events(
 
     def publish_barge_in_state(now: float, mic_rms: int | None = None) -> None:
         mic = state.last_local_speech_rms if mic_rms is None else mic_rms
-        assistant_speaking = bool(state.active_turn and state.active_turn.is_playing_back())
+        assistant_speaking = bool(current_playback())
         _, state.gate_open, state.gate_threshold_rms, state.gate_last_reason = refresh_barge_in_gate(
             levels,
             now,
@@ -1148,6 +1196,51 @@ async def handle_scribe_events(
         log.info("goal cancelled: reason=%s goal=%r", reason, goal.goal)
         await cancel_task(goal.task)
 
+    def current_playback() -> ActiveTurn | ProgressSpeaker | None:
+        if state.active_turn and state.active_turn.is_playing_back():
+            return state.active_turn
+        if state.progress and state.progress.is_playing_back():
+            return state.progress
+        return None
+
+    async def cancel_current_playback(reason: str) -> None:
+        if state.progress and state.progress.is_playing_back():
+            await cancel_active_goal(reason)
+        else:
+            await cancel_active_turn(reason)
+
+    async def speak_progress(text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        progress = ProgressSpeaker(text=text)
+        progress.playback_event.set()
+        progress.speaking_event.set()
+        state.progress = progress
+        emit("goal_speech", text=text)
+        status(status="speaking", assistant_speaking=True)
+
+        async def text_stream() -> AsyncIterator[str]:
+            yield text
+
+        speaker = progress_speaker or _speak_progress_default
+        try:
+            await speaker(
+                text_stream(),
+                elevenlabs_api_key,
+                voice_state.current_voice_id,
+                progress.playback_event,
+                progress.speaking_event,
+            )
+        except asyncio.CancelledError:
+            trigger_stop_playback_now()
+            raise
+        finally:
+            if state.progress is progress:
+                state.progress = None
+            progress.playback_event.clear()
+            progress.speaking_event.clear()
+
     async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
         # The normal turn is finished and is handing off to an iterative goal. Drop
         # it as the active turn so it is not treated as a speaking turn, and surface
@@ -1178,6 +1271,8 @@ async def handle_scribe_events(
                 camera_snapshot_caller=camera_snapshot_caller,
                 robot_inspection_caller=robot_inspection_caller,
                 face_me_caller=face_me_caller,
+                speak_progress=speak_progress,
+                is_speaking=lambda: current_playback() is not None,
             )
 
         goal.task = asyncio.create_task(run_goal())
@@ -1296,11 +1391,11 @@ async def handle_scribe_events(
         source: str,
         text: str,
         now: float,
-        active_turn: ActiveTurn,
+        playback: ActiveTurn | ProgressSpeaker,
     ) -> BargeInOutcome:
-        active_turn.mark_speech_started(now)
+        playback.mark_speech_started(now)
         publish_barge_in_state(now)
-        outcome = decide_barge_in_during_playback(text, now, active_turn, state, levels, policy)
+        outcome = decide_barge_in_during_playback(text, now, playback, state, levels, policy)
         report_barge_in(source, outcome)
         return outcome
 
@@ -1325,13 +1420,14 @@ async def handle_scribe_events(
             return
 
         active_turn = state.active_turn
-        if active_turn and active_turn.is_playing_back():
-            outcome = consider_playback_barge_in("partial", text, now, active_turn)
+        playback = current_playback()
+        if playback:
+            outcome = consider_playback_barge_in("partial", text, now, playback)
             if outcome.accepted:
                 publish_barge_in_hearing("stt")
                 status(status="hearing", partial_transcript=text)
                 publish_barge_in_event("partial", outcome.reason)
-                await cancel_active_turn("barge_in")
+                await cancel_current_playback("barge_in")
                 await cancel_task(state.debounce_task)
                 state.debounce_task = None
                 if outcome.reason == "explicit_interrupt":
@@ -1469,6 +1565,8 @@ async def handle_scribe_events(
         assistant_text = ""
         if state.active_turn is not None:
             assistant_text = state.active_turn.assistant_streamed_text()
+        elif state.progress is not None:
+            assistant_text = state.progress.assistant_streamed_text()
         if recent_assistant_text and now <= recent_assistant_echo_until:
             assistant_text = f"{assistant_text} {recent_assistant_text}".strip()
         return bool(assistant_text and policy.matches_assistant_echo(text, assistant_text))
@@ -1507,7 +1605,7 @@ async def handle_scribe_events(
                     state.local_audio_seq += 1
                 levels.mic_rms = state.last_local_speech_rms
                 publish_barge_in_state(now, state.last_local_speech_rms)
-                if state.active_turn and state.active_turn.is_playing_back():
+                if current_playback():
                     if state.last_local_speech_rms >= policy.user_active_rms_threshold or state.gate_open:
                         note_utterance_barge_in_audio(state, now)
                         note_recent_barge_in_audio(state, now, policy)

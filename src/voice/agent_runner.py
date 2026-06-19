@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from lib.log import setup_logging
@@ -142,6 +142,8 @@ async def run_agent_goal(
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    speak_progress: Callable[[str], Awaitable[None]] | None = None,
+    is_speaking: Callable[[], bool] | None = None,
     max_steps: int = 20,
     max_seconds: float = 120.0,
 ) -> str:
@@ -152,6 +154,19 @@ async def run_agent_goal(
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
     )
+
+    async def narrate(text: str) -> None:
+        if speak_progress is None or not text:
+            return
+        if is_speaking is not None and is_speaking():
+            return
+        await speak_progress(text)
+
+    async def say_final(text: str) -> str:
+        if speak_progress is not None and text:
+            await speak_progress(text)
+        return text
+
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max_seconds
     input_items: list[dict[str, Any]] = [
@@ -166,7 +181,7 @@ async def run_agent_goal(
         remaining = deadline - loop.time()
         if remaining <= 0:
             log.info("goal timed out after step %d: %r", step - 1, goal)
-            return TIMEOUT_FINAL
+            return await say_final(TIMEOUT_FINAL)
 
         input_items.append(
             {
@@ -180,7 +195,7 @@ async def run_agent_goal(
             )
         except asyncio.TimeoutError:
             log.info("goal timed out waiting on model at step %d: %r", step, goal)
-            return TIMEOUT_FINAL
+            return await say_final(TIMEOUT_FINAL)
         if stop_event.is_set():
             return ""
         input_items.append({"role": "assistant", "content": decision_text})
@@ -189,7 +204,7 @@ async def run_agent_goal(
         if decision is None:
             error_count += 1
             if error_count > MAX_DECISION_ERRORS:
-                return BLOCKED_FINAL
+                return await say_final(BLOCKED_FINAL)
             input_items.append(
                 {"role": "user", "content": "That was not valid JSON. Respond with only the action JSON object."}
             )
@@ -200,10 +215,10 @@ async def run_agent_goal(
         if decision.get("done") or decision.get("blocked"):
             if final:
                 log.info("goal finished (%s): %r", "blocked" if decision.get("blocked") else "done", goal)
-                return final
+                return await say_final(final)
             error_count += 1
             if error_count > MAX_DECISION_ERRORS:
-                return BLOCKED_FINAL
+                return await say_final(BLOCKED_FINAL)
             input_items.append(
                 {"role": "user", "content": "done or blocked requires a non-empty final spoken sentence. Provide final."}
             )
@@ -217,6 +232,9 @@ async def run_agent_goal(
             )
             continue
 
+        raw_narration = decision.get("narration")
+        await narrate(raw_narration.strip() if isinstance(raw_narration, str) else "")
+
         observation_parts: list[dict[str, Any]] = []
         invalid_tool = False
         for raw_call in tool_calls:
@@ -227,7 +245,7 @@ async def run_agent_goal(
             # refuse to launch the next one.
             if loop.time() >= deadline:
                 log.info("goal timed out before tool at step %d: %r", step, goal)
-                return TIMEOUT_FINAL
+                return await say_final(TIMEOUT_FINAL)
             name = raw_call.get("name") if isinstance(raw_call, dict) else None
             if name not in AGENT_TOOL_NAMES:
                 invalid_tool = True
@@ -252,10 +270,10 @@ async def run_agent_goal(
         if invalid_tool:
             error_count += 1
             if error_count > MAX_DECISION_ERRORS:
-                return BLOCKED_FINAL
+                return await say_final(BLOCKED_FINAL)
         else:
             error_count = 0
         input_items.append({"role": "user", "content": observation_parts})
 
     log.info("goal hit step limit (%d steps): %r", max_steps, goal)
-    return STEP_LIMIT_FINAL
+    return await say_final(STEP_LIMIT_FINAL)

@@ -118,6 +118,9 @@ class VoiceSession:
                 **kwargs, tts_speaker=turn_speaker, usage=self.usage,
             )
 
+        async def progress_speaker(text_chunks, api_key, voice_id, playback_event, speaking_event):
+            await self._speak(text_chunks, api_key, voice_id, playback_event, speaking_event, -1)
+
         self.tasks = [
             asyncio.create_task(
                 self.scribe_streamer(
@@ -152,6 +155,7 @@ class VoiceSession:
                     camera_snapshot_caller=self.camera_snapshot_caller,
                     robot_inspection_caller=self.robot_inspection_caller,
                     face_me_caller=self.face_me_caller,
+                    progress_speaker=progress_speaker,
                     openai_model=self.config.openai_model,
                     stop_playback_now=self.stop_playback_now,
                 )

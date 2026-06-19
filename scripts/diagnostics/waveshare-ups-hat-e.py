@@ -154,6 +154,8 @@ def print_ups(info, mux_state, ups_address, mux_address):
     comm_state = info["comm_state"]
     stage = CHARGE_STAGES.get(charge_state & 0x07, "unknown")
     cells = ", ".join(f"{cell / 1000:.3f}V" for cell in info["cells_mv"])
+    runtime = "--" if info["runtime_min"] == 0xFFFF else f"{info['runtime_min']}min"
+    charge_time = "--" if info["charge_time_min"] == 0xFFFF else f"{info['charge_time_min']}min"
 
     print(f"UPS HAT E @ 0x{ups_address:02x}")
     print(f"  id: 0x{info['id']:02x} (expected 0x0a)")
@@ -167,12 +169,12 @@ def print_ups(info, mux_state, ups_address, mux_address):
     )
     print(
         "  comm: "
-        f"bq4050_ok={bool(comm_state & 0x80)} "
-        f"ip2368_ok={bool(comm_state & 0x40)}"
+        f"bq4050_ok={bool(comm_state & 0x02)} "
+        f"ip2368_ok={bool(comm_state & 0x01)}"
     )
     print(f"  usb-c: {info['vbus_mv'] / 1000:.3f}V  {info['vbus_ma']}mA  {info['vbus_mw'] / 1000:.3f}W")
     print(f"  battery: {info['battery_mv'] / 1000:.3f}V  {info['battery_ma']}mA  {info['battery_percent']}%")
-    print(f"  remaining: {info['remaining_mah']}mAh  runtime={info['runtime_min']}min  charge_time={info['charge_time_min']}min")
+    print(f"  remaining: {info['remaining_mah']}mAh  runtime={runtime}  charge_time={charge_time}")
     print(f"  cells: {cells}")
     if mux_state is None:
         print(f"  grove mux @ 0x{mux_address:02x}: not responding")

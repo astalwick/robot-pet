@@ -1175,7 +1175,6 @@ async def handle_scribe_events(
                 openai_model=openai_model,
                 voice_state=voice_state,
                 motion_intent_caller=motion_intent_caller,
-                session_end_caller=session_end_caller,
                 camera_snapshot_caller=camera_snapshot_caller,
                 robot_inspection_caller=robot_inspection_caller,
                 face_me_caller=face_me_caller,

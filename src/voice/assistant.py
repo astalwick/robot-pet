@@ -31,6 +31,7 @@ MOVE_FORWARD_TOOL_NAME = "move_forward"
 LOOK_AROUND_TOOL_NAME = "look_around"
 INSPECT_ROBOT_TOOL_NAME = "inspect_robot"
 FACE_ME_TOOL_NAME = "face_me"
+START_GOAL_TOOL_NAME = "start_goal"
 MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
@@ -265,6 +266,24 @@ FACE_ME_TOOL = {
 }
 
 
+START_GOAL_TOOL = {
+    "type": "function",
+    "name": START_GOAL_TOOL_NAME,
+    "description": (
+        "Start an iterative goal when the user asks for something that may require "
+        "repeated tool use, observation, searching, checking progress, or working for "
+        "more than one step."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"goal": {"type": "string"}},
+        "required": ["goal"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
@@ -276,6 +295,7 @@ ASSISTANT_TOOLS = [
     LOOK_AROUND_TOOL,
     INSPECT_ROBOT_TOOL,
     FACE_ME_TOOL,
+    START_GOAL_TOOL,
     WEB_SEARCH_TOOL,
 ]
 
@@ -404,6 +424,17 @@ class VoiceSwitch:
     voice_name: str
 
 
+@dataclass(frozen=True)
+class AgentGoalRequest:
+    """The assistant turn decided this request needs the iterative goal runner.
+
+    It bubbles out of the turn as the task result instead of spoken text, so the
+    session can hand off to a goal instead of committing a normal exchange.
+    """
+
+    goal: str
+
+
 @dataclass
 class VoiceState:
     default_voice_id: str
@@ -441,7 +472,7 @@ class ActiveTurn:
     turn_id: int
     prompt: str
     speculative: bool
-    task: asyncio.Task[str]
+    task: asyncio.Task[str | AgentGoalRequest]
     playback_event: asyncio.Event = field(default_factory=asyncio.Event)
     speaking_event: asyncio.Event = field(default_factory=asyncio.Event)
     playback_release_task: asyncio.Task[None] | None = None
@@ -625,7 +656,7 @@ async def stream_openai_words(
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     playback_event: asyncio.Event | None = None,
     openai_model: str = OPENAI_MODEL,
-) -> AsyncIterator[str | VoiceSwitch]:
+) -> AsyncIterator[str | VoiceSwitch | AgentGoalRequest]:
     from voice.tools import RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
 
     pending = ""
@@ -726,6 +757,14 @@ async def stream_openai_words(
             )
             log.info("tool call: %s", call.name)
 
+            # A goal handoff ends this turn: yield the request and stop. We do not
+            # send a function-call output back to the model, so any text it also
+            # produced in this response is dropped and never spoken — the goal wins.
+            if call.name == START_GOAL_TOOL_NAME:
+                log.info("goal handoff: %s", call.arguments.get("goal", ""))
+                yield AgentGoalRequest(goal=str(call.arguments.get("goal", "")).strip())
+                return
+
             # Physical motion must not fire for a speculative turn that gets
             # discarded. Wait until this turn is actually speaking; if it's
             # cancelled first, this await is cancelled and the motion never
@@ -782,26 +821,53 @@ async def run_assistant_turn(
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     openai_model: str = OPENAI_MODEL,
-) -> str:
+) -> str | AgentGoalRequest:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
     assistant_chunks: list[str] = []
     end_session_pending = [False]
+    goal_request: AgentGoalRequest | None = None
+
+    words = stream_openai_words(
+        openai_input,
+        openai_client,
+        voice_state,
+        motion_intent_caller,
+        end_session_pending,
+        camera_snapshot_caller,
+        usage,
+        robot_inspection_caller,
+        face_me_caller,
+        playback_event,
+        openai_model,
+    )
+
+    # Peek the first chunk before opening the speaker. When the model's first move
+    # is a goal handoff, the AgentGoalRequest is the only thing the stream yields,
+    # so we return it here without ever opening the TTS socket. (A handoff that only
+    # appears after earlier tool calls is rarer and is caught in the loop below.)
+    try:
+        first_chunk = await words.__anext__()
+    except StopAsyncIteration:
+        first_chunk = None
+
+    if isinstance(first_chunk, AgentGoalRequest):
+        return first_chunk
 
     async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
-        async for chunk in stream_openai_words(
-            openai_input,
-            openai_client,
-            voice_state,
-            motion_intent_caller,
-            end_session_pending,
-            camera_snapshot_caller,
-            usage,
-            robot_inspection_caller,
-            face_me_caller,
-            playback_event,
-            openai_model,
-        ):
+        nonlocal goal_request
+        if isinstance(first_chunk, str):
+            assistant_chunks.append(first_chunk)
+            if on_assistant_chunk:
+                on_assistant_chunk(first_chunk)
+        if first_chunk is not None:
+            yield first_chunk
+        async for chunk in words:
+            # A goal handoff is a control signal, not speech — keep it out of the
+            # speaker so nothing is spoken, and return it as the turn result.
+            if isinstance(chunk, AgentGoalRequest):
+                goal_request = chunk
+                continue
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
                 if on_assistant_chunk:
@@ -818,6 +884,8 @@ async def run_assistant_turn(
     )
     if end_session_pending[0] and session_end_caller is not None:
         session_end_caller()
+    if goal_request is not None:
+        return goal_request
     return "".join(assistant_chunks).strip()
 
 
@@ -1027,6 +1095,9 @@ async def handle_scribe_events(
             log.exception("assistant turn failed: %s", exc)
             status(status="error", last_error=str(exc))
             return
+        if isinstance(assistant_text, AgentGoalRequest):
+            # A goal handoff is recorded only when the goal finishes, not here.
+            return
         turn.assistant_text = assistant_text
         recent_assistant_text = assistant_text
         recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
@@ -1035,6 +1106,25 @@ async def handle_scribe_events(
         if assistant_text:
             emit("assistant", turn_id=turn.turn_id, text=assistant_text)
         status(status="listening", assistant_speaking=False, last_assistant_text=assistant_text)
+
+    def completed_goal_request(turn: ActiveTurn) -> AgentGoalRequest | None:
+        if not turn.task.done():
+            return None
+        try:
+            result = turn.task.result()
+        except (asyncio.CancelledError, Exception):
+            return None
+        return result if isinstance(result, AgentGoalRequest) else None
+
+    async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
+        # The normal turn is finished and is handing off to an iterative goal. Drop
+        # it as the active turn so it is not treated as a speaking turn, and surface
+        # the handoff. We do not commit history here — the goal records its own
+        # result when it reaches a terminal state.
+        if state.active_turn is turn:
+            state.active_turn = None
+        emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)
+        log.info("goal handoff received: %s", goal_request.goal)
 
     async def start_turn(prompt: str, speculative: bool) -> None:
         await cancel_active_turn("new_turn")
@@ -1291,7 +1381,12 @@ async def handle_scribe_events(
             event = await scribe_events.get()
             event_type = str(event["type"])
             if event_type == "assistant_done":
-                await maybe_commit_history(event["turn"])
+                turn = event["turn"]
+                goal_request = completed_goal_request(turn)
+                if goal_request is not None:
+                    await begin_goal_handoff(turn, goal_request)
+                else:
+                    await maybe_commit_history(turn)
                 continue
 
             text = str(event.get("text", ""))

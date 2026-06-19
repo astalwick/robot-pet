@@ -16,8 +16,10 @@ from voice.assistant import (
     INSPECT_ROBOT_TOOL_NAME,
     LOOK_AROUND_TOOL_NAME,
     MOVE_FORWARD_TOOL_NAME,
+    START_GOAL_TOOL_NAME,
     VOICE_SWITCH_TOOL_NAME,
     ActiveTurn,
+    AgentGoalRequest,
     AudioLevels,
     TurnRuntimeState,
     VoiceState,
@@ -843,6 +845,95 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stream_openai_words_start_goal_yields_goal_request(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    events = [
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=START_GOAL_TOOL_NAME,
+                                call_id="call_goal",
+                                arguments=json.dumps({"goal": "move toward me and stop when close"}),
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "Move toward me."}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                )
+            ]
+
+            self.assertEqual(chunks, [AgentGoalRequest(goal="move toward me and stop when close")])
+            self.assertEqual([chunk for chunk in chunks if isinstance(chunk, str)], [])
+            # The goal handoff ends the turn without feeding a tool output back, so
+            # the model is only ever called once.
+            self.assertEqual(len(fake_responses.calls), 1)
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_start_goal_drops_co_emitted_text(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    events = [
+                        SimpleNamespace(type="response.output_text.delta", delta="On it."),
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=START_GOAL_TOOL_NAME,
+                                call_id="call_goal",
+                                arguments=json.dumps({"goal": "find the ball"}),
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "Find the ball."}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                )
+            ]
+
+            # The goal wins: co-emitted text is never spoken.
+            self.assertEqual(chunks, [AgentGoalRequest(goal="find the ball")])
+            self.assertEqual(len(fake_responses.calls), 1)
+
+        asyncio.run(run())
+
     def test_stream_openai_words_retries_create_once(self):
         async def run():
             class FakeResponses:
@@ -1024,6 +1115,57 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_run_assistant_turn_start_goal_skips_tts_speaker(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    events = [
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=START_GOAL_TOOL_NAME,
+                                call_id="call_goal",
+                                arguments=json.dumps({"goal": "patrol the room"}),
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            spoken = []
+
+            async def fake_speaker(text_chunks, *args, **kwargs):
+                spoken.append(True)
+                async for _chunk in text_chunks:
+                    pass
+
+            result = await run_assistant_turn(
+                1,
+                [{"role": "user", "content": "Patrol the room."}],
+                asyncio.Event(),
+                asyncio.Event(),
+                SimpleNamespace(responses=FakeResponses()),
+                "key",
+                VoiceState("test-voice"),
+                tts_speaker=fake_speaker,
+            )
+
+            self.assertEqual(result, AgentGoalRequest(goal="patrol the room"))
+            # A pure handoff never opens the TTS/playback path.
+            self.assertEqual(spoken, [])
+
+        asyncio.run(run())
+
     def test_stream_openai_words_stops_after_end_session_followup(self):
         async def run():
             pending = [False]
@@ -1180,6 +1322,60 @@ class AssistantStreamingTest(unittest.TestCase):
                     ],
                 ],
             )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_goal_handoff_reaches_scribe_events(self):
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                return AgentGoalRequest(goal="move toward me and stop when close")
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Move toward me."})
+            for _ in range(10):
+                if any(event["type"] == "goal_handoff" for event in events):
+                    break
+                await asyncio.sleep(0.01)
+
+            handoffs = [event for event in events if event["type"] == "goal_handoff"]
+            self.assertEqual(len(handoffs), 1)
+            self.assertEqual(handoffs[0]["goal"], "move toward me and stop when close")
+            # The goal records its own result later, so nothing lands in history here.
+            self.assertEqual(list(history.exchanges()), [])
 
             stop_event.set()
             handler_task.cancel()

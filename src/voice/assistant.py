@@ -1252,7 +1252,7 @@ async def handle_scribe_events(
             if (
                 active_turn
                 and active_turn.is_playing_back()
-                and not policy.transcript_matches(text, active_turn.prompt)
+                and (policy.has_explicit_interrupt(text) or not policy.transcript_matches(text, active_turn.prompt))
             ):
                 outcome = consider_playback_barge_in("commit", text, now, active_turn)
                 if not outcome.accepted:

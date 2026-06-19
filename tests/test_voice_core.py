@@ -1723,6 +1723,66 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_committed_interrupt_wins_even_when_it_matches_prompt_text(self):
+        async def run():
+            cancelled = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                playback_event.set()
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me a story where someone says stop"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 900})
+            await scribe_events.put({"type": "commit", "text": "Stop, please."})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(cancelled, ["Tell me a story where someone says stop"])
+            self.assertTrue(
+                any(
+                    status.get("barge_in_last_event") == "commit: explicit_interrupt"
+                    for status in statuses
+                )
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_partial_wait_barges_while_playback_open_without_speaking_event(self):
         async def run():
             cancelled = []

@@ -2524,6 +2524,71 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_speculative_turn_waits_for_commit_when_playback_is_disabled(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            playback_opened = []
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                speculative_playback_enabled=False,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                if on_assistant_chunk:
+                    on_assistant_chunk("Yes, batteries store energy.")
+                await playback_event.wait()
+                playback_opened.append(True)
+                return "Yes, batteries store energy."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "Tell me about batteries."})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(playback_opened, [])
+            self.assertEqual(len(history.exchanges()), 0)
+
+            await scribe_events.put({"type": "commit", "text": "Tell me about batteries."})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(playback_opened, [True])
+            exchanges = history.exchanges()
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "Tell me about batteries.")
+            self.assertEqual(exchanges[0].assistant_text, "Yes, batteries store energy.")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_barged_in_turn_records_what_it_spoke(self):
         async def run():
             history = ConversationHistory()

@@ -1132,7 +1132,8 @@ async def handle_scribe_events(
             emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
         status(status="thinking", assistant_speaking=False)
         if speculative:
-            turn.playback_release_task = asyncio.create_task(release_speculative_playback(turn))
+            if policy.speculative_playback_enabled:
+                turn.playback_release_task = asyncio.create_task(release_speculative_playback(turn))
         else:
             turn.playback_release_task = asyncio.create_task(release_committed_playback(turn))
 

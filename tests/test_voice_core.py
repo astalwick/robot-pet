@@ -15,6 +15,8 @@ from voice.assistant import (
     FACE_ME_TOOL_NAME,
     INSPECT_ROBOT_TOOL_NAME,
     LOOK_AROUND_TOOL_NAME,
+    MOVE_FORWARD_TOOL_NAME,
+    VOICE_SWITCH_TOOL_NAME,
     ActiveTurn,
     AudioLevels,
     TurnRuntimeState,
@@ -30,6 +32,14 @@ from voice.assistant import (
     reset_utterance_barge_in_audio,
     run_assistant_turn,
     stream_openai_words,
+)
+from voice.tools import (
+    INSPECT_SPEAKER_DIRECTION_TOOL_NAME,
+    RobotToolCall,
+    VoiceToolContext,
+    agent_observation,
+    dispatch_tool,
+    parse_tool_arguments,
 )
 from voice.conversation import ConversationHistory
 from config.voice import VoiceConfig
@@ -2726,6 +2736,207 @@ class AssistantStreamingTest(unittest.TestCase):
                 await handler_task
 
         asyncio.run(run())
+
+
+class RobotToolDispatchTest(unittest.TestCase):
+    def _call(self, name, call_id="call_1", arguments=None):
+        return RobotToolCall(name=name, arguments=arguments or {}, call_id=call_id)
+
+    def test_motion_tool_calls_motion_intent_caller(self):
+        async def run():
+            calls = []
+
+            def motion_intent_caller(name):
+                calls.append(name)
+                return {"ok": True, "intent": name}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                motion_intent_caller=motion_intent_caller,
+            )
+            result = await dispatch_tool(self._call(MOVE_FORWARD_TOOL_NAME), context)
+
+            self.assertEqual(calls, [MOVE_FORWARD_TOOL_NAME])
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, {"ok": True, "intent": MOVE_FORWARD_TOOL_NAME})
+
+        asyncio.run(run())
+
+    def test_motion_tool_missing_caller_reports_error(self):
+        async def run():
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"))
+            result = await dispatch_tool(self._call(MOVE_FORWARD_TOOL_NAME), context)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output, {"ok": False, "error": "motion_caller_missing"})
+
+        asyncio.run(run())
+
+    def test_look_around_produces_image_parts(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+            )
+            result = await dispatch_tool(self._call(LOOK_AROUND_TOOL_NAME), context)
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, {"ok": True, "image_attached": True})
+            self.assertEqual(result.image_parts[0]["type"], "input_text")
+            self.assertEqual(result.image_parts[1]["type"], "input_image")
+            self.assertTrue(result.image_parts[1]["image_url"].startswith("data:image/jpeg;base64,"))
+
+        asyncio.run(run())
+
+    def test_look_around_image_becomes_agent_observation(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+            )
+            result = await dispatch_tool(self._call(LOOK_AROUND_TOOL_NAME), context)
+            observation = agent_observation(result)
+
+            # The image rides as a real input_image part, not base64 in the text.
+            self.assertEqual(observation.input_parts[1]["type"], "input_image")
+            self.assertNotIn("base64", observation.text)
+
+        asyncio.run(run())
+
+    def test_inspect_robot_returns_summarized_telemetry(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                robot_inspection_caller=lambda: {
+                    "sources": {"gamepad_teleop": {"stale": False}},
+                    "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                },
+            )
+            result = await dispatch_tool(self._call(INSPECT_ROBOT_TOOL_NAME), context)
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output["battery"]["status"], "ok")
+            self.assertFalse(result.output["sensors"]["available"])
+
+        asyncio.run(run())
+
+    def test_face_me_calls_caller(self):
+        async def run():
+            calls = []
+
+            def face_me_caller():
+                calls.append(True)
+                return {"ok": True, "result": "completed", "relative_degrees": 90}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                face_me_caller=face_me_caller,
+            )
+            result = await dispatch_tool(self._call(FACE_ME_TOOL_NAME), context)
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(result.output, {"ok": True, "result": "completed", "relative_degrees": 90})
+
+        asyncio.run(run())
+
+    def test_switch_voice_toggles_and_surfaces_switch(self):
+        async def run():
+            voice_state = VoiceState("default-voice", alternate_voice_id="alt-voice")
+            context = VoiceToolContext(voice_state=voice_state)
+            result = await dispatch_tool(self._call(VOICE_SWITCH_TOOL_NAME), context)
+
+            self.assertIsNotNone(result.voice_switch)
+            self.assertEqual(result.output["voice"], "alternate")
+            self.assertEqual(voice_state.current_voice_id, "alt-voice")
+
+        asyncio.run(run())
+
+    def test_end_session_sets_pending_flag(self):
+        async def run():
+            pending = [False]
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), end_session_pending=pending)
+            result = await dispatch_tool(self._call(END_SESSION_TOOL_NAME), context)
+
+            self.assertTrue(pending[0])
+            self.assertEqual(result.output, {"ok": True, "ended": True})
+
+        asyncio.run(run())
+
+    def test_unknown_tool_reports_unsupported(self):
+        async def run():
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"))
+            result = await dispatch_tool(self._call("not_a_real_tool"), context)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output, {"ok": False, "error": "unsupported tool"})
+
+        asyncio.run(run())
+
+    def test_inspect_speaker_direction_fresh(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                speaker_direction_caller=lambda: {
+                    "connected": True,
+                    "relative_degrees": 30,
+                    "age_seconds": 1.2,
+                    "fresh": True,
+                },
+            )
+            result = await dispatch_tool(self._call(INSPECT_SPEAKER_DIRECTION_TOOL_NAME), context)
+            self.assertEqual(
+                result.output,
+                {"ok": True, "available": True, "fresh": True, "relative_degrees": 30, "age_seconds": 1.2},
+            )
+
+        asyncio.run(run())
+
+    def test_inspect_speaker_direction_stale(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                speaker_direction_caller=lambda: {
+                    "connected": True,
+                    "relative_degrees": -45,
+                    "age_seconds": 30.0,
+                    "fresh": False,
+                },
+            )
+            result = await dispatch_tool(self._call(INSPECT_SPEAKER_DIRECTION_TOOL_NAME), context)
+            self.assertTrue(result.output["available"])
+            self.assertFalse(result.output["fresh"])
+            self.assertEqual(result.output["relative_degrees"], -45)
+
+        asyncio.run(run())
+
+    def test_inspect_speaker_direction_unavailable_without_cache(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                speaker_direction_caller=lambda: {
+                    "connected": True,
+                    "relative_degrees": None,
+                    "age_seconds": None,
+                    "fresh": False,
+                },
+            )
+            result = await dispatch_tool(self._call(INSPECT_SPEAKER_DIRECTION_TOOL_NAME), context)
+            self.assertEqual(result.output, {"ok": True, "available": False, "fresh": False})
+
+        asyncio.run(run())
+
+    def test_inspect_speaker_direction_unavailable_without_caller(self):
+        async def run():
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"))
+            result = await dispatch_tool(self._call(INSPECT_SPEAKER_DIRECTION_TOOL_NAME), context)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output, {"ok": False, "error": "speaker_direction_unavailable"})
+
+        asyncio.run(run())
+
+    def test_parse_tool_arguments_handles_blank_and_invalid(self):
+        self.assertEqual(parse_tool_arguments(""), {})
+        self.assertEqual(parse_tool_arguments(None), {})
+        self.assertEqual(parse_tool_arguments("not json"), {})
+        self.assertEqual(parse_tool_arguments('{"a": 1}'), {"a": 1})
 
 
 if __name__ == "__main__":

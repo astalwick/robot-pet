@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import re
 import time
@@ -627,12 +626,22 @@ async def stream_openai_words(
     playback_event: asyncio.Event | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> AsyncIterator[str | VoiceSwitch]:
+    from voice.tools import RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
+
     pending = ""
     word_buffer: list[str] = []
     response_input: object = openai_input
     previous_response_id: str | None = None
     text_streamed = False
     end_session_tool_output_sent = False
+    tool_context = VoiceToolContext(
+        voice_state=voice_state,
+        motion_intent_caller=motion_intent_caller,
+        camera_snapshot_caller=camera_snapshot_caller,
+        robot_inspection_caller=robot_inspection_caller,
+        face_me_caller=face_me_caller,
+        end_session_pending=end_session_pending,
+    )
 
     while True:
         response_text_chunks: list[str] = []
@@ -710,94 +719,41 @@ async def stream_openai_words(
         tool_outputs: list[dict[str, str]] = []
         image_messages: list[dict[str, Any]] = []
         for function_call in function_calls:
-            call_id = getattr(function_call, "call_id", "")
-            name = getattr(function_call, "name", "")
-            log.info("tool call: %s", name)
-            voice_switch = None
+            call = RobotToolCall(
+                name=getattr(function_call, "name", ""),
+                arguments=parse_tool_arguments(getattr(function_call, "arguments", "")),
+                call_id=getattr(function_call, "call_id", ""),
+            )
+            log.info("tool call: %s", call.name)
 
-            if name == VOICE_SWITCH_TOOL_NAME:
-                voice_switch = voice_state.toggle()
-                result: dict[str, Any] = {
-                    "voice": voice_switch.voice_name,
-                    "voice_id": voice_switch.voice_id,
-                }
-            elif name == END_SESSION_TOOL_NAME:
-                if end_session_pending is None:
-                    result = {"ok": False, "error": "session_end_unavailable"}
-                else:
-                    end_session_pending[0] = True
-                    result = {"ok": True, "ended": True}
-            elif name in MOTION_TOOL_NAMES:
-                if motion_intent_caller is None:
-                    result = {"ok": False, "error": "motion_caller_missing"}
-                else:
-                    # Physical motion must not fire for a speculative turn that
-                    # gets discarded. Wait until this turn is actually speaking;
-                    # if it's cancelled first, this await is cancelled and the
-                    # motion never happens.
-                    if playback_event is not None:
-                        await playback_event.wait()
-                    result = await asyncio.to_thread(motion_intent_caller, name)
-            elif name == LOOK_AROUND_TOOL_NAME:
-                if camera_snapshot_caller is None:
-                    result = {"ok": False, "error": "camera_snapshot_unavailable"}
-                else:
-                    try:
-                        jpeg = await asyncio.to_thread(camera_snapshot_caller)
-                    except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
-                        result = {"ok": False, "error": str(exc)}
-                    else:
-                        data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
-                        image_messages.append(
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "input_text",
-                                        "text": "Here is the current camera snapshot from the robot.",
-                                    },
-                                    {"type": "input_image", "image_url": data_url},
-                                ],
-                            }
-                        )
-                        result = {"ok": True, "image_attached": True}
-            elif name == INSPECT_ROBOT_TOOL_NAME:
-                if robot_inspection_caller is None:
-                    result = {"ok": False, "error": "telemetry_unavailable"}
-                else:
-                    try:
-                        snapshot = await asyncio.to_thread(robot_inspection_caller)
-                    except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
-                        result = {"ok": False, "error": str(exc)}
-                    else:
-                        result = inspect_robot_snapshot(snapshot)
-            elif name == FACE_ME_TOOL_NAME:
-                if face_me_caller is None:
-                    result = {"ok": False, "error": "face_me_unavailable"}
-                else:
-                    # Physical turn — defer until this turn actually speaks (see
-                    # the motion tools above).
-                    if playback_event is not None:
-                        await playback_event.wait()
-                    result = await asyncio.to_thread(face_me_caller)
-            else:
-                result = {"ok": False, "error": "unsupported tool"}
+            # Physical motion must not fire for a speculative turn that gets
+            # discarded. Wait until this turn is actually speaking; if it's
+            # cancelled first, this await is cancelled and the motion never
+            # happens. The agent runner has no speculative turns, so this gating
+            # lives here in the assistant path, not in the shared dispatcher.
+            if call.name in MOTION_TOOL_NAMES or call.name == FACE_ME_TOOL_NAME:
+                if playback_event is not None:
+                    await playback_event.wait()
 
-            if voice_switch is not None:
-                yield voice_switch
+            result = await dispatch_tool(call, tool_context)
+
+            if result.voice_switch is not None:
+                yield result.voice_switch
 
             tool_outputs.append(
                 {
                     "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": json.dumps(result),
+                    "call_id": result.call_id,
+                    "output": json.dumps(result.output),
                 }
             )
+            if result.image_parts:
+                image_messages.append({"role": "user", "content": result.image_parts})
 
-            if result.get("ok") is False:
-                log.warning("tool call %s failed: %s", name, result.get("error"))
+            if result.ok:
+                log.info("tool call %s ok", call.name)
             else:
-                log.info("tool call %s ok", name)
+                log.warning("tool call %s failed: %s", call.name, result.output.get("error"))
 
         if end_session_pending and end_session_pending[0] and (text_streamed or end_session_tool_output_sent):
             return

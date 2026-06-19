@@ -131,6 +131,7 @@ plan_service_restarts() {
         want_restart robot-vision.service
         want_restart robot-voice.service
         want_restart robot-sensors.service
+        want_restart robot-web-dashboard.service
         ;;
       systemd/*)
         want_restart "$(basename "$path")"

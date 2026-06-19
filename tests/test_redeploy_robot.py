@@ -88,6 +88,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-vision.service")
             want("robot-voice.service")
             want("robot-sensors.service")
+            want("robot-web-dashboard.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -124,6 +125,11 @@ class TestRedeployRobot(unittest.TestCase):
     def test_voice_paths_restart_voice_only(self):
         services = planned_services(["src/voice/assistant.py"])
         self.assertEqual(services, {"robot-voice.service"})
+
+    def test_config_paths_restart_dashboard_too(self):
+        services = planned_services(["src/config/voice.py"])
+        self.assertIn("robot-web-dashboard.service", services)
+        self.assertIn("robot-voice.service", services)
 
     def test_pyproject_restarts_all_services(self):
         self.assertEqual(planned_services(["pyproject.toml"]), ALL_SERVICES)

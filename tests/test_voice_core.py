@@ -684,6 +684,54 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stream_openai_words_suppresses_text_from_tool_calling_response(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="Let me check."),
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=LOOK_AROUND_TOOL_NAME,
+                                    call_id="call_look",
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="I see you."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "What do you see?"}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                    camera_snapshot_caller=lambda: b"jpeg-bytes",
+                )
+            ]
+
+            self.assertEqual(chunks, ["I see you."])
+
+        asyncio.run(run())
+
     def test_stream_openai_words_invokes_face_me_caller(self):
         async def run():
             class FakeResponses:
@@ -884,18 +932,24 @@ class AssistantStreamingTest(unittest.TestCase):
 
                 async def create(self, **kwargs):
                     self.calls.append(kwargs)
-                    events = [
-                        SimpleNamespace(type="response.output_text.delta", delta="Bye."),
-                        SimpleNamespace(
-                            type="response.output_item.done",
-                            item=SimpleNamespace(
-                                type="function_call",
-                                name=END_SESSION_TOOL_NAME,
-                                call_id="call_end",
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="Bye."),
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=END_SESSION_TOOL_NAME,
+                                    call_id="call_end",
+                                ),
                             ),
-                        ),
-                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
-                    ]
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="Bye."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
 
                     async def stream():
                         for event in events:
@@ -926,7 +980,7 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(text, "Bye.")
             self.assertEqual(order, ["tts_start", "tts:Bye.", "tts_done"])
             self.assertEqual(ended, [True])
-            self.assertEqual(len(fake_responses.calls), 1)
+            self.assertEqual(len(fake_responses.calls), 2)
 
         asyncio.run(run())
 

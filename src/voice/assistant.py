@@ -633,6 +633,7 @@ async def stream_openai_words(
     end_session_tool_output_sent = False
 
     while True:
+        response_text_chunks: list[str] = []
         create_kwargs: dict[str, Any] = {
             "model": OPENAI_MODEL,
             "input": response_input,
@@ -673,8 +674,7 @@ async def stream_openai_words(
 
                 word_buffer.extend(pieces)
                 while len(word_buffer) >= 3:
-                    text_streamed = True
-                    yield "".join(word_buffer[:3])
+                    response_text_chunks.append("".join(word_buffer[:3]))
                     del word_buffer[:3]
                 continue
 
@@ -696,11 +696,13 @@ async def stream_openai_words(
             word_buffer.append(pending)
             pending = ""
         if word_buffer:
-            text_streamed = True
-            yield "".join(word_buffer)
+            response_text_chunks.append("".join(word_buffer))
             word_buffer.clear()
 
         if not function_calls:
+            for chunk in response_text_chunks:
+                text_streamed = True
+                yield chunk
             return
 
         tool_outputs: list[dict[str, str]] = []

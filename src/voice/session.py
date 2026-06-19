@@ -152,7 +152,7 @@ class VoiceSession:
                     camera_snapshot_caller=self.camera_snapshot_caller,
                     robot_inspection_caller=self.robot_inspection_caller,
                     face_me_caller=self.face_me_caller,
-                    openai_model=config.openai_model,
+                    openai_model=self.config.openai_model,
                     stop_playback_now=self.stop_playback_now,
                 )
             ),

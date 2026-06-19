@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -78,6 +79,37 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         self.assertEqual(session.voice_state.default_voice_id, "scientist-voice")
         self.assertEqual(session.voice_state.alternate_voice_id, "alt-voice-id")
         self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
+
+    def test_start_passes_configured_openai_model_to_scribe_handler(self):
+        class FakeAudio:
+            def mic_frames(self, _stop_event):
+                return object()
+
+        session = VoiceSession(
+            VoiceConfig(personality="scientist", openai_model="gpt-5.5"),
+            "test-elevenlabs-key",
+            object(),
+            lambda _update: None,
+            FakeAudio(),
+            personalities=CARD_MAP,
+        )
+
+        async def run():
+            async def fake_scribe_streamer(*_args, **_kwargs):
+                await session.stop_event.wait()
+
+            async def fake_handle_scribe_events(*_args, **kwargs):
+                self.assertEqual(kwargs["openai_model"], "gpt-5.5")
+                await session.stop_event.wait()
+
+            session.scribe_streamer = fake_scribe_streamer
+            with mock.patch("voice.session.handle_scribe_events", fake_handle_scribe_events):
+                await session.start()
+                await session.stop()
+
+        import asyncio
+
+        asyncio.run(run())
 
 
 class AssistantToolsTest(unittest.TestCase):

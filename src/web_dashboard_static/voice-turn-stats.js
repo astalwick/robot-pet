@@ -55,10 +55,10 @@ function ingestEvent(event, t) {
     record = { key, turnId, finalized: false };
     records.set(key, record);
   }
-  if (record.finalized) return;
 
   switch (event.type) {
     case 'turn_start':
+      if (record.finalized) return;
       if (record.start_t == null) {
         record.start_t = t;
         record.speculative = Boolean(event.speculative);
@@ -66,8 +66,14 @@ function ingestEvent(event, t) {
       break;
     case 'turn_first_token':
       if (record.first_token_t == null) record.first_token_t = t;
+      updateFinalizedRow(record);
+      break;
+    case 'assistant_start':
+      if (record.first_audio_t == null) record.first_audio_t = t;
+      updateFinalizedRow(record);
       break;
     case 'turn_committed':
+      if (record.finalized) return;
       if (record.committed_t == null) {
         record.committed_t = t;
         record.from_speculative = Boolean(event.from_speculative);
@@ -75,6 +81,7 @@ function ingestEvent(event, t) {
       }
       break;
     case 'turn_cancel':
+      if (record.finalized) return;
       if (record.cancelled_t == null) {
         record.cancelled_t = t;
         record.cancel_reason = String(event.reason || '');
@@ -100,7 +107,13 @@ function resetAll() {
 
 function finalize(record) {
   record.finalized = true;
-  pushRow(classify(record));
+  record.row = classify(record);
+  pushRow(record.row);
+}
+
+function updateFinalizedRow(record) {
+  if (!record.finalized || !record.row) return;
+  Object.assign(record.row, turnTiming(record));
 }
 
 function pushRow(row) {
@@ -110,22 +123,34 @@ function pushRow(row) {
 
 function classify(record) {
   const { turnId, start_t, first_token_t, committed_t, cancelled_t, speculative, from_speculative, cancel_reason } = record;
+  const timing = turnTiming(record);
   if (committed_t != null) {
     if (speculative && from_speculative) {
       const commitDelta = (committed_t - start_t) * 1000;
       const tokenDelta = first_token_t != null ? (first_token_t - start_t) * 1000 : commitDelta;
       const savings_ms = Math.round(Math.min(commitDelta, tokenDelta));
-      return { turnId, outcome: 'kept', savings_ms };
+      return { turnId, outcome: 'kept', savings_ms, ...timing };
     }
-    return { turnId, outcome: 'absent', savings_ms: 0 };
+    return { turnId, outcome: 'absent', savings_ms: 0, ...timing };
   }
   if (cancelled_t != null && speculative) {
     if (first_token_t == null) {
-      return { turnId, outcome: 'replaced', cost_ms: 0, no_audible: true, reason: cancel_reason };
+      return { turnId, outcome: 'replaced', cost_ms: 0, no_audible: true, reason: cancel_reason, ...timing };
     }
-    return { turnId, outcome: 'replaced', cost_ms: Math.round((cancelled_t - first_token_t) * 1000), reason: cancel_reason };
+    return { turnId, outcome: 'replaced', cost_ms: Math.round((cancelled_t - first_token_t) * 1000), reason: cancel_reason, ...timing };
   }
-  return { turnId, outcome: 'cancelled', reason: cancel_reason };
+  return { turnId, outcome: 'cancelled', reason: cancel_reason, ...timing };
+}
+
+function turnTiming(record) {
+  const timing = {};
+  if (record.start_t != null && record.first_token_t != null) {
+    timing.first_token_ms = Math.round((record.first_token_t - record.start_t) * 1000);
+  }
+  if (record.start_t != null && record.first_audio_t != null) {
+    timing.first_audio_ms = Math.round((record.first_audio_t - record.start_t) * 1000);
+  }
+  return timing;
 }
 
 function expirePending(now) {
@@ -170,13 +195,20 @@ function render() {
 function formatRow(row) {
   const id = `turn ${row.turnId}`.padEnd(9);
   const outcome = row.outcome.padEnd(9);
-  if (row.outcome === 'kept') return `${id}  ${outcome}  saved ${row.savings_ms}ms`;
-  if (row.outcome === 'absent') return `${id}  ${outcome}  —`;
+  if (row.outcome === 'kept') return `${id}  ${outcome}  saved ${row.savings_ms}ms${formatTiming(row)}`;
+  if (row.outcome === 'absent') return `${id}  ${outcome}  —${formatTiming(row)}`;
   if (row.outcome === 'replaced') {
     const cost = row.no_audible ? 'no audible cost' : `cost ${row.cost_ms}ms`;
-    return `${id}  ${outcome}  ${cost}${row.reason ? ` (${row.reason})` : ''}`;
+    return `${id}  ${outcome}  ${cost}${formatTiming(row)}${row.reason ? ` (${row.reason})` : ''}`;
   }
-  return `${id}  ${outcome}${row.reason ? `  (${row.reason})` : ''}`;
+  return `${id}  ${outcome}${formatTiming(row)}${row.reason ? `  (${row.reason})` : ''}`;
+}
+
+function formatTiming(row) {
+  const parts = [];
+  if (row.first_token_ms != null) parts.push(`token ${row.first_token_ms}ms`);
+  if (row.first_audio_ms != null) parts.push(`audio ${row.first_audio_ms}ms`);
+  return parts.length ? `  ${parts.join(' ')}` : '';
 }
 
 function median(values) {

@@ -619,6 +619,7 @@ class DashboardJsTest(unittest.TestCase):
         self.telemetry_js = self._module("telemetry.js")
         self.voice_js = self._module("voice.js")
         self.voice_timeline_js = self._module("voice-timeline.js")
+        self.voice_turn_stats_js = self._module("voice-turn-stats.js")
         self.config_js = self._module("config.js")
         self.config_store_js = self._module("config-store.js")
         self.dom_js = self._module("dom.js")
@@ -744,6 +745,14 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("barge_in_fired", self.voice_timeline_js)
         self.assertIn("barge_in_considered", self.voice_timeline_js)
         self.assertIn("echo_suppressed", self.voice_timeline_js)
+
+    def test_voice_turn_stats_show_token_and_audio_timing(self):
+        self.assertIn("case 'turn_first_token':", self.voice_turn_stats_js)
+        self.assertIn("case 'assistant_start':", self.voice_turn_stats_js)
+        self.assertIn("first_token_ms", self.voice_turn_stats_js)
+        self.assertIn("first_audio_ms", self.voice_turn_stats_js)
+        self.assertIn("token ${row.first_token_ms}ms", self.voice_turn_stats_js)
+        self.assertIn("audio ${row.first_audio_ms}ms", self.voice_turn_stats_js)
 
     def test_header_has_voice_toggle_button(self):
         self.assertIn('id="voice-toggle-button"', self.dashboard_html)

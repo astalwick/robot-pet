@@ -235,8 +235,8 @@ INSPECT_ROBOT_TOOL = {
     "type": "function",
     "name": INSPECT_ROBOT_TOOL_NAME,
     "description": (
-        "Inspect the robot's current battery, motor, safety, distance sensor, face detection, "
-        "and computer health status. Use this to answer questions about the robot's body or surroundings."
+        "Inspect the robot's current motor battery, Pi UPS battery, motor, safety, distance sensor, "
+        "face detection, and computer health status. Use this to answer questions about the robot's body or surroundings."
     ),
     "parameters": {
         "type": "object",
@@ -299,6 +299,7 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         return {"ok": False, "error": "telemetry_unavailable"}
 
     battery = snapshot.get("motor_battery")
+    pi_battery = snapshot.get("pi_battery")
     drive = snapshot.get("drive_status")
     motor_rail = snapshot.get("motor_rail")
     sensors = snapshot.get("sensors")
@@ -308,6 +309,7 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "ok": True,
         "battery": {"available": False},
+        "pi_battery": {"available": False},
         "drive": {"available": False},
         "motor_rail": {"available": False},
         "sensors": {"available": False},
@@ -321,6 +323,19 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "status": battery.get("status"),
             "pack_voltage": battery.get("pack_voltage"),
             "cell_voltage": battery.get("cell_voltage"),
+        }
+    if _telemetry_value_available(snapshot, "pi_battery", pi_battery):
+        result["pi_battery"] = {
+            "available": True,
+            "status": pi_battery.get("status"),
+            "pack_voltage": pi_battery.get("pack_voltage"),
+            "percent": pi_battery.get("percent"),
+            "current_amps": pi_battery.get("current_amps"),
+            "power_state": pi_battery.get("power_state"),
+            "runtime_minutes": pi_battery.get("runtime_minutes"),
+            "warning_voltage": pi_battery.get("warning_voltage"),
+            "shutdown_voltage": pi_battery.get("shutdown_voltage"),
+            "shutdown_pending": pi_battery.get("shutdown_pending"),
         }
     if _motion_value_available(snapshot, drive):
         result["drive"] = {

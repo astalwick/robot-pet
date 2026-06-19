@@ -447,12 +447,24 @@ class AssistantStreamingTest(unittest.TestCase):
             {
                 "sources": {
                     "gamepad_teleop": {"stale": False},
+                    "pi_battery": {"stale": False},
                     "motor_rail": {"stale": False},
                     "sensors": {"stale": False},
                     "vision": {"stale": True},
                     "system": {"stale": False},
                 },
                 "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                "pi_battery": {
+                    "status": "low",
+                    "pack_voltage": 13.3,
+                    "percent": 25,
+                    "current_amps": -0.4,
+                    "power_state": "discharging",
+                    "runtime_minutes": 120,
+                    "warning_voltage": 13.3,
+                    "shutdown_voltage": 13.0,
+                    "shutdown_pending": False,
+                },
                 "drive_status": {
                     "state": "stopped",
                     "stop_reason": "idle",
@@ -482,6 +494,10 @@ class AssistantStreamingTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["battery"]["status"], "ok")
+        self.assertEqual(result["pi_battery"]["status"], "low")
+        self.assertEqual(result["pi_battery"]["pack_voltage"], 13.3)
+        self.assertEqual(result["pi_battery"]["shutdown_voltage"], 13.0)
+        self.assertFalse(result["pi_battery"]["shutdown_pending"])
         self.assertEqual(result["drive"]["state"], "stopped")
         self.assertNotIn("telemetry_publish_failures", result["drive"])
         self.assertEqual(
@@ -507,6 +523,43 @@ class AssistantStreamingTest(unittest.TestCase):
         self.assertEqual(result["battery"]["pack_voltage"], 11.6)
         self.assertTrue(result["drive"]["available"])
         self.assertEqual(result["drive"]["state"], "stopped")
+
+    def test_inspect_robot_snapshot_reads_live_pi_battery(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {"pi_battery": {"stale": False}},
+                "pi_battery": {
+                    "status": "critical",
+                    "pack_voltage": 13.0,
+                    "percent": 12,
+                    "current_amps": -0.8,
+                    "power_state": "discharging",
+                    "runtime_minutes": 8,
+                    "warning_voltage": 13.3,
+                    "shutdown_voltage": 13.0,
+                    "shutdown_pending": True,
+                    "cell_voltages": [3.25, 3.25, 3.25, 3.25],
+                    "usb_c_voltage": 0.0,
+                },
+            }
+        )
+
+        self.assertTrue(result["pi_battery"]["available"])
+        self.assertEqual(result["pi_battery"]["status"], "critical")
+        self.assertEqual(result["pi_battery"]["pack_voltage"], 13.0)
+        self.assertTrue(result["pi_battery"]["shutdown_pending"])
+        self.assertNotIn("cell_voltages", result["pi_battery"])
+        self.assertNotIn("usb_c_voltage", result["pi_battery"])
+
+    def test_inspect_robot_snapshot_hides_stale_pi_battery(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {"pi_battery": {"stale": True}},
+                "pi_battery": {"status": "critical", "pack_voltage": 13.0},
+            }
+        )
+
+        self.assertFalse(result["pi_battery"]["available"])
 
     def test_inspect_robot_snapshot_falls_back_to_gamepad_teleop_battery_and_drive(self):
         result = inspect_robot_snapshot(

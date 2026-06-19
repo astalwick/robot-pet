@@ -79,6 +79,8 @@ LOG_COMMAND = [
     "-u",
     "robot-battery",
     "-u",
+    "robot-pi-battery",
+    "-u",
     "robot-motion",
     "-u",
     "gamepad-teleop",

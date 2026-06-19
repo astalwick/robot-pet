@@ -19,6 +19,7 @@ const HISTORY_LENGTH = 48;
 
 const history = {
   pack_voltage: [],
+  pi_pack_voltage: [],
   left_current: [],
   right_current: [],
   left_actual: [],
@@ -61,6 +62,7 @@ function render(snapshot) {
   const controller = snapshot.controller || {};
   const wheels = snapshot.wheels || {};
   const battery = snapshot.motor_battery || {};
+  const piBattery = snapshot.pi_battery || {};
   const motorRail = snapshot.motor_rail || {};
   const linkLoop = snapshot.link_loop || {};
   const driveStatusPayload = snapshot.drive_status || {};
@@ -68,7 +70,7 @@ function render(snapshot) {
 
   renderHud(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload);
   renderPi(pi);
-  renderBattery(battery, motorRail, sources.motor_rail || {});
+  renderBattery(battery, motorRail, sources.motor_rail || {}, piBattery, sources.pi_battery || {});
   renderController(controller);
   renderWheels(wheels);
   renderLink(linkLoop, driveStatusPayload);
@@ -82,6 +84,10 @@ function render(snapshot) {
 }
 
 function recordHistory(snapshot, gamepadLive) {
+  const piBattery = snapshot.pi_battery || {};
+  if ((snapshot.sources?.pi_battery || {}).stale === false) {
+    pushHistory('pi_pack_voltage', piBattery.pack_voltage);
+  }
   if (!gamepadLive) return;
   const wheels = snapshot.wheels || {};
   const battery = snapshot.motor_battery || {};
@@ -171,23 +177,35 @@ function renderPi(pi) {
   ]);
 }
 
-function renderBattery(battery, motorRail, motorRailSource) {
+function renderBattery(battery, motorRail, motorRailSource, piBattery, piBatterySource) {
   const v = battery.pack_voltage;
   const cell = battery.cell_voltage;
   const status = battery.status || 'unknown';
   const railState = motorRailSource.stale === false ? (motorRail.state || 'unknown') : 'stale';
   const railVoltage = motorRail.last_pack_voltage;
   const railReason = motorRail.reason || '--';
+  const piBatteryLive = piBatterySource.stale === false;
+  const piStatus = piBatteryLive ? (piBattery.status || 'unknown') : 'stale';
+  const piState = piBatteryLive ? (piBattery.power_state || 'unknown') : 'stale';
+  const piRuntime = formatMinutes(piBattery.runtime_minutes);
+  const piCells = (piBattery.cell_voltages || []).map((value) => fmt(value, 'V', 2)).join(' / ');
 
   setRows('power-rows', [
     row('rail', '', railState.toUpperCase().replaceAll('_', ' '), railClass(railState)),
     row('rail reason', '', railReason.replaceAll('_', ' '), railReason === '--' ? 'muted' : ''),
-    row('pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
-    row('cell est', '', fmt(cell, 'V', 2)),
+    row('motor pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
+    row('motor cell est', '', fmt(cell, 'V', 2)),
     row('last rail v', '', fmt(railVoltage, 'V', 2)),
-    row('trend', sparkline(history.pack_voltage), ''),
+    row('motor trend', sparkline(history.pack_voltage), ''),
     row('peak amps', '', fmt(maxCurrentAmps, 'A', 2)),
-    row('status', '', status.toUpperCase(), batteryClass(status)),
+    row('motor status', '', status.toUpperCase(), batteryClass(status)),
+    row('pi ups', piBattery.percent != null ? renderBar(piBattery.percent, 100) : '', fmt(piBattery.percent, '%', 0), batteryClass(piStatus)),
+    row('pi pack', '', fmt(piBattery.pack_voltage, 'V', 2), piBatteryLive ? '' : 'muted'),
+    row('pi current', '', fmt(piBattery.current_amps, 'A', 2), piBattery.current_amps < 0 ? 'muted' : ''),
+    row('pi runtime', '', piRuntime, piRuntime === '--' ? 'muted' : ''),
+    row('pi state', '', piState.replaceAll('_', ' ').toUpperCase(), piState === 'stale' ? 'muted' : ''),
+    row('pi cells', '', piCells || '--', piCells ? '' : 'muted'),
+    row('pi trend', sparkline(history.pi_pack_voltage), ''),
   ]);
 }
 
@@ -318,6 +336,14 @@ function renderSensors(snapshot, sources) {
   });
   rows.unshift(row('status', '', sensors.status || '--', 'ok'));
   setRows('sensors-rows', rows);
+}
+
+function formatMinutes(minutes) {
+  if (minutes == null) return '--';
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  return `${hours}h ${mins}m`;
 }
 
 function fixWraparound(value) {

@@ -1,0 +1,24 @@
+[Unit]
+Description=Robot Pi Battery - Waveshare UPS HAT E telemetry
+After=robot-telemetry.service
+Wants=robot-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_pi_battery.py
+Restart=always
+RestartSec=2
+RuntimeDirectory=robot-pet
+RuntimeDirectoryMode=0755
+# yes, not restart: several services share /run/robot-pet. With "restart",
+# stopping any one of them makes systemd delete the whole directory, wiping the
+# other services' sockets out from under live processes.
+RuntimeDirectoryPreserve=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

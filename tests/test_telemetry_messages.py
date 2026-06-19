@@ -19,6 +19,9 @@ from telemetry.messages import (
     motor_battery_message,
     motor_battery_status,
     motor_rail_update,
+    pi_battery_message,
+    pi_battery_status,
+    pi_battery_update,
     robot_motion_update,
     stale_label,
     sensors_update,
@@ -45,6 +48,46 @@ class TelemetryMessagesTest(unittest.TestCase):
 
     def test_motor_battery_message_includes_cell_voltage(self):
         self.assertEqual(motor_battery_message(11.7)["cell_voltage"], 3.9)
+
+    def test_pi_battery_status_bands(self):
+        self.assertEqual(pi_battery_status(None), "unknown")
+        self.assertEqual(pi_battery_status(20), "ok")
+        self.assertEqual(pi_battery_status(10), "low")
+        self.assertEqual(pi_battery_status(5), "critical")
+
+    def test_pi_battery_update_carries_ups_fields(self):
+        reading = SimpleNamespace(
+            battery_mv=16022,
+            battery_ma=-350,
+            battery_percent=73,
+            remaining_mah=3463,
+            runtime_min=585,
+            charge_time_min=None,
+            cells_mv=(4005, 4003, 4008, 4008),
+            vbus_mv=0,
+            vbus_ma=0,
+            vbus_mw=0,
+            charging=False,
+            fast_charging=False,
+            vbus_present=False,
+            charge_stage="standby",
+            bq4050_ok=True,
+            ip2368_ok=False,
+        )
+
+        message = pi_battery_update(pi_battery_message(reading), now=1000.0)
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "pi_battery")
+        self.assertEqual(message["time"], 1000.0)
+        self.assertEqual(message["pack_voltage"], 16.022)
+        self.assertEqual(message["current_amps"], -0.35)
+        self.assertEqual(message["percent"], 73)
+        self.assertEqual(message["runtime_minutes"], 585)
+        self.assertIsNone(message["charge_time_minutes"])
+        self.assertEqual(message["cell_voltages"][0], 4.005)
+        self.assertEqual(message["power_state"], "discharging")
+        self.assertEqual(message["status"], "ok")
 
     def test_motor_rail_update_carries_cutoff_state(self):
         message = motor_rail_update("low_battery_cutoff", 24, 10.7, "low_battery_cutoff", 10.8, 11.1, now=1000.0)

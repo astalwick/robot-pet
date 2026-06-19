@@ -19,122 +19,18 @@ Usage:
 import argparse
 import sys
 import time
+from pathlib import Path
 
 if not sys.platform.startswith("linux"):
     print("This script must run on the Pi (Linux + I2C).")
     sys.exit(1)
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
 from smbus2 import SMBus
 
-UPS_ADDRESS = 0x2D
-GROVE_MUX_ADDRESS = 0x70
-
-REG_ID = 0x00
-REG_POWER_ON = 0x01
-REG_CHARGE_STATE = 0x02
-REG_COMM_STATE = 0x03
-REG_USB_C_VBUS_MV = 0x10
-REG_USB_C_VBUS_MA = 0x12
-REG_USB_C_VBUS_MW = 0x14
-REG_BATTERY_MV = 0x20
-REG_BATTERY_MA = 0x22
-REG_BATTERY_PERCENT = 0x24
-REG_BATTERY_REMAINING_MAH = 0x26
-REG_BATTERY_RUNTIME_MIN = 0x28
-REG_BATTERY_CHARGE_TIME_MIN = 0x2A
-REG_CELL1_MV = 0x30
-REG_CELL2_MV = 0x32
-REG_CELL3_MV = 0x34
-REG_CELL4_MV = 0x36
-
-CHARGE_STAGES = {
-    0: "standby",
-    1: "trickle",
-    2: "constant_current",
-    3: "constant_voltage",
-    4: "charge_wait",
-    5: "full",
-    6: "charge_timeout",
-}
-
-
-def read_u16(bus, address, register):
-    low = bus.read_byte_data(address, register)
-    high = bus.read_byte_data(address, register + 1)
-    return (high << 8) | low, low, high
-
-
-def signed_16(value):
-    if value & 0x8000:
-        return value - 0x10000
-    return value
-
-
-def read_ups(bus, address):
-    id_value = bus.read_byte_data(address, REG_ID)
-    power_on_value = bus.read_byte_data(address, REG_POWER_ON)
-    charge_state = bus.read_byte_data(address, REG_CHARGE_STATE)
-    comm_state = bus.read_byte_data(address, REG_COMM_STATE)
-
-    vbus_mv, vbus_mv_low, vbus_mv_high = read_u16(bus, address, REG_USB_C_VBUS_MV)
-    vbus_ma, vbus_ma_low, vbus_ma_high = read_u16(bus, address, REG_USB_C_VBUS_MA)
-    vbus_mw, vbus_mw_low, vbus_mw_high = read_u16(bus, address, REG_USB_C_VBUS_MW)
-    battery_mv, battery_mv_low, battery_mv_high = read_u16(bus, address, REG_BATTERY_MV)
-    battery_ma_raw, battery_ma_low, battery_ma_high = read_u16(bus, address, REG_BATTERY_MA)
-    battery_percent, battery_percent_low, battery_percent_high = read_u16(bus, address, REG_BATTERY_PERCENT)
-    remaining_mah, remaining_mah_low, remaining_mah_high = read_u16(bus, address, REG_BATTERY_REMAINING_MAH)
-    runtime_min, runtime_min_low, runtime_min_high = read_u16(bus, address, REG_BATTERY_RUNTIME_MIN)
-    charge_time_min, charge_time_min_low, charge_time_min_high = read_u16(bus, address, REG_BATTERY_CHARGE_TIME_MIN)
-
-    cells = []
-    raw_cells = []
-    for register in (REG_CELL1_MV, REG_CELL2_MV, REG_CELL3_MV, REG_CELL4_MV):
-        cell_mv, low, high = read_u16(bus, address, register)
-        cells.append(cell_mv)
-        raw_cells.append((register, low, high))
-
-    return {
-        "id": id_value,
-        "power_on": power_on_value,
-        "charge_state": charge_state,
-        "comm_state": comm_state,
-        "vbus_mv": vbus_mv,
-        "vbus_ma": signed_16(vbus_ma),
-        "vbus_mw": vbus_mw,
-        "battery_mv": battery_mv,
-        "battery_ma": signed_16(battery_ma_raw),
-        "battery_percent": battery_percent,
-        "remaining_mah": remaining_mah,
-        "runtime_min": runtime_min,
-        "charge_time_min": charge_time_min,
-        "cells_mv": cells,
-        "raw": {
-            REG_ID: id_value,
-            REG_POWER_ON: power_on_value,
-            REG_CHARGE_STATE: charge_state,
-            REG_COMM_STATE: comm_state,
-            REG_USB_C_VBUS_MV: vbus_mv_low,
-            REG_USB_C_VBUS_MV + 1: vbus_mv_high,
-            REG_USB_C_VBUS_MA: vbus_ma_low,
-            REG_USB_C_VBUS_MA + 1: vbus_ma_high,
-            REG_USB_C_VBUS_MW: vbus_mw_low,
-            REG_USB_C_VBUS_MW + 1: vbus_mw_high,
-            REG_BATTERY_MV: battery_mv_low,
-            REG_BATTERY_MV + 1: battery_mv_high,
-            REG_BATTERY_MA: battery_ma_low,
-            REG_BATTERY_MA + 1: battery_ma_high,
-            REG_BATTERY_PERCENT: battery_percent_low,
-            REG_BATTERY_PERCENT + 1: battery_percent_high,
-            REG_BATTERY_REMAINING_MAH: remaining_mah_low,
-            REG_BATTERY_REMAINING_MAH + 1: remaining_mah_high,
-            REG_BATTERY_RUNTIME_MIN: runtime_min_low,
-            REG_BATTERY_RUNTIME_MIN + 1: runtime_min_high,
-            REG_BATTERY_CHARGE_TIME_MIN: charge_time_min_low,
-            REG_BATTERY_CHARGE_TIME_MIN + 1: charge_time_min_high,
-            **{register: low for register, low, _high in raw_cells},
-            **{register + 1: high for register, _low, high in raw_cells},
-        },
-    }
+from drivers.ups_hat_e import GROVE_MUX_ADDRESS, UPS_ADDRESS, UpsHatEDriver
 
 
 def read_mux_state(bus, address):
@@ -150,31 +46,28 @@ def format_channels(mask):
 
 
 def print_ups(info, mux_state, ups_address, mux_address):
-    charge_state = info["charge_state"]
-    comm_state = info["comm_state"]
-    stage = CHARGE_STAGES.get(charge_state & 0x07, "unknown")
-    cells = ", ".join(f"{cell / 1000:.3f}V" for cell in info["cells_mv"])
-    runtime = "--" if info["runtime_min"] == 0xFFFF else f"{info['runtime_min']}min"
-    charge_time = "--" if info["charge_time_min"] == 0xFFFF else f"{info['charge_time_min']}min"
+    cells = ", ".join(f"{cell / 1000:.3f}V" for cell in info.cells_mv)
+    runtime = "--" if info.runtime_min is None else f"{info.runtime_min}min"
+    charge_time = "--" if info.charge_time_min is None else f"{info.charge_time_min}min"
 
     print(f"UPS HAT E @ 0x{ups_address:02x}")
-    print(f"  id: 0x{info['id']:02x} (expected 0x0a)")
-    print(f"  power-on register: 0x{info['power_on']:02x} (expected 0x0b when idle)")
+    print(f"  id: 0x{info.device_id:02x} (expected 0x0a)")
+    print(f"  power-on register: 0x{info.power_on_register:02x} (expected 0x0b when idle)")
     print(
         "  charge: "
-        f"charging={bool(charge_state & 0x80)} "
-        f"fast={bool(charge_state & 0x40)} "
-        f"vbus_present={bool(charge_state & 0x20)} "
-        f"stage={stage}"
+        f"charging={info.charging} "
+        f"fast={info.fast_charging} "
+        f"vbus_present={info.vbus_present} "
+        f"stage={info.charge_stage}"
     )
     print(
         "  comm: "
-        f"bq4050_ok={bool(comm_state & 0x02)} "
-        f"ip2368_ok={bool(comm_state & 0x01)}"
+        f"bq4050_ok={info.bq4050_ok} "
+        f"ip2368_ok={info.ip2368_ok}"
     )
-    print(f"  usb-c: {info['vbus_mv'] / 1000:.3f}V  {info['vbus_ma']}mA  {info['vbus_mw'] / 1000:.3f}W")
-    print(f"  battery: {info['battery_mv'] / 1000:.3f}V  {info['battery_ma']}mA  {info['battery_percent']}%")
-    print(f"  remaining: {info['remaining_mah']}mAh  runtime={runtime}  charge_time={charge_time}")
+    print(f"  usb-c: {info.vbus_mv / 1000:.3f}V  {info.vbus_ma}mA  {info.vbus_mw / 1000:.3f}W")
+    print(f"  battery: {info.battery_mv / 1000:.3f}V  {info.battery_ma}mA  {info.battery_percent}%")
+    print(f"  remaining: {info.remaining_mah}mAh  runtime={runtime}  charge_time={charge_time}")
     print(f"  cells: {cells}")
     if mux_state is None:
         print(f"  grove mux @ 0x{mux_address:02x}: not responding")
@@ -185,7 +78,7 @@ def print_ups(info, mux_state, ups_address, mux_address):
         )
 
     print("  raw registers:")
-    for register, value in sorted(info["raw"].items()):
+    for register, value in sorted(info.raw.items()):
         print(f"    0x{register:02x}: 0x{value:02x}")
 
 
@@ -204,8 +97,9 @@ def main():
 
     try:
         with SMBus(args.bus) as bus:
+            driver = UpsHatEDriver(args.bus, args.address, bus_factory=lambda _bus: bus)
             while True:
-                info = read_ups(bus, args.address)
+                info = driver.read()
                 mux_state = read_mux_state(bus, args.mux_address)
                 print_ups(info, mux_state, args.address, args.mux_address)
                 if not args.watch:

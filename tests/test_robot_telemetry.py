@@ -14,6 +14,7 @@ from telemetry.messages import (
     gamepad_update,
     gamepad_teleop_update,
     motor_rail_update,
+    pi_battery_update,
     robot_motion_update,
     sensors_update,
     vision_update,
@@ -151,6 +152,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("motor_rail", snapshot["sources"])
         self.assertTrue(snapshot["sources"]["motor_rail"]["stale"])
         self.assertIsNone(snapshot["motor_rail"])
+
+    async def test_snapshot_lists_pi_battery_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("pi_battery", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["pi_battery"]["stale"])
+        self.assertIsNone(snapshot["pi_battery"])
 
     async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()
@@ -290,6 +298,24 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["motor_rail"]["state"], "on")
         self.assertEqual(snapshot["motor_rail"]["mosfet_gpio"], 24)
         self.assertFalse(snapshot["sources"]["motor_rail"]["stale"])
+
+    async def test_pi_battery_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                pi_battery_update({"pack_voltage": 16.0, "percent": 73, "status": "ok"}),
+            )
+        )
+        snapshot = await self._read_until(reader, lambda item: item.get("pi_battery") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["pi_battery"]["pack_voltage"], 16.0)
+        self.assertEqual(snapshot["pi_battery"]["percent"], 73)
+        self.assertFalse(snapshot["sources"]["pi_battery"]["stale"])
 
     async def test_snapshot_composes_motion_and_gamepad_fields_from_owners(self):
         self.assertTrue(

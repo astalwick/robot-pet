@@ -50,6 +50,79 @@ def motor_battery_message(pack_voltage: float | None) -> dict[str, Any]:
     }
 
 
+def pi_battery_status(percent: int | None) -> str:
+    if percent is None:
+        return "unknown"
+    if percent <= 5:
+        return "critical"
+    if percent < 15:
+        return "low"
+    return "ok"
+
+
+def pi_battery_message(reading: Any | None, error: str | None = None) -> dict[str, Any]:
+    if reading is None:
+        return {
+            "pack_voltage": None,
+            "current_amps": None,
+            "percent": None,
+            "remaining_mah": None,
+            "runtime_minutes": None,
+            "charge_time_minutes": None,
+            "cell_voltages": [],
+            "usb_c_voltage": None,
+            "usb_c_current_amps": None,
+            "usb_c_power_watts": None,
+            "charging": False,
+            "fast_charging": False,
+            "vbus_present": False,
+            "charge_stage": None,
+            "bq4050_ok": False,
+            "ip2368_ok": False,
+            "power_state": "unknown",
+            "status": "unknown",
+            "error": error,
+        }
+
+    if reading.charging:
+        power_state = "charging"
+    elif reading.battery_ma < 0:
+        power_state = "discharging"
+    else:
+        power_state = "standby"
+
+    return {
+        "pack_voltage": reading.battery_mv / 1000.0,
+        "current_amps": reading.battery_ma / 1000.0,
+        "percent": reading.battery_percent,
+        "remaining_mah": reading.remaining_mah,
+        "runtime_minutes": reading.runtime_min,
+        "charge_time_minutes": reading.charge_time_min,
+        "cell_voltages": [cell_mv / 1000.0 for cell_mv in reading.cells_mv],
+        "usb_c_voltage": reading.vbus_mv / 1000.0,
+        "usb_c_current_amps": reading.vbus_ma / 1000.0,
+        "usb_c_power_watts": reading.vbus_mw / 1000.0,
+        "charging": reading.charging,
+        "fast_charging": reading.fast_charging,
+        "vbus_present": reading.vbus_present,
+        "charge_stage": reading.charge_stage,
+        "bq4050_ok": reading.bq4050_ok,
+        "ip2368_ok": reading.ip2368_ok,
+        "power_state": power_state,
+        "status": pi_battery_status(reading.battery_percent),
+        "error": error,
+    }
+
+
+def pi_battery_update(battery: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+    return {
+        "type": "source_update",
+        "source": "pi_battery",
+        "time": now if now is not None else time.time(),
+        **battery,
+    }
+
+
 def motor_rail_update(
     state: str,
     mosfet_gpio: int,

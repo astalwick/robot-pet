@@ -710,6 +710,7 @@ class DashboardJsTest(unittest.TestCase):
             "robot-brain",
             "robot-telemetry",
             "robot-battery",
+            "robot-pi-battery",
             "robot-motion",
             "gamepad-teleop",
             "robot-camera",
@@ -722,9 +723,15 @@ class DashboardJsTest(unittest.TestCase):
 
     def test_dashboard_renders_motor_rail_telemetry(self):
         self.assertIn("const motorRail = snapshot.motor_rail || {}", self.telemetry_js)
-        self.assertIn("renderBattery(battery, motorRail, sources.motor_rail || {})", self.telemetry_js)
+        self.assertIn("renderBattery(battery, motorRail, sources.motor_rail || {}, piBattery, sources.pi_battery || {})", self.telemetry_js)
         self.assertIn("row('rail'", self.telemetry_js)
         self.assertIn("low_battery_cutoff", self.telemetry_js)
+
+    def test_dashboard_renders_pi_battery_telemetry(self):
+        self.assertIn("const piBattery = snapshot.pi_battery || {}", self.telemetry_js)
+        self.assertIn("row('pi ups'", self.telemetry_js)
+        self.assertIn("row('pi runtime'", self.telemetry_js)
+        self.assertIn("history.pi_pack_voltage", self.telemetry_js)
 
     def test_dashboard_exposes_barge_in_visibility_not_inline_editors(self):
         self.assertNotIn("voiceToggleRow('barge-in'", self.voice_js)

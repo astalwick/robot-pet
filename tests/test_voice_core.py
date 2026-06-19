@@ -867,6 +867,36 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_stream_openai_words_uses_configured_model_without_reasoning(self):
+        async def run():
+            calls = []
+
+            class FakeResponses:
+                async def create(self, **kwargs):
+                    calls.append(kwargs)
+
+                    async def stream():
+                        yield SimpleNamespace(type="response.output_text.delta", delta="Hello.")
+                        yield SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1"))
+
+                    return stream()
+
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "Hi"}],
+                    SimpleNamespace(responses=FakeResponses()),
+                    VoiceState("test-voice"),
+                    openai_model="gpt-5.5",
+                )
+            ]
+
+            self.assertEqual(chunks, ["Hello."])
+            self.assertEqual(calls[0]["model"], "gpt-5.5")
+            self.assertEqual(calls[0]["reasoning"], {"effort": "none"})
+
+        asyncio.run(run())
+
     def test_stream_openai_words_allows_tool_first_end_session_goodbye(self):
         async def run():
             pending = [False]

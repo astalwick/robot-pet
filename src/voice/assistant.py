@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from config.voice import DEFAULT_OPENAI_MODEL
 from lib.log import setup_logging
 from voice.conversation import ConversationHistory
 from voice.turn_policy import DEFAULT_TURN_POLICY, TurnPolicy
@@ -19,7 +20,7 @@ from voice.turn_policy import DEFAULT_TURN_POLICY, TurnPolicy
 log = setup_logging("robot-voice")
 
 
-OPENAI_MODEL = "gpt-5.4-mini"
+OPENAI_MODEL = DEFAULT_OPENAI_MODEL
 DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_OPERATIONAL_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "operational_system_prompt.md"
@@ -624,6 +625,7 @@ async def stream_openai_words(
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     playback_event: asyncio.Event | None = None,
+    openai_model: str = OPENAI_MODEL,
 ) -> AsyncIterator[str | VoiceSwitch]:
     pending = ""
     word_buffer: list[str] = []
@@ -635,7 +637,7 @@ async def stream_openai_words(
     while True:
         response_text_chunks: list[str] = []
         create_kwargs: dict[str, Any] = {
-            "model": OPENAI_MODEL,
+            "model": openai_model,
             "input": response_input,
             "reasoning": {"effort": "none"},
             "tools": ASSISTANT_TOOLS,
@@ -690,7 +692,7 @@ async def stream_openai_words(
                 if usage is not None:
                     from voice.usage import record_openai_usage
 
-                    record_openai_usage(usage, getattr(response, "usage", None))
+                    record_openai_usage(usage, getattr(response, "usage", None), openai_model)
 
         if pending:
             word_buffer.append(pending)
@@ -823,6 +825,7 @@ async def run_assistant_turn(
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    openai_model: str = OPENAI_MODEL,
 ) -> str:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -841,6 +844,7 @@ async def run_assistant_turn(
             robot_inspection_caller,
             face_me_caller,
             playback_event,
+            openai_model,
         ):
             if isinstance(chunk, str):
                 assistant_chunks.append(chunk)
@@ -880,6 +884,7 @@ async def handle_scribe_events(
     stop_playback_now: Callable[[], Any] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    openai_model: str = OPENAI_MODEL,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
     history = conversation_history if conversation_history is not None else ConversationHistory()
@@ -1112,6 +1117,7 @@ async def handle_scribe_events(
                     camera_snapshot_caller=camera_snapshot_caller,
                     robot_inspection_caller=robot_inspection_caller,
                     face_me_caller=face_me_caller,
+                    openai_model=openai_model,
                 ),
                 timeout=ASSISTANT_TURN_TIMEOUT_SECS,
             )

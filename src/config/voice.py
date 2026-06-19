@@ -14,6 +14,8 @@ DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/voice.json"
 DEFAULT_WAKE_MODEL_PATH = "/home/pi/robot-pet/models/wake/Hey_Bloop.onnx"
 DEFAULT_WAKE_CHIME_PATH = "/home/pi/robot-pet/assets/audio/wake_chime.wav"
 DEFAULT_SESSION_END_CHIME_PATH = "/home/pi/robot-pet/assets/audio/session_end_chime.wav"
+DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
+OPENAI_MODEL_CHOICES = ("gpt-5.4-mini", "gpt-5.5")
 MIN_AUDIO_GAIN = 0.0
 MAX_AUDIO_GAIN = 3.0
 
@@ -36,6 +38,7 @@ class VoiceConfig:
     voice_id: str | None = None
     alternate_voice_id: str | None = None
     personality: str = "default"
+    openai_model: str = DEFAULT_OPENAI_MODEL
     speculative_playback_enabled: bool = False
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
@@ -71,6 +74,7 @@ class VoiceConfig:
             voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
             alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
             personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
+            openai_model=str(values.get("openai_model", defaults.openai_model)).strip() or defaults.openai_model,
             speculative_playback_enabled=bool(
                 values.get("speculative_playback_enabled", defaults.speculative_playback_enabled)
             ),
@@ -114,6 +118,8 @@ class VoiceConfig:
             raise VoiceConfigError("capture_channel_index must be between 0 and 5")
         if self.output_channels != 1:
             raise VoiceConfigError("output_channels must be 1")
+        if self.openai_model not in OPENAI_MODEL_CHOICES:
+            raise VoiceConfigError(f"openai_model must be one of: {', '.join(OPENAI_MODEL_CHOICES)}")
         if self.wake_threshold < 0.0 or self.wake_threshold > 1.0:
             raise VoiceConfigError("wake_threshold must be between 0 and 1")
         if self.wake_debounce_secs < 0.0:
@@ -220,6 +226,13 @@ VOICE_FIELDS = (
         "min": 0.0,
         "max": 3.0,
         "step": 0.1,
+    },
+    {
+        "key": "openai_model",
+        "label": "OpenAI model",
+        "type": "select",
+        "options": list(OPENAI_MODEL_CHOICES),
+        "help": "Conversation model. Requests use reasoning effort none.",
     },
     {
         "key": "speculative_playback_enabled",

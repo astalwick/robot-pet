@@ -70,10 +70,16 @@ class VoiceConfigTest(unittest.TestCase):
 
     def test_barge_in_defaults_are_present(self):
         config = VoiceConfig()
+        self.assertEqual(config.openai_model, "gpt-5.4-mini")
         self.assertTrue(config.barge_in_enabled)
         self.assertEqual(config.barge_in_min_rms, 700)
         self.assertEqual(config.barge_in_sustain_ms, 350)
         self.assertFalse(config.speculative_playback_enabled)
+
+    def test_openai_model_must_be_known(self):
+        self.assertEqual(VoiceConfig.from_dict({"openai_model": "gpt-5.5"}).openai_model, "gpt-5.5")
+        with self.assertRaisesRegex(VoiceConfigError, "openai_model"):
+            VoiceConfig.from_dict({"openai_model": "gpt-9"})
 
     def test_wake_defaults_are_present(self):
         config = VoiceConfig()

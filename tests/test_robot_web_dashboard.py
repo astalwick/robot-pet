@@ -726,6 +726,8 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("renderBattery(battery, motorRail, sources.motor_rail || {}, piBattery, sources.pi_battery || {})", self.telemetry_js)
         self.assertIn("row('rail'", self.telemetry_js)
         self.assertIn("row('motor est'", self.telemetry_js)
+        self.assertIn("battery.stale ? 'warn'", self.telemetry_js)
+        self.assertIn("' STALE'", self.telemetry_js)
         self.assertIn("low_battery_cutoff", self.telemetry_js)
 
     def test_dashboard_renders_pi_battery_telemetry(self):

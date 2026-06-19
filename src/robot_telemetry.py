@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import signal
 import shutil
@@ -16,7 +17,7 @@ from typing import Any
 
 from lib.log import setup_logging
 from telemetry.messages import decode_json_line, encode_json_line
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
+from telemetry.paths import DEFAULT_MOTOR_BATTERY_CACHE, DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
 
 
 DEFAULT_RATE_HZ = 5.0
@@ -106,12 +107,14 @@ class TelemetryHub:
         rate_hz: float = DEFAULT_RATE_HZ,
         stale_timeout: float = DEFAULT_STALE_TIMEOUT,
         sampler: Callable[[], dict[str, Any]] = sample_pi_health,
+        motor_battery_cache_path: str = DEFAULT_MOTOR_BATTERY_CACHE,
     ):
         self.publish_socket = publish_socket
         self.subscribe_socket = subscribe_socket
         self.interval = 1.0 / rate_hz
         self.stale_timeout = stale_timeout
         self.sampler = sampler
+        self.motor_battery_cache_path = motor_battery_cache_path
         self.latest: dict[str, dict[str, Any]] = {}
         self.system_last_seen: float | None = None
         self.system_health: dict[str, Any] = {}
@@ -226,13 +229,23 @@ class TelemetryHub:
         pi_battery = self.latest.get("pi_battery")
         pi_battery_data = pi_battery["data"] if pi_battery else None
 
+        motion_source = self._source_status(motion, now)
+        gamepad_source = self._source_status(gamepad, now)
+        motor_battery = motor_battery_value(
+            motion_data,
+            gamepad_data,
+            motion_source,
+            gamepad_source,
+            self.motor_battery_cache_path,
+        )
+
         return {
             "type": "snapshot",
             "time": now,
             "sources": {
                 "gamepad": self._source_status(gamepad_status, now),
-                "gamepad_teleop": self._source_status(gamepad, now),
-                "robot_motion": self._source_status(motion, now),
+                "gamepad_teleop": gamepad_source,
+                "robot_motion": motion_source,
                 "vision": self._source_status(vision, now),
                 "voice": self._source_status(voice, now),
                 "sensors": self._source_status(sensors, now),
@@ -243,7 +256,7 @@ class TelemetryHub:
             "controller": gamepad_data.get("controller"),
             "gamepad": gamepad_status_data,
             "wheels": _prefer_motion(motion_data, gamepad_data, "wheels"),
-            "motor_battery": _prefer_motion(motion_data, gamepad_data, "motor_battery"),
+            "motor_battery": motor_battery,
             "link_loop": _prefer_motion(motion_data, gamepad_data, "link_loop"),
             "drive_tuning": gamepad_data.get("drive_tuning"),
             "drive_status": _prefer_motion(motion_data, gamepad_data, "drive_status"),
@@ -289,6 +302,63 @@ def _prefer_motion(motion_data: dict[str, Any], gamepad_data: dict[str, Any], fi
     return value if value is not None else gamepad_data.get(field)
 
 
+def motor_battery_value(
+    motion_data: dict[str, Any],
+    gamepad_data: dict[str, Any],
+    motion_source: dict[str, Any],
+    gamepad_source: dict[str, Any],
+    cache_path: str,
+) -> Any:
+    motion_battery = motion_data.get("motor_battery")
+    if battery_has_voltage(motion_battery):
+        if motion_source.get("stale") is False:
+            return motion_battery
+        return stale_motor_battery(motion_battery, "robot_motion_stale")
+
+    # Once robot_motion exists, it owns this field. If it has no voltage because
+    # the rail is off, use the cache written when the rail was turned off.
+    if motion_source.get("last_seen") is not None or motion_source.get("stale") is False:
+        cached = read_cached_motor_battery(cache_path)
+        return cached if cached is not None else motion_battery
+
+    gamepad_battery = gamepad_data.get("motor_battery")
+    if battery_has_voltage(gamepad_battery):
+        if gamepad_source.get("stale") is False:
+            return gamepad_battery
+        return stale_motor_battery(gamepad_battery, "gamepad_teleop_stale")
+
+    cached = read_cached_motor_battery(cache_path)
+    return cached if cached is not None else gamepad_battery
+
+
+def battery_has_voltage(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("pack_voltage") is not None
+
+
+def stale_motor_battery(value: dict[str, Any], reason: str, cached_at: float | None = None) -> dict[str, Any]:
+    battery = dict(value)
+    battery["stale"] = True
+    battery["stale_reason"] = reason
+    if cached_at is not None:
+        battery["cached_at"] = cached_at
+    return battery
+
+
+def read_cached_motor_battery(path: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    battery = payload.get("motor_battery") if isinstance(payload, dict) else None
+    if not battery_has_voltage(battery):
+        return None
+    return stale_motor_battery(
+        battery,
+        str(payload.get("reason") or "cached"),
+        cached_at=payload.get("cached_at"),
+    )
+
+
 async def close_writer(writer: asyncio.StreamWriter) -> None:
     writer.close()
     try:
@@ -303,6 +373,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--rate-hz", type=float, default=DEFAULT_RATE_HZ)
     parser.add_argument("--stale-timeout", type=float, default=DEFAULT_STALE_TIMEOUT)
+    parser.add_argument("--motor-battery-cache", default=DEFAULT_MOTOR_BATTERY_CACHE)
     return parser
 
 
@@ -313,6 +384,7 @@ def main():
         subscribe_socket=args.subscribe_socket,
         rate_hz=args.rate_hz,
         stale_timeout=args.stale_timeout,
+        motor_battery_cache_path=args.motor_battery_cache,
     )
     asyncio.run(hub.run())
 

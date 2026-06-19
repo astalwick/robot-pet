@@ -861,7 +861,9 @@ class RobotDashboard(App):
 
     def _render_battery(self, battery: dict[str, Any]):
         status = battery.get("status", "unknown")
-        status_glyph = GLYPH_OK if status == "ok" else (GLYPH_WARN if status in {"low", "stale"} else GLYPH_ERR)
+        stale = battery.get("stale") is True
+        status_glyph = GLYPH_OK if status == "ok" and not stale else (GLYPH_WARN if status in {"ok", "low", "stale"} else GLYPH_ERR)
+        status_text = f"{status.upper()}{' STALE' if stale else ''}"
 
         pack_v = battery.get("pack_voltage")
         cell_v = battery.get("cell_voltage")
@@ -875,7 +877,7 @@ class RobotDashboard(App):
         v_spark = sparkline(self.history["pack_voltage"], width=GW)
 
         lines = [
-            f"[bold yellow]{GLYPH_POWER} POWER RAIL[/]  [{status_style(status)}]{status_glyph} {status.upper()}[/]",
+            f"[bold yellow]{GLYPH_POWER} POWER RAIL[/]  [{'yellow' if stale else status_style(status)}]{status_glyph} {status_text}[/]",
             self._row("pack", v_bar, fmt(pack_v, "V", 2), gauge_w=GW, value_w=VW, value_style="bold"),
             self._row("est", percent_bar, fmt(percent_estimate, "%", 0), gauge_w=GW, value_w=VW),
             self._row("cell est", "", fmt(cell_v, "V", 2), gauge_w=GW, value_w=VW),

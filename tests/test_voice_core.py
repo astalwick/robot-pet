@@ -543,6 +543,30 @@ class AssistantStreamingTest(unittest.TestCase):
         self.assertTrue(result["drive"]["available"])
         self.assertEqual(result["drive"]["state"], "stopped")
 
+    def test_inspect_robot_snapshot_exposes_cached_stale_motor_battery(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {"robot_motion": {"stale": False}},
+                "motor_battery": {
+                    "status": "ok",
+                    "pack_voltage": 11.7,
+                    "cell_voltage": 3.9,
+                    "percent_estimate": 60,
+                    "chemistry": "lipo",
+                    "cell_count": 3,
+                    "capacity_mah": 2200,
+                    "stale": True,
+                    "stale_reason": "idle_no_gamepad",
+                    "cached_at": 1234.0,
+                },
+            }
+        )
+
+        self.assertTrue(result["battery"]["available"])
+        self.assertTrue(result["battery"]["stale"])
+        self.assertEqual(result["battery"]["stale_reason"], "idle_no_gamepad")
+        self.assertEqual(result["battery"]["cached_at"], 1234.0)
+
     def test_inspect_robot_snapshot_reads_live_pi_battery(self):
         result = inspect_robot_snapshot(
             {

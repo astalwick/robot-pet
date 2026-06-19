@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from lib.log import setup_logging
 from telemetry.messages import motor_rail_update
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
+from telemetry.paths import DEFAULT_MOTOR_BATTERY_CACHE, DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
 from telemetry.socket_client import publish_message, subscribe
 
 
@@ -30,6 +32,7 @@ class BatteryConfig:
     motion_power_hold_seconds: float = 5.0
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
     telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET
+    motor_battery_cache_path: str = DEFAULT_MOTOR_BATTERY_CACHE
 
 
 class BatteryRunner:
@@ -56,6 +59,7 @@ class BatteryRunner:
         self.next_telemetry_at = 0.0
         self.motion_power_hold_until = 0.0
         self.mosfet = None
+        self.last_motor_battery: dict[str, Any] | None = None
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
@@ -85,6 +89,7 @@ class BatteryRunner:
             self.low_voltage_seen_at = None
         else:
             self._handle_voltage(voltage, now)
+            self._remember_motor_battery(snapshot)
         self._sync_power(snapshot, now)
         if self.state == "low_battery_cutoff" and now >= self.next_cutoff_log_at:
             log.warning(
@@ -138,6 +143,11 @@ class BatteryRunner:
             return None
         return float(voltage)
 
+    def _remember_motor_battery(self, snapshot: dict[str, Any]) -> None:
+        battery = snapshot.get("motor_battery")
+        if isinstance(battery, dict):
+            self.last_motor_battery = dict(battery)
+
     def _sync_power(self, snapshot: dict[str, Any], now: float) -> None:
         if self.state == "low_battery_cutoff":
             return
@@ -188,12 +198,35 @@ class BatteryRunner:
     def _rail_off(self, reason: str) -> None:
         if self.state == "off" and self.reason == reason:
             return
+        self._cache_motor_battery(reason)
         if self.mosfet is not None:
             self.mosfet.off()
         self.state = "off" if reason != "low_battery_cutoff" else "low_battery_cutoff"
         self.reason = reason
         self._publish_status()
         log.info("motor rail off: %s", reason)
+
+    def _cache_motor_battery(self, reason: str) -> None:
+        if self.last_motor_battery is None:
+            return
+        try:
+            path = Path(self.config.motor_battery_cache_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_name(f".{path.name}.{id(self)}.tmp")
+            tmp_path.write_text(
+                json.dumps(
+                    {
+                        "cached_at": time.time(),
+                        "reason": reason,
+                        "motor_battery": self.last_motor_battery,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            tmp_path.replace(path)
+        except OSError as exc:
+            log.warning("motor battery cache write failed: %s", exc)
 
     def _publish_status(self) -> None:
         self.telemetry_publisher(
@@ -228,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--motion-power-hold-seconds", type=float, default=5.0)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
+    parser.add_argument("--motor-battery-cache", default=DEFAULT_MOTOR_BATTERY_CACHE)
     return parser
 
 
@@ -244,6 +278,7 @@ def main() -> None:
             motion_power_hold_seconds=args.motion_power_hold_seconds,
             telemetry_socket=args.telemetry_socket,
             telemetry_subscribe_socket=args.telemetry_subscribe_socket,
+            motor_battery_cache_path=args.motor_battery_cache,
         )
     )
 

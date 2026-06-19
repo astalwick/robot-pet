@@ -1,6 +1,8 @@
 import os
 import sys
+import json
 import logging
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -94,6 +96,37 @@ class RobotBatteryTest(unittest.TestCase):
         self.assertEqual(mosfet.off_count, 1)
         self.assertEqual(runner.state, "off")
         self.assertEqual(runner.reason, "idle_no_gamepad")
+
+    def test_turning_motor_rail_off_caches_last_fresh_battery(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = os.path.join(tmpdir, "motor-battery.json")
+            mosfet = FakeMosfet()
+            runner = BatteryRunner(
+                BatteryConfig(motor_battery_cache_path=cache_path),
+                telemetry_subscriber=lambda _socket: [],
+                telemetry_publisher=lambda *_args: True,
+            )
+            runner.mosfet = mosfet
+            runner._handle_snapshot(
+                {
+                    **snapshot(11.7, controller_connected=True),
+                    "motor_battery": {
+                        "pack_voltage": 11.7,
+                        "cell_voltage": 3.9,
+                        "status": "ok",
+                        "percent_estimate": 60,
+                    },
+                }
+            )
+
+            runner._handle_snapshot(snapshot(None, controller_connected=False))
+
+            with open(cache_path) as file_obj:
+                cached = json.load(file_obj)
+
+        self.assertEqual(cached["reason"], "idle_no_gamepad")
+        self.assertEqual(cached["motor_battery"]["pack_voltage"], 11.7)
+        self.assertEqual(cached["motor_battery"]["percent_estimate"], 60)
 
     def test_fresh_gamepad_source_turns_motor_rail_on_when_motion_telemetry_is_stale(self):
         mosfet = FakeMosfet()

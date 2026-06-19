@@ -294,6 +294,12 @@ def _motion_value_available(snapshot: dict[str, Any], value: object) -> bool:
     return _telemetry_value_available(snapshot, "gamepad_teleop", value)
 
 
+def _motor_battery_available(snapshot: dict[str, Any], battery: object) -> bool:
+    if isinstance(battery, dict) and battery.get("stale") is True:
+        return True
+    return _motion_value_available(snapshot, battery)
+
+
 def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     if snapshot is None:
         return {"ok": False, "error": "telemetry_unavailable"}
@@ -317,7 +323,7 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "pi": {"available": False},
     }
 
-    if _motion_value_available(snapshot, battery):
+    if _motor_battery_available(snapshot, battery):
         result["battery"] = {
             "available": True,
             "status": battery.get("status"),
@@ -327,6 +333,9 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "chemistry": battery.get("chemistry"),
             "cell_count": battery.get("cell_count"),
             "capacity_mah": battery.get("capacity_mah"),
+            "stale": battery.get("stale", False),
+            "stale_reason": battery.get("stale_reason"),
+            "cached_at": battery.get("cached_at"),
         }
     if _telemetry_value_available(snapshot, "pi_battery", pi_battery):
         result["pi_battery"] = {

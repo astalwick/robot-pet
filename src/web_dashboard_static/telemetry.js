@@ -91,7 +91,7 @@ function recordHistory(snapshot, gamepadLive) {
   if (!gamepadLive) return;
   const wheels = snapshot.wheels || {};
   const battery = snapshot.motor_battery || {};
-  pushHistory('pack_voltage', battery.pack_voltage);
+  if (!battery.stale) pushHistory('pack_voltage', battery.pack_voltage);
   pushHistory('left_current', wheels.left_current_amps);
   pushHistory('right_current', wheels.right_current_amps);
   ['left', 'right'].forEach((side) => {
@@ -120,8 +120,8 @@ function renderHud(motorStale, systemStale, controller, wheels, battery, pi, dri
 
   const voltage = battery.pack_voltage;
   const voltageEl = document.getElementById('battery-voltage');
-  voltageEl.textContent = voltage != null ? `${voltage.toFixed(1)}V` : '--V';
-  voltageEl.className = `value ${batteryClass(battery.status)}`;
+  voltageEl.textContent = voltage != null ? `${voltage.toFixed(1)}V${battery.stale ? ' stale' : ''}` : '--V';
+  voltageEl.className = `value ${battery.stale ? 'warn' : batteryClass(battery.status)}`;
 }
 
 function driveStatus(motorStale, systemStale, controller, wheels, battery, pi, driveStatusPayload) {
@@ -181,6 +181,8 @@ function renderBattery(battery, motorRail, motorRailSource, piBattery, piBattery
   const v = battery.pack_voltage;
   const cell = battery.cell_voltage;
   const status = battery.status || 'unknown';
+  const motorStatusText = `${status.toUpperCase()}${battery.stale ? ' STALE' : ''}`;
+  const motorStatusClass = battery.stale ? 'warn' : batteryClass(status);
   const railState = motorRailSource.stale === false ? (motorRail.state || 'unknown') : 'stale';
   const railVoltage = motorRail.last_pack_voltage;
   const railReason = motorRail.reason || '--';
@@ -194,12 +196,12 @@ function renderBattery(battery, motorRail, motorRailSource, piBattery, piBattery
     row('rail', '', railState.toUpperCase().replaceAll('_', ' '), railClass(railState)),
     row('rail reason', '', railReason.replaceAll('_', ' '), railReason === '--' ? 'muted' : ''),
     row('motor pack', v != null ? renderBar(v - 9.0, 3.6, '', false) : '', fmt(v, 'V', 2), 'strong'),
-    row('motor est', battery.percent_estimate != null ? renderBar(battery.percent_estimate, 100) : '', fmt(battery.percent_estimate, '%', 0), batteryClass(status)),
+    row('motor est', battery.percent_estimate != null ? renderBar(battery.percent_estimate, 100) : '', fmt(battery.percent_estimate, '%', 0), motorStatusClass),
     row('motor cell est', '', fmt(cell, 'V', 2)),
     row('last rail v', '', fmt(railVoltage, 'V', 2)),
     row('motor trend', sparkline(history.pack_voltage), ''),
     row('peak amps', '', fmt(maxCurrentAmps, 'A', 2)),
-    row('motor status', '', status.toUpperCase(), batteryClass(status)),
+    row('motor status', '', motorStatusText, motorStatusClass),
     row('pi ups', piBattery.percent != null ? renderBar(piBattery.percent, 100) : '', fmt(piBattery.percent, '%', 0), batteryClass(piStatus)),
     row('pi pack', '', fmt(piBattery.pack_voltage, 'V', 2), piBatteryLive ? '' : 'muted'),
     row('pi current', '', fmt(piBattery.current_amps, 'A', 2), piBattery.current_amps < 0 ? 'muted' : ''),

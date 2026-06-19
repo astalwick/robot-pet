@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -373,6 +374,43 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["wheels"]["left_target_qpps"], 50)
         self.assertEqual(snapshot["motor_battery"]["pack_voltage"], 11.9)
         self.assertEqual(snapshot["drive_status"]["state"], "driving")
+
+    async def test_snapshot_uses_cached_motor_battery_when_motion_has_no_voltage(self):
+        cache_path = os.path.join(self.tmpdir.name, "motor-battery.json")
+        self.hub.motor_battery_cache_path = cache_path
+        with open(cache_path, "w") as file_obj:
+            json.dump(
+                {
+                    "cached_at": 1234.0,
+                    "reason": "idle_no_gamepad",
+                    "motor_battery": {
+                        "pack_voltage": 11.7,
+                        "cell_voltage": 3.9,
+                        "status": "ok",
+                        "percent_estimate": 60,
+                    },
+                },
+                file_obj,
+            )
+        self.assertTrue(
+            publish_message(
+                self.publish_socket,
+                robot_motion_update(
+                    wheels={"read_ok": False},
+                    motor_battery={"pack_voltage": None, "status": "unknown"},
+                    drive_status={"state": "waiting_for_roboclaw"},
+                ),
+            )
+        )
+        await asyncio.sleep(0.02)
+
+        snapshot = self.hub.build_snapshot()
+
+        self.assertEqual(snapshot["motor_battery"]["pack_voltage"], 11.7)
+        self.assertEqual(snapshot["motor_battery"]["percent_estimate"], 60)
+        self.assertTrue(snapshot["motor_battery"]["stale"])
+        self.assertEqual(snapshot["motor_battery"]["stale_reason"], "idle_no_gamepad")
+        self.assertEqual(snapshot["motor_battery"]["cached_at"], 1234.0)
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

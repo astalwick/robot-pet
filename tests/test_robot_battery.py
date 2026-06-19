@@ -172,6 +172,32 @@ class RobotBatteryTest(unittest.TestCase):
         self.assertEqual(mosfet.on_count, 0)
         self.assertEqual(runner.state, "off")
 
+    def test_cached_stale_motor_battery_does_not_trigger_cutoff(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(low_voltage_cutoff=10.8),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: 0.0,
+        )
+        runner.mosfet = mosfet
+
+        runner._handle_snapshot(
+            {
+                **snapshot(10.0, controller_connected=True),
+                "motor_battery": {
+                    "pack_voltage": 10.0,
+                    "status": "critical",
+                    "stale": True,
+                    "stale_reason": "idle_no_gamepad",
+                },
+            }
+        )
+
+        self.assertEqual(runner.state, "on")
+        self.assertIsNone(runner.last_pack_voltage)
+        self.assertEqual(mosfet.off_count, 0)
+
     def test_fresh_gamepad_voltage_does_not_trigger_cutoff(self):
         mosfet = FakeMosfet()
         times = iter([0.0, 1.0, 3.1])

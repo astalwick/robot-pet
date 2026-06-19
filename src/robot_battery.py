@@ -138,6 +138,8 @@ class BatteryRunner:
         battery = snapshot.get("motor_battery")
         if not isinstance(battery, dict):
             return None
+        if battery.get("stale") is True:
+            return None
         voltage = battery.get("pack_voltage")
         if voltage is None:
             return None

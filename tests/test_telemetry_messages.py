@@ -51,9 +51,9 @@ class TelemetryMessagesTest(unittest.TestCase):
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")
-        self.assertEqual(pi_battery_status(20), "ok")
-        self.assertEqual(pi_battery_status(10), "low")
-        self.assertEqual(pi_battery_status(5), "critical")
+        self.assertEqual(pi_battery_status(13.4), "ok")
+        self.assertEqual(pi_battery_status(13.3), "low")
+        self.assertEqual(pi_battery_status(13.0), "critical")
 
     def test_pi_battery_update_carries_ups_fields(self):
         reading = SimpleNamespace(
@@ -88,6 +88,9 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["cell_voltages"][0], 4.005)
         self.assertEqual(message["power_state"], "discharging")
         self.assertEqual(message["status"], "ok")
+        self.assertEqual(message["warning_voltage"], 13.3)
+        self.assertEqual(message["shutdown_voltage"], 13.0)
+        self.assertFalse(message["shutdown_pending"])
 
     def test_motor_rail_update_carries_cutoff_state(self):
         message = motor_rail_update("low_battery_cutoff", 24, 10.7, "low_battery_cutoff", 10.8, 11.1, now=1000.0)

@@ -21,6 +21,9 @@ BUTTON_FIELDS = (
     "right_stick",
 )
 
+PI_BATTERY_WARNING_VOLTAGE = 13.3
+PI_BATTERY_SHUTDOWN_VOLTAGE = 13.0
+
 
 def encode_json_line(message: dict[str, Any]) -> bytes:
     return (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
@@ -50,17 +53,27 @@ def motor_battery_message(pack_voltage: float | None) -> dict[str, Any]:
     }
 
 
-def pi_battery_status(percent: int | None) -> str:
-    if percent is None:
+def pi_battery_status(
+    pack_voltage: float | None,
+    warning_voltage: float = PI_BATTERY_WARNING_VOLTAGE,
+    shutdown_voltage: float = PI_BATTERY_SHUTDOWN_VOLTAGE,
+) -> str:
+    if pack_voltage is None:
         return "unknown"
-    if percent <= 5:
+    if pack_voltage <= shutdown_voltage:
         return "critical"
-    if percent < 15:
+    if pack_voltage <= warning_voltage:
         return "low"
     return "ok"
 
 
-def pi_battery_message(reading: Any | None, error: str | None = None) -> dict[str, Any]:
+def pi_battery_message(
+    reading: Any | None,
+    error: str | None = None,
+    warning_voltage: float = PI_BATTERY_WARNING_VOLTAGE,
+    shutdown_voltage: float = PI_BATTERY_SHUTDOWN_VOLTAGE,
+    shutdown_pending: bool = False,
+) -> dict[str, Any]:
     if reading is None:
         return {
             "pack_voltage": None,
@@ -81,6 +94,9 @@ def pi_battery_message(reading: Any | None, error: str | None = None) -> dict[st
             "ip2368_ok": False,
             "power_state": "unknown",
             "status": "unknown",
+            "warning_voltage": warning_voltage,
+            "shutdown_voltage": shutdown_voltage,
+            "shutdown_pending": shutdown_pending,
             "error": error,
         }
 
@@ -91,8 +107,9 @@ def pi_battery_message(reading: Any | None, error: str | None = None) -> dict[st
     else:
         power_state = "standby"
 
+    pack_voltage = reading.battery_mv / 1000.0
     return {
-        "pack_voltage": reading.battery_mv / 1000.0,
+        "pack_voltage": pack_voltage,
         "current_amps": reading.battery_ma / 1000.0,
         "percent": reading.battery_percent,
         "remaining_mah": reading.remaining_mah,
@@ -109,7 +126,10 @@ def pi_battery_message(reading: Any | None, error: str | None = None) -> dict[st
         "bq4050_ok": reading.bq4050_ok,
         "ip2368_ok": reading.ip2368_ok,
         "power_state": power_state,
-        "status": pi_battery_status(reading.battery_percent),
+        "status": pi_battery_status(pack_voltage, warning_voltage, shutdown_voltage),
+        "warning_voltage": warning_voltage,
+        "shutdown_voltage": shutdown_voltage,
+        "shutdown_pending": shutdown_pending,
         "error": error,
     }
 

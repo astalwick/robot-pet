@@ -52,6 +52,11 @@ class FakeBus:
         self.closed = True
 
 
+def set_u16(bus: FakeBus, register: int, value: int) -> None:
+    bus.registers[register] = value & 0xFF
+    bus.registers[register + 1] = value >> 8
+
+
 class UpsHatEDriverTest(unittest.TestCase):
     def test_driver_decodes_battery_registers(self):
         driver = UpsHatEDriver(bus_factory=FakeBus)
@@ -84,6 +89,42 @@ class PiBatteryServiceTest(unittest.TestCase):
         self.assertEqual(published[-1]["pack_voltage"], 16.022)
         self.assertEqual(published[-1]["percent"], 73)
         self.assertEqual(published[-1]["power_state"], "discharging")
+
+    def test_tick_marks_low_at_warning_voltage(self):
+        bus = FakeBus()
+        set_u16(bus, 0x20, 13300)
+        published = []
+        shutdown_commands = []
+        service = PiBatteryService(
+            PiBatteryConfig(),
+            publish=published.append,
+            driver_factory=lambda: UpsHatEDriver(bus_factory=lambda _bus: bus),
+            command_runner=shutdown_commands.append,
+        )
+
+        service.tick()
+
+        self.assertEqual(published[-1]["status"], "low")
+        self.assertFalse(published[-1]["shutdown_pending"])
+        self.assertEqual(shutdown_commands, [])
+
+    def test_tick_requests_shutdown_at_shutdown_voltage(self):
+        bus = FakeBus()
+        set_u16(bus, 0x20, 13000)
+        published = []
+        shutdown_commands = []
+        service = PiBatteryService(
+            PiBatteryConfig(),
+            publish=published.append,
+            driver_factory=lambda: UpsHatEDriver(bus_factory=lambda _bus: bus),
+            command_runner=shutdown_commands.append,
+        )
+
+        service.tick()
+
+        self.assertEqual(published[-1]["status"], "critical")
+        self.assertTrue(published[-1]["shutdown_pending"])
+        self.assertEqual(shutdown_commands, [("sudo", "shutdown", "-h", "now")])
 
 
 if __name__ == "__main__":

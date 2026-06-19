@@ -204,6 +204,7 @@ function renderBattery(battery, motorRail, motorRailSource, piBattery, piBattery
     row('pi current', '', fmt(piBattery.current_amps, 'A', 2), piBattery.current_amps < 0 ? 'muted' : ''),
     row('pi runtime', '', piRuntime, piRuntime === '--' ? 'muted' : ''),
     row('pi state', '', piState.replaceAll('_', ' ').toUpperCase(), piState === 'stale' ? 'muted' : ''),
+    row('pi status', '', piStatus.toUpperCase().replaceAll('_', ' '), batteryClass(piStatus)),
     row('pi cells', '', piCells || '--', piCells ? '' : 'muted'),
     row('pi trend', sparkline(history.pi_pack_voltage), ''),
   ]);

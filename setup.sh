@@ -149,6 +149,7 @@ chmod +x "$REPO_DIR/restart.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 INSTALL_PATH="$(command -v install)"
 APT_PATH="$(command -v apt)"
+SHUTDOWN_PATH="$(command -v shutdown)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
@@ -190,6 +191,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-pi-battery.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
+$USER ALL=(root) NOPASSWD: $SHUTDOWN_PATH -h now
 $USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
 SUDOERS
 sudo visudo -cf "$SUDOERS_TMP"

@@ -731,6 +731,7 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("const piBattery = snapshot.pi_battery || {}", self.telemetry_js)
         self.assertIn("row('pi ups'", self.telemetry_js)
         self.assertIn("row('pi runtime'", self.telemetry_js)
+        self.assertIn("row('pi status'", self.telemetry_js)
         self.assertIn("history.pi_pack_voltage", self.telemetry_js)
 
     def test_dashboard_exposes_barge_in_visibility_not_inline_editors(self):

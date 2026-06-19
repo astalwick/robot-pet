@@ -13,6 +13,7 @@ import urllib.request
 from collections import deque
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
 from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_motion_intent
@@ -207,6 +208,7 @@ class RobotVoiceService:
         self.profile_every = profile_every
         self.telemetry_subscribe_socket = telemetry_subscribe_socket
         self.session: VoiceSession | None = None
+        self.openai_client: Any = None
         self.usage = UsageTotals()
         self.audio: ReSpeakerAudio | None = None
         self.doa_tracker = DoATracker()
@@ -444,6 +446,13 @@ class RobotVoiceService:
         self._orchestrator_startup_latched = None
         self._orchestrator_startup_error = None
         self.publish(config, status="starting", last_error=None)
+        if self.has_credentials():
+            try:
+                from openai import AsyncOpenAI
+            except ModuleNotFoundError as exc:
+                self._latch_orchestrator_startup(config, f"Missing Python dependency: {exc.name}")
+                return False
+            self.openai_client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
         self.active_config = config
         self.audio = ReSpeakerAudio(
             input_device=config.input_device,
@@ -548,12 +557,6 @@ class RobotVoiceService:
             self._wake_event.clear()
             return False
 
-        try:
-            from openai import AsyncOpenAI
-        except ModuleNotFoundError as exc:
-            self.publish(config, status="error", last_error=f"Missing Python dependency: {exc.name}")
-            return False
-
         self._mode = VOICE_ACTIVE
         self._idle_started_at = time.monotonic()
         self._wake_event.clear()
@@ -565,7 +568,7 @@ class RobotVoiceService:
         self.session = VoiceSession(
             config,
             os.environ["ELEVENLABS_API_KEY"],
-            AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"]),
+            self.openai_client,
             lambda update: self.publish(config, **update),
             audio=self.audio,
             event_callback=self.timeline.add_event,
@@ -830,6 +833,7 @@ class RobotVoiceService:
         if self.audio is not None:
             await self.audio.stop_io()
             self.audio = None
+        self.openai_client = None
         self._io_stop_event = None
         self.active_config = None
         self._orchestrator_startup_latched = None

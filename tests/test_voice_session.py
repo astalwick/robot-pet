@@ -391,10 +391,10 @@ class FakeResponse:
         self.id = None
 
 
-def goal_step(*, narration="", tool):
+def goal_step(*, narration="", tool, arguments=None):
     """One goal step: a tool call, optionally with progress narration."""
     return FakeResponse(
-        output=[FakeFunctionCall(tool, {}, "call_1")],
+        output=[FakeFunctionCall(tool, arguments or {}, "call_1")],
         output_text=narration,
     )
 
@@ -465,7 +465,7 @@ class GoalRunnerIntegrationTest(unittest.TestCase):
                 assistant_runner=fake_run_assistant_turn,
                 goal_runner=run_agent_goal,
                 progress_speaker=fake_progress_tts,
-                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                motion_intent_caller=lambda name, **_: moves.append(name) or {"ok": True},
                 on_event=events.append,
                 on_status=statuses.append,
             )
@@ -495,7 +495,9 @@ class GoalRunnerIntegrationTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return goal_step(narration="Heading your way.", tool="move")
+                return goal_step(
+                    narration="Heading your way.", tool="move", arguments={"distance_meters": 0.5}
+                )
             return goal_final("I am right next to you now.")
 
         async def run():

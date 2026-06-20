@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from config.voice import DEFAULT_OPENAI_MODEL
-from control.motion_intent import MOVE_LINEAR_X
 from lib.log import setup_logging
 from voice.conversation import ConversationHistory
 from voice.turn_policy import DEFAULT_TURN_POLICY, TurnPolicy
@@ -197,21 +196,20 @@ MOVE_TOOL = {
     "type": "function",
     "name": MOVE_TOOL_NAME,
     "description": (
-        f"Drive the robot straight at a slow, steady pace of about {MOVE_LINEAR_X} m/s. The "
-        "duration_seconds argument is signed: positive values drive forward, negative values "
-        "drive backward. The magnitude sets how long it drives, from 0.5 seconds (a tiny nudge) "
-        "up to 5 seconds (a longer stroll). To cover a distance, divide it by the speed: at "
-        f"{MOVE_LINEAR_X} m/s, one second moves roughly {MOVE_LINEAR_X} meters."
+        "Drive the robot straight by distance. The distance_meters argument is signed: "
+        "positive values drive forward, negative values drive backward."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "duration_seconds": {
+            "distance_meters": {
                 "type": "number",
-                "description": "How long to drive: positive forward, negative backward, magnitude 0.5 to 5 seconds.",
+                "description": (
+                    "Approximate distance to drive: positive forward, negative backward."
+                ),
             },
         },
-        "required": ["duration_seconds"],
+        "required": ["distance_meters"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -262,13 +260,10 @@ SCAN_TOOL = {
     "type": "function",
     "name": SCAN_TOOL_NAME,
     "description": (
-        "Look around by turning in steps and capturing a camera snapshot at each step, then "
-        "returning to your starting direction. Best when you need to survey a whole space; for a "
-        "quick check of what is in front of you, a single look is usually enough. The degrees "
-        "argument is the total sweep to cover; pass 360 for a full look around, which is also the "
-        "most it will sweep. The camera is a wide-angle Pi Camera 3, so each snapshot already sees "
-        "much more than a normal lens; a few coarse steps cover the whole space without fine "
-        "increments."
+        "Look around by sweeping a requested number of degrees and returning observations, "
+        "then facing the starting direction again. Use this when you need to survey more "
+        "than what is directly ahead. The camera is wide angle, so each image covers a "
+        "broad view with wide-angle perspective."
     ),
     "parameters": {
         "type": "object",
@@ -305,7 +300,11 @@ END_SESSION_TOOL = {
 LOOK_TOOL = {
     "type": "function",
     "name": LOOK_TOOL_NAME,
-    "description": "Capture a single JPEG snapshot looking forward from the robot camera so you can answer questions about what the robot sees right now.",
+    "description": (
+        "Look forward from the robot camera so you can answer questions about what the robot "
+        "sees right now. The camera is wide angle, so the image covers a broad view with "
+        "wide-angle perspective."
+    ),
     "parameters": {
         "type": "object",
         "properties": {},

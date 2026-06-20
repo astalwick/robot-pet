@@ -7,6 +7,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from control.motion_intent import MOVE_METERS_PER_SECOND
 from voice.agent_runner import (
     AGENT_TOOLS,
     BLOCKED_FINAL,
@@ -106,7 +107,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move", arguments={"distance_m": 0.5})
+                return call("move", arguments={"distance_meters": 0.5})
             return final("Done.")
 
         def move(_name, **kwargs):
@@ -125,7 +126,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(captured, {"distance_m": 0.5})
+        self.assertAlmostEqual(captured["duration_seconds"], 0.5 / MOVE_METERS_PER_SECOND)
 
     def test_tool_output_goes_back_with_matching_call_id(self):
         steps = {"n": 0}

@@ -46,6 +46,7 @@ from voice.tools import (
 )
 from voice.conversation import ConversationHistory
 from config.voice import VoiceConfig
+from control.motion_intent import MOVE_METERS_PER_SECOND
 from voice.turn_policy import TurnPolicy, should_accept_barge_in, should_speculate, transcript_matches, turn_policy_from_config
 from voice.assistant import update_near_end_gate
 
@@ -3422,6 +3423,43 @@ class RobotToolDispatchTest(unittest.TestCase):
             self.assertEqual(calls, [MOVE_TOOL_NAME])
             self.assertTrue(result.ok)
             self.assertEqual(result.output, {"ok": True, "intent": MOVE_TOOL_NAME})
+
+        asyncio.run(run())
+
+    def test_move_distance_is_sent_as_duration(self):
+        async def run():
+            calls = []
+
+            def motion_intent_caller(name, **kwargs):
+                calls.append((name, kwargs))
+                return {"ok": True}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                motion_intent_caller=motion_intent_caller,
+            )
+            result = await dispatch_tool(
+                self._call(MOVE_TOOL_NAME, arguments={"distance_meters": 0.6}), context
+            )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(calls[0][0], MOVE_TOOL_NAME)
+            self.assertAlmostEqual(calls[0][1]["duration_seconds"], 0.6 / MOVE_METERS_PER_SECOND)
+
+        asyncio.run(run())
+
+    def test_move_invalid_distance_reports_error(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                motion_intent_caller=lambda name, **kwargs: {"ok": True},
+            )
+            result = await dispatch_tool(
+                self._call(MOVE_TOOL_NAME, arguments={"distance_meters": "far"}), context
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output, {"ok": False, "error": "invalid_distance"})
 
         asyncio.run(run())
 

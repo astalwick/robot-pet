@@ -7,7 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
-from control.commands import WheelSpeedCommand
+from control.commands import MotionCommand, WheelSpeedCommand
 from control.motion_drive import DriveCommand
 from robot_motion import MotionConfig, MotionRunner
 
@@ -252,6 +252,21 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertEqual(command.linear_x, 0.0)
         self.assertLess(command.angular_z, 0.0)
+
+    def test_motion_intent_ignores_gamepad_drive_tuning(self):
+        runner = self._runner(FakeMotor())
+        drive = drive_command()
+        drive.drive_tuning["speed_scale"] = 1.0
+        drive.drive_tuning["turbo_scale"] = 1.0
+        drive.controller["buttons"]["lb"] = True
+
+        _, left_qpps, right_qpps = runner._target_from_drive_or_intent(
+            drive,
+            MotionCommand(linear_x=0.0, angular_z=0.3),
+        )
+
+        self.assertEqual(left_qpps, 181)
+        self.assertEqual(right_qpps, -181)
 
     def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
         calls = 0

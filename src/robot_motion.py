@@ -388,7 +388,7 @@ class MotionRunner:
         if intent_command is None:
             return drive.wheels, drive.left_qpps, drive.right_qpps
 
-        tuning = DriveTuning.from_dict(drive.drive_tuning)
+        tuning = DriveTuning()
         intent_mixer = DifferentialDriveMixer(
             qpps=self.config.qpps,
             speed_scale=tuning.speed_scale,
@@ -397,7 +397,7 @@ class MotionRunner:
         mixed_wheels = intent_mixer.mix(intent_command)
         intent_target = intent_mixer.to_wheel_speeds(
             intent_command,
-            turbo=drive.controller.get("buttons", {}).get("lb", False),
+            turbo=False,
         )
         return (
             {"left_command": mixed_wheels.left, "right_command": mixed_wheels.right},

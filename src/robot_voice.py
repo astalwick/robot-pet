@@ -581,6 +581,7 @@ class RobotVoiceService:
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),
             robot_inspection_caller=lambda: read_telemetry_snapshot(self.telemetry_subscribe_socket),
             face_me_caller=self.face_me_caller,
+            speaker_direction_caller=self.doa_snapshot,
             personalities=self.personalities,
             profile_every=self.profile_every,
             usage=self.usage,

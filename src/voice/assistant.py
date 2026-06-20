@@ -976,6 +976,7 @@ async def handle_scribe_events(
     stop_playback_now: Callable[[], Any] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     progress_speaker: Callable[..., Any] | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> None:
@@ -1277,6 +1278,7 @@ async def handle_scribe_events(
                 camera_snapshot_caller=camera_snapshot_caller,
                 robot_inspection_caller=robot_inspection_caller,
                 face_me_caller=face_me_caller,
+                speaker_direction_caller=speaker_direction_caller,
                 speak_progress=speak_progress,
                 is_speaking=lambda: current_playback() is not None,
             )

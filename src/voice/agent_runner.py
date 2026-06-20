@@ -31,6 +31,7 @@ from voice.assistant import (
     VoiceState,
 )
 from voice.tools import (
+    INSPECT_SPEAKER_DIRECTION_TOOL,
     RobotToolCall,
     VoiceToolContext,
     agent_observation,
@@ -47,6 +48,7 @@ AGENT_TOOLS = [
     FACE_ME_TOOL,
     INSPECT_ROBOT_TOOL,
     LOOK_AROUND_TOOL,
+    INSPECT_SPEAKER_DIRECTION_TOOL,
 ]
 AGENT_TOOL_NAMES = frozenset(tool["name"] for tool in AGENT_TOOLS)
 
@@ -142,6 +144,7 @@ async def run_agent_goal(
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     speak_progress: Callable[[str], Awaitable[None]] | None = None,
     is_speaking: Callable[[], bool] | None = None,
     max_steps: int = 20,
@@ -153,6 +156,7 @@ async def run_agent_goal(
         camera_snapshot_caller=camera_snapshot_caller,
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
+        speaker_direction_caller=speaker_direction_caller,
     )
 
     async def narrate(text: str) -> None:

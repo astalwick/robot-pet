@@ -154,6 +154,29 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertEqual(order, ["move_start", "move_done", "inspect"])
 
+    def test_inspect_speaker_direction_observation_reaches_the_model(self):
+        def speaker_direction():
+            return {"connected": True, "relative_degrees": 90, "age_seconds": 0.1, "fresh": True}
+
+        def responder(input_items):
+            if "relative_degrees" in serialized(input_items):
+                return decision(done=True, final="You are on my right.")
+            return decision(tool_calls=[call_tool("inspect_speaker_direction")])
+
+        openai = FakeOpenAI(responder)
+        result = run(
+            run_agent_goal(
+                goal="Which way am I?",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                speaker_direction_caller=speaker_direction,
+            )
+        )
+
+        self.assertEqual(result, "You are on my right.")
+
     def test_tool_failure_becomes_observation_and_model_recovers(self):
         failures: list[bool] = []
 

@@ -53,7 +53,7 @@ DRIVE_COMMAND_STALE_SECONDS = 0.5
 # 5203-2402-0019 motors (537.7 counts per output-shaft revolution) with nominal
 # 96 mm Hogback wheels mounted directly on the output shaft. The wheel diameter
 # is the calibrated effective rolling diameter: 1.00 m commanded measured 0.97 m.
-WHEEL_DIAMETER_METERS = 0.0948
+WHEEL_DIAMETER_METERS = 0.0953
 ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7
 ENCODER_COUNTS_PER_METER = ENCODER_COUNTS_PER_WHEEL_REVOLUTION / (math.pi * WHEEL_DIAMETER_METERS)
 # A move commanding motion must keep gaining encoder travel; if it stalls this

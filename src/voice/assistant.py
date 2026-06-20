@@ -24,7 +24,6 @@ DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_OPERATIONAL_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "operational_system_prompt.md"
 OPERATIONAL_SYSTEM_PROMPT = DEFAULT_OPERATIONAL_PROMPT_PATH.read_text().strip()
-VOICE_SWITCH_TOOL_NAME = "switch_voice"
 END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
@@ -158,20 +157,6 @@ def barge_in_telemetry(
         "barge_in_gate_open": gate_open,
         "barge_in_last_reason": last_reason,
     }
-
-
-VOICE_SWITCH_TOOL = {
-    "type": "function",
-    "name": VOICE_SWITCH_TOOL_NAME,
-    "description": "Toggle between the default and alternate speaking voices. Only use when the user explicitly asks to switch voices.",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
 
 
 WIGGLE_TOOL = {
@@ -322,7 +307,6 @@ WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
 ASSISTANT_TOOLS = [
-    VOICE_SWITCH_TOOL,
     END_SESSION_TOOL,
     WIGGLE_TOOL,
     MOVE_FORWARD_TOOL,
@@ -499,16 +483,8 @@ class VoiceState:
         if self.current_voice_id is None:
             self.current_voice_id = self.default_voice_id
 
-    def toggle(self) -> VoiceSwitch:
-        if self.current_voice_id == self.default_voice_id:
-            self.current_voice_id = self.alternate_voice_id
-            return VoiceSwitch(voice_id=self.current_voice_id, voice_name="alternate")
-        self.current_voice_id = self.default_voice_id
-        return VoiceSwitch(voice_id=self.current_voice_id, voice_name="default")
-
     def set_voice(self, voice_id: str) -> VoiceSwitch:
-        # Same machinery switch_voice uses: the next turn's TTS reads current_voice_id.
-        # default tracks the new voice too, so a later toggle() stays coherent.
+        # The next turn's TTS reads current_voice_id.
         self.default_voice_id = voice_id
         self.current_voice_id = voice_id
         return VoiceSwitch(voice_id=voice_id, voice_name="default")
@@ -865,9 +841,6 @@ async def stream_openai_words(
                     await playback_event.wait()
 
             result = await dispatch_tool(call, tool_context)
-
-            if result.voice_switch is not None:
-                yield result.voice_switch
 
             tool_outputs.append(
                 {

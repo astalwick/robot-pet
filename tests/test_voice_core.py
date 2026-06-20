@@ -17,7 +17,6 @@ from voice.assistant import (
     LOOK_AROUND_TOOL_NAME,
     MOVE_FORWARD_TOOL_NAME,
     START_GOAL_TOOL_NAME,
-    VOICE_SWITCH_TOOL_NAME,
     ActiveGoal,
     ActiveTurn,
     AgentGoalRequest,
@@ -3495,18 +3494,6 @@ class RobotToolDispatchTest(unittest.TestCase):
 
             self.assertEqual(len(calls), 1)
             self.assertEqual(result.output, {"ok": True, "result": "completed", "relative_degrees": 90})
-
-        asyncio.run(run())
-
-    def test_switch_voice_toggles_and_surfaces_switch(self):
-        async def run():
-            voice_state = VoiceState("default-voice", alternate_voice_id="alt-voice")
-            context = VoiceToolContext(voice_state=voice_state)
-            result = await dispatch_tool(self._call(VOICE_SWITCH_TOOL_NAME), context)
-
-            self.assertIsNotNone(result.voice_switch)
-            self.assertEqual(result.output["voice"], "alternate")
-            self.assertEqual(voice_state.current_voice_id, "alt-voice")
 
         asyncio.run(run())
 

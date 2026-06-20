@@ -24,9 +24,7 @@ from voice.assistant import (
     INSPECT_ROBOT_TOOL_NAME,
     LOOK_AROUND_TOOL_NAME,
     MOTION_TOOL_NAMES,
-    VOICE_SWITCH_TOOL_NAME,
     VoiceState,
-    VoiceSwitch,
     inspect_robot_snapshot,
 )
 
@@ -65,7 +63,6 @@ class RobotToolResult:
     call_id: str
     ok: bool
     output: dict[str, Any]
-    voice_switch: VoiceSwitch | None = None
     # For tools that produce images, the model-input content parts (input_text +
     # input_image) so callers can attach a real image to the next model call
     # instead of stuffing base64 into a JSON string.
@@ -120,16 +117,6 @@ def _result(call: RobotToolCall, ok: bool, output: dict[str, Any]) -> RobotToolR
 
 async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResult:
     name = call.name
-
-    if name == VOICE_SWITCH_TOOL_NAME:
-        switch = context.voice_state.toggle()
-        return RobotToolResult(
-            name=name,
-            call_id=call.call_id,
-            ok=True,
-            output={"voice": switch.voice_name, "voice_id": switch.voice_id},
-            voice_switch=switch,
-        )
 
     if name == END_SESSION_TOOL_NAME:
         if context.end_session_pending is None:

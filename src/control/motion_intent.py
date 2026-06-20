@@ -41,7 +41,7 @@ EXPRESS_KINDS = ("wiggle", "spin", "shake")
 # drives forward, negative drives backward. The magnitude sets how long it drives.
 MOVE_DURATION = 0.5
 MOVE_MIN_DURATION = 0.5
-MOVE_MAX_DURATION = 5.0
+MOVE_MAX_DURATION = 30.0
 MOVE_LINEAR_X = 0.3
 # Voice distance moves are calibrated time estimates, not measured odometry.
 MOVE_METERS_PER_SECOND = 0.15
@@ -66,7 +66,7 @@ TURN_MAX_DEGREES = 360
 
 KNOWN_TOOLS = ("express", "move", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
-MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 10.0
+MOTION_INTENT_REPLY_TIMEOUT_SECONDS = MOVE_MAX_DURATION + 5.0
 
 
 def valid_relative_degrees(value: Any) -> bool:

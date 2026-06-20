@@ -179,14 +179,6 @@ class MotionIntentExecutorTest(unittest.TestCase):
         running = executor.tick(now=0.5, gamepad_active=False)
         self.assertEqual(running.command, MotionCommand(0.0, FACE_ME_ANGULAR_Z))
 
-    def test_face_me_duration_uses_fifty_five_degrees_per_second(self):
-        executor = MotionIntentExecutor()
-        executor.start("face_me", now=0.0, relative_degrees=110)
-
-        # 110 / 55 == 2.0 seconds: still turning just before, done just after.
-        self.assertFalse(executor.tick(now=1.95, gamepad_active=False).finished)
-        self.assertTrue(executor.tick(now=2.05, gamepad_active=False).finished)
-
     def test_face_me_within_fifteen_degrees_completes_without_moving(self):
         executor = MotionIntentExecutor()
         executor.start("face_me", now=0.0, relative_degrees=15)

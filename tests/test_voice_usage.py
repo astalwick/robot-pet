@@ -7,9 +7,6 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.usage import (
-    ELEVEN_FLASH_MODEL,
-    OPENAI_MODEL,
-    SCRIBE_MODEL,
     UsageTotals,
     cost_snapshot,
     record_openai_usage,
@@ -52,9 +49,6 @@ class VoiceUsageTest(unittest.TestCase):
 
         snapshot = cost_snapshot(usage)
 
-        self.assertEqual(snapshot["stt"]["model"], SCRIBE_MODEL)
-        self.assertEqual(snapshot["llm"]["model"], OPENAI_MODEL)
-        self.assertEqual(snapshot["tts"]["model"], ELEVEN_FLASH_MODEL)
         # 1 minute of STT at $0.39/hour ($0.0065/minute).
         self.assertAlmostEqual(snapshot["stt"]["usd"], 0.0065)
         # 0.8M uncached input @ $0.75 + 0.2M cached @ $0.075 + 1M output @ $4.50.

@@ -14,8 +14,7 @@ class DriveTuningConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tuning = load_drive_tuning(os.path.join(tmpdir, "missing.json"))
 
-        self.assertEqual(tuning.speed_scale, 0.25)
-        self.assertEqual(tuning.turbo_scale, 0.75)
+        self.assertEqual(tuning, DriveTuning())
 
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:

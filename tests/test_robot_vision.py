@@ -9,6 +9,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+from config.vision import VisionConfig
 from robot_vision import (
     CameraFetchError,
     DetectorUnavailable,
@@ -501,7 +502,7 @@ class VisionServiceTest(unittest.TestCase):
 
         self.assertEqual(len(fetched), 1)
         self.assertEqual(published[-1]["status"], "detecting")
-        self.assertEqual(published[-1]["detection_rate_hz"], 2.0)
+        self.assertEqual(published[-1]["detection_rate_hz"], VisionConfig().detection_rate_hz)
 
 
 if __name__ == "__main__":

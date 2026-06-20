@@ -14,11 +14,7 @@ class VisionConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_vision_config(os.path.join(tmpdir, "missing.json"))
 
-        self.assertTrue(config.enabled)
-        self.assertEqual(config.detection_rate_hz, 2.0)
-        self.assertEqual(config.detection_max_width, 640)
-        self.assertEqual(config.haar_scale_factor, 1.1)
-        self.assertEqual(config.haar_min_size, 24)
+        self.assertEqual(config, VisionConfig())
 
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:

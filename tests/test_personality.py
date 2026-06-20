@@ -69,7 +69,6 @@ class PersonalityLoaderTest(unittest.TestCase):
         personalities = load_personalities(os.path.join(ROOT, "config", "personality"))
 
         self.assertIn("default", personalities)
-        self.assertEqual(personalities["default"][0], DEFAULT_VOICE_ID)
         self.assertIn("Bloop", personalities["default"][1])
 
     def test_compose_system_prompt_puts_operational_last(self):

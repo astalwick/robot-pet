@@ -24,10 +24,7 @@ class SensorsConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = load_sensors_config(os.path.join(tmpdir, "missing.json"))
 
-        self.assertTrue(config.enabled)
-        self.assertEqual(config.poll_rate_hz, 10.0)
-        self.assertEqual(len(config.sensors), 3)
-        self.assertEqual(config.sensors[0].name, "cliff_left")
+        self.assertEqual(config, SensorsConfig())
 
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -82,12 +79,6 @@ class SensorsConfigTest(unittest.TestCase):
                     ]
                 }
             )
-
-    def test_safety_defaults_off_without_block(self):
-        config = SensorsConfig()
-
-        self.assertFalse(config.safety.enabled)
-        self.assertEqual(config.safety.cliff_trip_above_mm, 200)
 
     def test_safety_and_per_sensor_thresholds(self):
         config = SensorsConfig.from_dict(

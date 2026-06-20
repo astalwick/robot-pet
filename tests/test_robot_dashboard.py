@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 ROBOT_DASHBOARD_IMPORT_ERROR = None
 try:
-    from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
+from config.teleop import DriveTuning
+from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
 except ModuleNotFoundError as exc:
     if exc.name not in {"rich", "textual"}:
         raise
@@ -66,7 +67,7 @@ class RobotDashboardTest(unittest.TestCase):
 
             dashboard = RobotDashboard("/tmp/missing.sock", path)
 
-        self.assertEqual(dashboard.drive_tuning.speed_scale, 0.25)
+        self.assertEqual(dashboard.drive_tuning, DriveTuning())
         self.assertIsNotNone(dashboard.drive_tuning_error)
         self.assertIn("Invalid drive tuning config", dashboard.drive_tuning_error)
 

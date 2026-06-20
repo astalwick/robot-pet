@@ -166,7 +166,7 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(running.command, MotionCommand(0.0, -FACE_ME_ANGULAR_Z))
         self.assertFalse(running.finished)
 
-        # 90 / 55 == 1.636 seconds.
+        # Done after one full turn at the configured degrees-per-second rate.
         done = executor.tick(now=90 / FACE_ME_DEGREES_PER_SECOND + 0.05, gamepad_active=False)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
@@ -191,7 +191,7 @@ class MotionIntentExecutorTest(unittest.TestCase):
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("turn", now=0.0, degrees=90))
 
-        # 90 / 55 == 1.636 seconds: still turning just before, done just after.
+        # Still turning just before the configured duration, done just after.
         running = executor.tick(now=1.0, gamepad_active=False)
         self.assertEqual(running.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
         self.assertFalse(running.finished)

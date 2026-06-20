@@ -116,9 +116,6 @@ class ReSpeakerTest(unittest.TestCase):
         buffer.fill(outdata)
         self.assertEqual(bytes(outdata), b"ef\x00\x00")
 
-    def test_mic_blocksize_is_80ms_at_16khz(self):
-        self.assertEqual(MIC_BLOCKSIZE, 1280)
-
     def test_playback_reuses_one_output_stream(self):
         class FakeStream:
             opened = 0

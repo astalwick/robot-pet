@@ -204,7 +204,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=clock,
             telemetry_publisher=lambda *_args: True,
         )
-        runner.intent_executor.start("move_forward", now=0.0)
+        runner.intent_executor.start("move", now=0.0)
         runner.pending_intent_complete = completed.append
 
         runner._run_motor_loop(motor)
@@ -283,7 +283,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=lambda: 0.0,
             telemetry_publisher=lambda _socket, message: published.append(message) or True,
         )
-        runner.intent_executor.start("move_forward", now=0.0)
+        runner.intent_executor.start("move", now=0.0)
         runner.pending_intent_complete = completed.append
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
@@ -319,7 +319,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=clock,
             telemetry_publisher=lambda *_args: True,
         )
-        runner.intent_executor.start("wiggle", now=0.0)
+        runner.intent_executor.start("express", now=0.0, kind="wiggle")
         runner.pending_intent_complete = lambda _result: None
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
@@ -368,7 +368,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=clock,
             telemetry_publisher=lambda *_args: True,
         )
-        runner.intent_executor.start("wiggle", now=0.0)
+        runner.intent_executor.start("express", now=0.0, kind="wiggle")
         runner.pending_intent_complete = completed.append
 
         self.assertIsNone(runner._wait_for_roboclaw())
@@ -400,7 +400,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=clock,
             telemetry_publisher=lambda _socket, message: published.append(message) or True,
         )
-        runner.intent_executor.start("wiggle", now=0.0)
+        runner.intent_executor.start("express", now=0.0, kind="wiggle")
         runner.pending_intent_complete = completed.append
 
         runner._run_motor_loop(motor)

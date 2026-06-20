@@ -25,14 +25,17 @@ ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
 DEFAULT_OPERATIONAL_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "operational_system_prompt.md"
 OPERATIONAL_SYSTEM_PROMPT = DEFAULT_OPERATIONAL_PROMPT_PATH.read_text().strip()
 END_SESSION_TOOL_NAME = "end_session"
-WIGGLE_TOOL_NAME = "wiggle"
-MOVE_FORWARD_TOOL_NAME = "move_forward"
+EXPRESS_TOOL_NAME = "express"
+MOVE_TOOL_NAME = "move"
 TURN_TOOL_NAME = "turn"
-LOOK_AROUND_TOOL_NAME = "look_around"
-INSPECT_ROBOT_TOOL_NAME = "inspect_robot"
+STOP_TOOL_NAME = "stop"
+SCAN_TOOL_NAME = "scan"
+LOOK_TOOL_NAME = "look"
+CHECK_HEALTH_TOOL_NAME = "check_health"
+CHECK_SURROUNDINGS_TOOL_NAME = "check_surroundings"
 FACE_ME_TOOL_NAME = "face_me"
 START_GOAL_TOOL_NAME = "start_goal"
-MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME, TURN_TOOL_NAME)
+MOTION_TOOL_NAMES = (EXPRESS_TOOL_NAME, MOVE_TOOL_NAME, TURN_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
 OPENAI_CREATE_RETRY_DELAY_SECS = 0.2
@@ -159,35 +162,46 @@ def barge_in_telemetry(
     }
 
 
-WIGGLE_TOOL = {
+EXPRESS_TOOL = {
     "type": "function",
-    "name": WIGGLE_TOOL_NAME,
-    "description": "Wiggle the robot's body briefly. A small, playful left-right motion lasting about half a second.",
+    "name": EXPRESS_TOOL_NAME,
+    "description": (
+        "Express an emotion with a short body motion. The robot only has wheels, so every "
+        "expression is a movement in place: 'wiggle' is a small playful left-right sway, "
+        "'spin' is an excited full turn, and 'shake' is a quick back-and-forth like saying no. "
+        "Pick the kind that best fits the feeling."
+    ),
     "parameters": {
         "type": "object",
-        "properties": {},
-        "required": [],
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["wiggle", "spin", "shake"],
+                "description": "Which expression to perform.",
+            },
+        },
+        "required": ["kind"],
         "additionalProperties": False,
     },
     "strict": True,
 }
 
 
-MOVE_FORWARD_TOOL = {
+MOVE_TOOL = {
     "type": "function",
-    "name": MOVE_FORWARD_TOOL_NAME,
+    "name": MOVE_TOOL_NAME,
     "description": (
-        "Move the robot forward at a slow, steady pace. The duration_seconds argument "
-        "sets how long it drives, from 0.5 seconds (a tiny nudge) up to 5 seconds "
-        "(a longer stroll). Use a small value for a little bump forward and a larger "
-        "value when asked to go farther."
+        "Drive the robot straight at a slow, steady pace. The duration_seconds argument is "
+        "signed: positive values drive forward, negative values drive backward. The magnitude "
+        "sets how long it drives, from 0.5 seconds (a tiny nudge) up to 5 seconds (a longer "
+        "stroll). Use a small value for a little bump and a larger value to go farther."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "duration_seconds": {
                 "type": "number",
-                "description": "How long to drive forward, between 0.5 and 5 seconds.",
+                "description": "How long to drive: positive forward, negative backward, magnitude 0.5 to 5 seconds.",
             },
         },
         "required": ["duration_seconds"],
@@ -220,6 +234,48 @@ TURN_TOOL = {
 }
 
 
+STOP_TOOL = {
+    "type": "function",
+    "name": STOP_TOOL_NAME,
+    "description": (
+        "Immediately stop the robot's motion. Use this the moment the user says to stop, "
+        "halt, or wait. It cancels any move, turn, or expression already in progress."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+SCAN_TOOL = {
+    "type": "function",
+    "name": SCAN_TOOL_NAME,
+    "description": (
+        "Look around by turning in steps and capturing a camera snapshot at each step. The "
+        "degrees argument is the total sweep to cover; pass 360 for a full look around, which is "
+        "also the most it will sweep. The camera is a wide-angle Pi Camera 3, so each snapshot "
+        "already sees much more than a normal lens; a few coarse steps cover the whole space "
+        "without fine increments."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "degrees": {
+                "type": "number",
+                "description": "Total degrees to sweep, from a small arc up to 360 (a full turn). Pass 360 to look all the way around.",
+            },
+        },
+        "required": ["degrees"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 END_SESSION_TOOL = {
     "type": "function",
     "name": END_SESSION_TOOL_NAME,
@@ -237,10 +293,10 @@ END_SESSION_TOOL = {
 }
 
 
-LOOK_AROUND_TOOL = {
+LOOK_TOOL = {
     "type": "function",
-    "name": LOOK_AROUND_TOOL_NAME,
-    "description": "Capture a current JPEG snapshot from the robot camera so you can answer questions about what the robot sees right now.",
+    "name": LOOK_TOOL_NAME,
+    "description": "Capture a single JPEG snapshot looking forward from the robot camera so you can answer questions about what the robot sees right now.",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -251,12 +307,31 @@ LOOK_AROUND_TOOL = {
 }
 
 
-INSPECT_ROBOT_TOOL = {
+CHECK_HEALTH_TOOL = {
     "type": "function",
-    "name": INSPECT_ROBOT_TOOL_NAME,
+    "name": CHECK_HEALTH_TOOL_NAME,
     "description": (
-        "Inspect the robot's current motor battery, Pi UPS battery, motor, safety, distance sensor, "
-        "face detection, and computer health status. Use this to answer questions about the robot's body or surroundings."
+        "Check the robot's own body health: motor battery, Pi UPS battery, motor rail, drive "
+        "and safety state, and computer health. Use this for questions about how the robot is "
+        "doing, its power, or whether its motors are ready."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CHECK_SURROUNDINGS_TOOL = {
+    "type": "function",
+    "name": CHECK_SURROUNDINGS_TOOL_NAME,
+    "description": (
+        "Check what is around the robot right now: distance sensor readings and how many faces "
+        "are in view. This is a fast perceptual check; use it to tell whether something is close "
+        "or whether anyone is nearby."
     ),
     "parameters": {
         "type": "object",
@@ -304,19 +379,6 @@ START_GOAL_TOOL = {
 
 
 WEB_SEARCH_TOOL = {"type": "web_search"}
-
-
-ASSISTANT_TOOLS = [
-    END_SESSION_TOOL,
-    WIGGLE_TOOL,
-    MOVE_FORWARD_TOOL,
-    TURN_TOOL,
-    LOOK_AROUND_TOOL,
-    INSPECT_ROBOT_TOOL,
-    FACE_ME_TOOL,
-    START_GOAL_TOOL,
-    WEB_SEARCH_TOOL,
-]
 
 
 def _telemetry_value_available(snapshot: dict[str, Any], source: str, value: object) -> bool:
@@ -435,6 +497,20 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "throttled_flags": pi.get("throttled_flags"),
         }
     return result
+
+
+def check_health_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    full = inspect_robot_snapshot(snapshot)
+    if not full.get("ok"):
+        return full
+    return {key: full[key] for key in ("ok", "battery", "pi_battery", "drive", "motor_rail", "pi")}
+
+
+def check_surroundings_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    full = inspect_robot_snapshot(snapshot)
+    if not full.get("ok"):
+        return full
+    return {key: full[key] for key in ("ok", "sensors", "vision")}
 
 
 @dataclass(frozen=True)
@@ -720,10 +796,11 @@ async def stream_openai_words(
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     playback_event: asyncio.Event | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> AsyncIterator[str | VoiceSwitch | AgentGoalRequest]:
-    from voice.tools import RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
+    from voice.tools import ASSISTANT_TOOLS, RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
 
     pending = ""
     word_buffer: list[str] = []
@@ -737,6 +814,7 @@ async def stream_openai_words(
         camera_snapshot_caller=camera_snapshot_caller,
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
+        speaker_direction_caller=speaker_direction_caller,
         end_session_pending=end_session_pending,
     )
 
@@ -836,6 +914,8 @@ async def stream_openai_words(
             # cancelled first, this await is cancelled and the motion never
             # happens. The agent runner has no speculative turns, so this gating
             # lives here in the assistant path, not in the shared dispatcher.
+            # stop is the exception: it must halt motion immediately, never wait
+            # on playback.
             if call.name in MOTION_TOOL_NAMES or call.name == FACE_ME_TOOL_NAME:
                 if playback_event is not None:
                     await playback_event.wait()
@@ -883,6 +963,7 @@ async def run_assistant_turn(
     usage: Any = None,
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
+    speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> str | AgentGoalRequest:
     from voice.elevenlabs_io import speak_with_eleven_flash
@@ -901,6 +982,7 @@ async def run_assistant_turn(
         usage,
         robot_inspection_caller,
         face_me_caller,
+        speaker_direction_caller,
         playback_event,
         openai_model,
     )
@@ -1367,6 +1449,7 @@ async def handle_scribe_events(
                     camera_snapshot_caller=camera_snapshot_caller,
                     robot_inspection_caller=robot_inspection_caller,
                     face_me_caller=face_me_caller,
+                    speaker_direction_caller=speaker_direction_caller,
                     openai_model=openai_model,
                 ),
                 timeout=ASSISTANT_TURN_TIMEOUT_SECS,

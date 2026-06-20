@@ -1,4 +1,4 @@
-"""Voice-driven motion intents (wiggle, move_forward) for Personality Phase 2.
+"""Voice-driven motion intents (express, move) for Personality Phase 2.
 
 A motion intent is a small, time-bounded movement requested by a voice tool call.
 The executor here is a pure state machine: it accepts a request, then on each
@@ -25,12 +25,23 @@ from typing import Any
 from control.commands import MotionCommand
 
 
+# Wheel-only expressions. We have no head or servos, so every emote is something
+# differential-drive wheels can do: a left-right sway, a full spin, a quick "no" shake.
 WIGGLE_HALF_DURATION = 0.25
 WIGGLE_ANGULAR_Z = 0.5
-MOVE_FORWARD_DURATION = 0.5
-MOVE_FORWARD_MIN_DURATION = 0.5
-MOVE_FORWARD_MAX_DURATION = 5.0
-MOVE_FORWARD_LINEAR_X = 0.3
+SPIN_DURATION = 1.5
+SPIN_ANGULAR_Z = 0.6
+SHAKE_HALF_DURATION = 0.12
+SHAKE_HALF_SWINGS = 6
+SHAKE_ANGULAR_Z = 0.6
+EXPRESS_KINDS = ("wiggle", "spin", "shake")
+
+# `move` drives straight at a steady pace. duration_seconds is signed: positive
+# drives forward, negative drives backward. The magnitude sets how long it drives.
+MOVE_DURATION = 0.5
+MOVE_MIN_DURATION = 0.5
+MOVE_MAX_DURATION = 5.0
+MOVE_LINEAR_X = 0.3
 DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1
 DIAGNOSTIC_TURN_MAX_DURATION = 4.0
@@ -50,7 +61,7 @@ TURN_DEGREES_PER_SECOND = FACE_ME_DEGREES_PER_SECOND
 TURN_MIN_DEGREES = 1
 TURN_MAX_DEGREES = 360
 
-KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn", "face_me", "turn")
+KNOWN_TOOLS = ("express", "move", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
 MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 10.0
 
@@ -90,6 +101,7 @@ class _ActiveIntent:
     duration_seconds: float | None = None
     relative_degrees: float | None = None
     degrees: float | None = None
+    kind: str | None = None
 
 
 class MotionIntentExecutor:
@@ -119,12 +131,15 @@ class MotionIntentExecutor:
         duration_seconds: float | None = None,
         relative_degrees: float | None = None,
         degrees: float | None = None,
+        kind: str | None = None,
     ) -> str | None:
         """Begin a new intent. Returns None on success, error string on failure."""
         if tool not in KNOWN_TOOLS:
             return "unknown_tool"
         if self._active is not None:
             return "busy"
+        if tool == "express" and kind not in EXPRESS_KINDS:
+            return "invalid_kind"
         if tool == "diagnostic_turn":
             if direction not in DIAGNOSTIC_TURN_DIRECTIONS:
                 return "invalid_direction"
@@ -134,11 +149,11 @@ class MotionIntentExecutor:
                 or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
             ):
                 return "invalid_duration"
-        if tool == "move_forward" and duration_seconds is not None:
+        if tool == "move" and duration_seconds is not None:
             if (
                 not isinstance(duration_seconds, (int, float))
                 or isinstance(duration_seconds, bool)
-                or not MOVE_FORWARD_MIN_DURATION <= duration_seconds <= MOVE_FORWARD_MAX_DURATION
+                or not MOVE_MIN_DURATION <= abs(duration_seconds) <= MOVE_MAX_DURATION
             ):
                 return "invalid_duration"
         if tool == "face_me" and not valid_relative_degrees(relative_degrees):
@@ -152,6 +167,7 @@ class MotionIntentExecutor:
             duration_seconds=duration_seconds,
             relative_degrees=relative_degrees,
             degrees=degrees,
+            kind=kind,
         )
         return None
 
@@ -164,31 +180,20 @@ class MotionIntentExecutor:
             return IntentTick(command=None, finished=True, result="preempted_by_gamepad")
 
         elapsed = now - self._active.started_at
-        if self._active.tool == "wiggle":
-            if elapsed < WIGGLE_HALF_DURATION:
-                return IntentTick(
-                    command=MotionCommand(linear_x=0.0, angular_z=WIGGLE_ANGULAR_Z),
-                    finished=False,
-                    result=None,
-                )
-            if elapsed < 2 * WIGGLE_HALF_DURATION:
-                return IntentTick(
-                    command=MotionCommand(linear_x=0.0, angular_z=-WIGGLE_ANGULAR_Z),
-                    finished=False,
-                    result=None,
-                )
+        if self._active.tool == "express":
+            command = self._express_command(elapsed)
+            if command is not None:
+                return IntentTick(command=command, finished=False, result=None)
             self._active = None
             return IntentTick(command=None, finished=True, result="completed")
 
-        if self._active.tool == "move_forward":
-            duration = (
-                self._active.duration_seconds
-                if self._active.duration_seconds is not None
-                else MOVE_FORWARD_DURATION
-            )
+        if self._active.tool == "move":
+            duration_seconds = self._active.duration_seconds
+            duration = abs(duration_seconds) if duration_seconds is not None else MOVE_DURATION
             if elapsed < duration:
+                linear_x = -MOVE_LINEAR_X if duration_seconds is not None and duration_seconds < 0 else MOVE_LINEAR_X
                 return IntentTick(
-                    command=MotionCommand(linear_x=MOVE_FORWARD_LINEAR_X, angular_z=0.0),
+                    command=MotionCommand(linear_x=linear_x, angular_z=0.0),
                     finished=False,
                     result=None,
                 )
@@ -240,6 +245,27 @@ class MotionIntentExecutor:
         self._active = None
         return IntentTick(command=None, finished=True, result="completed")
 
+    def _express_command(self, elapsed: float) -> MotionCommand | None:
+        """The wheel command for an in-progress express, or None when it has finished."""
+        kind = self._active.kind
+        if kind == "wiggle":
+            if elapsed < WIGGLE_HALF_DURATION:
+                return MotionCommand(linear_x=0.0, angular_z=WIGGLE_ANGULAR_Z)
+            if elapsed < 2 * WIGGLE_HALF_DURATION:
+                return MotionCommand(linear_x=0.0, angular_z=-WIGGLE_ANGULAR_Z)
+            return None
+        if kind == "spin":
+            if elapsed < SPIN_DURATION:
+                return MotionCommand(linear_x=0.0, angular_z=SPIN_ANGULAR_Z)
+            return None
+        if kind == "shake":
+            if elapsed < SHAKE_HALF_SWINGS * SHAKE_HALF_DURATION:
+                swing = int(elapsed / SHAKE_HALF_DURATION)
+                angular_z = SHAKE_ANGULAR_Z if swing % 2 == 0 else -SHAKE_ANGULAR_Z
+                return MotionCommand(linear_x=0.0, angular_z=angular_z)
+            return None
+        return None
+
 
 class MotionIntentBridge:
     """Unix-socket server thread that hands intents to the main control loop.
@@ -257,6 +283,7 @@ class MotionIntentBridge:
         self.socket_path = socket_path
         self._lock = threading.Lock()
         self._pending: dict[str, Any] | None = None
+        self._stop_requested = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._server: socket.socket | None = None
@@ -308,6 +335,26 @@ class MotionIntentBridge:
 
         return entry["request"], complete
 
+    def take_stop(self) -> bool:
+        """True once if a stop was requested since the last check. Clears the flag."""
+        with self._lock:
+            if not self._stop_requested:
+                return False
+            self._stop_requested = False
+            return True
+
+    def discard_pending(self) -> None:
+        """Drop a queued request that has not started yet, replying that it was stopped.
+
+        A stop cancels the active move, but a request can also be sitting in the single
+        pending slot waiting to start. Without this, the loop would stop the robot and
+        then immediately begin the queued move on the next tick.
+        """
+        pending = self.take_pending()
+        if pending is not None:
+            _, complete = pending
+            complete({"ok": False, "error": "stopped"})
+
     def _serve(self) -> None:
         while not self._stop.is_set():
             try:
@@ -316,10 +363,20 @@ class MotionIntentBridge:
                 continue
             except OSError:
                 return
-            try:
-                self._handle_connection(conn)
-            finally:
-                conn.close()
+            # Each connection runs on its own thread. A normal motion request blocks
+            # inside _handle_connection until the move finishes, so handling it inline
+            # here would stall accept() and a later stop could not be picked up until
+            # the move was already done. Per-connection threads keep the stop fast-path
+            # actually fast.
+            threading.Thread(
+                target=self._serve_connection, args=(conn,), name="motion-intent-conn", daemon=True
+            ).start()
+
+    def _serve_connection(self, conn: socket.socket) -> None:
+        try:
+            self._handle_connection(conn)
+        finally:
+            conn.close()
 
     def _handle_connection(self, conn: socket.socket) -> None:
         conn.settimeout(2.0)
@@ -347,8 +404,19 @@ class MotionIntentBridge:
             return
 
         tool = request.get("tool", "")
+        # Stop is a fast-path: it must take effect even while a motion is in flight,
+        # so it never queues behind the single _pending slot. The main loop picks up
+        # the flag on its next tick and cancels whatever is moving.
+        if tool == "stop":
+            with self._lock:
+                self._stop_requested = True
+            self._send(conn, {"ok": True, "result": "stopping"})
+            return
         if tool not in KNOWN_TOOLS:
             self._send(conn, {"ok": False, "error": "unknown_tool"})
+            return
+        if tool == "express" and request.get("kind") not in EXPRESS_KINDS:
+            self._send(conn, {"ok": False, "error": "invalid_kind"})
             return
         if tool == "diagnostic_turn":
             direction = request.get("direction")
@@ -363,12 +431,12 @@ class MotionIntentBridge:
             ):
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return
-        if tool == "move_forward":
+        if tool == "move":
             duration_seconds = request.get("duration_seconds")
             if duration_seconds is not None and (
                 not isinstance(duration_seconds, (int, float))
                 or isinstance(duration_seconds, bool)
-                or not MOVE_FORWARD_MIN_DURATION <= duration_seconds <= MOVE_FORWARD_MAX_DURATION
+                or not MOVE_MIN_DURATION <= abs(duration_seconds) <= MOVE_MAX_DURATION
             ):
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return

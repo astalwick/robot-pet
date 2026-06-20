@@ -19,14 +19,41 @@ from dataclasses import dataclass
 from typing import Any
 
 from voice.assistant import (
+    CHECK_HEALTH_TOOL,
+    CHECK_HEALTH_TOOL_NAME,
+    CHECK_SURROUNDINGS_TOOL,
+    CHECK_SURROUNDINGS_TOOL_NAME,
+    END_SESSION_TOOL,
     END_SESSION_TOOL_NAME,
+    EXPRESS_TOOL,
+    FACE_ME_TOOL,
     FACE_ME_TOOL_NAME,
-    INSPECT_ROBOT_TOOL_NAME,
-    LOOK_AROUND_TOOL_NAME,
+    LOOK_TOOL,
+    LOOK_TOOL_NAME,
     MOTION_TOOL_NAMES,
+    MOVE_TOOL,
+    SCAN_TOOL,
+    SCAN_TOOL_NAME,
+    START_GOAL_TOOL,
+    STOP_TOOL,
+    STOP_TOOL_NAME,
+    TURN_TOOL,
     VoiceState,
-    inspect_robot_snapshot,
+    WEB_SEARCH_TOOL,
+    check_health_snapshot,
+    check_surroundings_snapshot,
 )
+
+
+# The camera is a wide-angle Pi Camera 3, so a coarse step still overlaps coverage
+# between snapshots. A full 360 scan is four snapshots, not a fine sweep.
+SCAN_STEP_DEGREES = 90.0
+
+# A scan can never need to sweep more than one full turn: past 360 degrees you are
+# just re-photographing what you already saw. Capping here also bounds how many
+# blocking turns a single scan call can run, since the goal runner's time budget
+# only wraps model calls, not the turns inside one dispatch.
+SCAN_MAX_DEGREES = 360.0
 
 
 INSPECT_SPEAKER_DIRECTION_TOOL_NAME = "inspect_speaker_direction"
@@ -48,6 +75,32 @@ INSPECT_SPEAKER_DIRECTION_TOOL = {
     },
     "strict": True,
 }
+
+
+# One source of truth for the robot's tool surface. Each tool carries two flags:
+# whether it is offered on the normal assistant turn, and whether it is offered to
+# the iterative goal runner. ASSISTANT_TOOLS and AGENT_TOOLS are filtered views of
+# this single list, so the two surfaces can never silently drift apart.
+#
+#                                     assistant turn   goal runner
+ROBOT_TOOLS = [
+    (END_SESSION_TOOL,                  True,           False),
+    (EXPRESS_TOOL,                      True,           True),
+    (MOVE_TOOL,                         True,           True),
+    (TURN_TOOL,                         True,           True),
+    (STOP_TOOL,                         True,           True),
+    (SCAN_TOOL,                         False,          True),
+    (LOOK_TOOL,                         True,           True),
+    (CHECK_HEALTH_TOOL,                 True,           True),
+    (CHECK_SURROUNDINGS_TOOL,           True,           True),
+    (FACE_ME_TOOL,                      True,           True),
+    (INSPECT_SPEAKER_DIRECTION_TOOL,    True,           True),
+    (START_GOAL_TOOL,                   True,           False),
+    (WEB_SEARCH_TOOL,                   True,           True),
+]
+
+ASSISTANT_TOOLS = [tool for tool, on_assistant_turn, _goal in ROBOT_TOOLS if on_assistant_turn]
+AGENT_TOOLS = [tool for tool, _assistant, in_goal_runner in ROBOT_TOOLS if in_goal_runner]
 
 
 @dataclass
@@ -115,6 +168,48 @@ def _result(call: RobotToolCall, ok: bool, output: dict[str, Any]) -> RobotToolR
     return RobotToolResult(name=call.name, call_id=call.call_id, ok=ok, output=output)
 
 
+async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResult:
+    """Turn in coarse steps, capturing a camera snapshot at each, and return them all.
+
+    The wide-angle camera sees a lot per frame, so a full sweep is only a handful of
+    snapshots. We snapshot first, then turn, so the first frame is the starting view.
+    """
+    if context.camera_snapshot_caller is None:
+        return _result(call, False, {"ok": False, "error": "camera_snapshot_unavailable"})
+    if context.motion_intent_caller is None:
+        return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
+
+    total = min(abs(call.arguments.get("degrees") or 360.0), SCAN_MAX_DEGREES)
+    captures = max(1, round(total / SCAN_STEP_DEGREES))
+    step = total / captures
+
+    image_parts: list[dict[str, Any]] = []
+    heading = 0.0
+    for index in range(captures):
+        try:
+            jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
+        except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
+            return _result(call, False, {"ok": False, "error": str(exc)})
+        data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+        image_parts.append(
+            {"type": "input_text", "text": f"Scan snapshot {index + 1} of {captures}, facing {round(heading)} degrees from the start."}
+        )
+        image_parts.append({"type": "input_image", "image_url": data_url})
+
+        turn = await asyncio.to_thread(context.motion_intent_caller, "turn", degrees=step)
+        if turn.get("ok") is False:
+            return _result(call, False, {"ok": False, "error": turn.get("error", "turn_failed")})
+        heading += step
+
+    return RobotToolResult(
+        name=call.name,
+        call_id=call.call_id,
+        ok=True,
+        output={"ok": True, "snapshots": captures, "degrees_covered": round(heading)},
+        image_parts=image_parts,
+    )
+
+
 async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResult:
     name = call.name
 
@@ -130,7 +225,16 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
         result = await asyncio.to_thread(context.motion_intent_caller, name, **call.arguments)
         return _result(call, result.get("ok") is not False, result)
 
-    if name == LOOK_AROUND_TOOL_NAME:
+    if name == STOP_TOOL_NAME:
+        # Routed through the motion caller like any intent, but kept out of
+        # MOTION_TOOL_NAMES so the assistant never gates it on playback: a stop must
+        # halt the robot the instant it is requested.
+        if context.motion_intent_caller is None:
+            return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
+        result = await asyncio.to_thread(context.motion_intent_caller, name)
+        return _result(call, result.get("ok") is not False, result)
+
+    if name == LOOK_TOOL_NAME:
         if context.camera_snapshot_caller is None:
             return _result(call, False, {"ok": False, "error": "camera_snapshot_unavailable"})
         try:
@@ -150,14 +254,18 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
             image_parts=image_parts,
         )
 
-    if name == INSPECT_ROBOT_TOOL_NAME:
+    if name == SCAN_TOOL_NAME:
+        return await _scan(call, context)
+
+    if name == CHECK_HEALTH_TOOL_NAME or name == CHECK_SURROUNDINGS_TOOL_NAME:
         if context.robot_inspection_caller is None:
             return _result(call, False, {"ok": False, "error": "telemetry_unavailable"})
         try:
             snapshot = await asyncio.to_thread(context.robot_inspection_caller)
         except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
-        result = inspect_robot_snapshot(snapshot)
+        build = check_health_snapshot if name == CHECK_HEALTH_TOOL_NAME else check_surroundings_snapshot
+        result = build(snapshot)
         return _result(call, result.get("ok") is not False, result)
 
     if name == FACE_ME_TOOL_NAME:

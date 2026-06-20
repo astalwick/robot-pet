@@ -19,8 +19,8 @@ from control.motion_intent import (
     DIAGNOSTIC_TURN_MIN_DURATION,
     FACE_ME_ANGULAR_Z,
     FACE_ME_DEGREES_PER_SECOND,
-    MOVE_FORWARD_DURATION,
-    MOVE_FORWARD_LINEAR_X,
+    MOVE_DURATION,
+    MOVE_LINEAR_X,
     TURN_ANGULAR_Z,
     TURN_DEGREES_PER_SECOND,
     TURN_MAX_DEGREES,
@@ -41,12 +41,12 @@ class MotionIntentExecutorTest(unittest.TestCase):
 
     def test_second_request_while_busy_rejected(self):
         executor = MotionIntentExecutor()
-        self.assertIsNone(executor.start("wiggle", now=0.0))
-        self.assertEqual(executor.start("wiggle", now=0.05), "busy")
+        self.assertIsNone(executor.start("express", now=0.0, kind="wiggle"))
+        self.assertEqual(executor.start("express", now=0.05, kind="wiggle"), "busy")
 
     def test_cancel_clears_active_intent(self):
         executor = MotionIntentExecutor()
-        executor.start("wiggle", now=0.0)
+        executor.start("express", now=0.0, kind="wiggle")
         self.assertTrue(executor.is_active())
 
         executor.cancel()
@@ -55,7 +55,7 @@ class MotionIntentExecutorTest(unittest.TestCase):
 
     def test_reset_active_start_restarts_elapsed_time(self):
         executor = MotionIntentExecutor()
-        executor.start("wiggle", now=0.0)
+        executor.start("express", now=0.0, kind="wiggle")
 
         executor.reset_active_start(now=2.0)
         tick = executor.tick(now=2.1, gamepad_active=False)
@@ -63,9 +63,14 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(tick.command, MotionCommand(0.0, WIGGLE_ANGULAR_Z))
         self.assertFalse(tick.finished)
 
-    def test_wiggle_emits_left_then_right_then_completes(self):
+    def test_express_rejects_invalid_kind(self):
         executor = MotionIntentExecutor()
-        executor.start("wiggle", now=0.0)
+        self.assertEqual(executor.start("express", now=0.0, kind="nod"), "invalid_kind")
+        self.assertEqual(executor.start("express", now=0.0), "invalid_kind")
+
+    def test_express_wiggle_emits_left_then_right_then_completes(self):
+        executor = MotionIntentExecutor()
+        executor.start("express", now=0.0, kind="wiggle")
 
         first = executor.tick(now=0.1, gamepad_active=False)
         self.assertEqual(first.command, MotionCommand(0.0, WIGGLE_ANGULAR_Z))
@@ -80,21 +85,49 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(done.result, "completed")
         self.assertFalse(executor.is_active())
 
-    def test_move_forward_runs_for_duration_then_completes(self):
+    def test_move_runs_forward_for_duration_then_completes(self):
         executor = MotionIntentExecutor()
-        executor.start("move_forward", now=0.0)
+        executor.start("move", now=0.0, duration_seconds=1.0)
 
         running = executor.tick(now=0.1, gamepad_active=False)
-        self.assertEqual(running.command, MotionCommand(MOVE_FORWARD_LINEAR_X, 0.0))
+        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
         self.assertFalse(running.finished)
 
-        done = executor.tick(now=MOVE_FORWARD_DURATION + 0.05, gamepad_active=False)
+        done = executor.tick(now=1.05, gamepad_active=False)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
+    def test_move_negative_duration_drives_backward(self):
+        executor = MotionIntentExecutor()
+        executor.start("move", now=0.0, duration_seconds=-1.0)
+
+        running = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(-MOVE_LINEAR_X, 0.0))
+        self.assertFalse(running.finished)
+
+        done = executor.tick(now=1.05, gamepad_active=False)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+
+    def test_move_default_duration_when_unspecified(self):
+        executor = MotionIntentExecutor()
+        executor.start("move", now=0.0)
+
+        running = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
+
+        done = executor.tick(now=MOVE_DURATION + 0.05, gamepad_active=False)
+        self.assertTrue(done.finished)
+
+    def test_move_rejects_out_of_range_duration(self):
+        executor = MotionIntentExecutor()
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=0.1), "invalid_duration")
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=-0.1), "invalid_duration")
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=99.0), "invalid_duration")
+
     def test_gamepad_active_preempts_mid_intent(self):
         executor = MotionIntentExecutor()
-        executor.start("move_forward", now=0.0)
+        executor.start("move", now=0.0, duration_seconds=1.0)
 
         tick = executor.tick(now=0.1, gamepad_active=True)
         self.assertTrue(tick.finished)
@@ -269,7 +302,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
         return thread, result_holder
 
     def test_request_arrives_at_main_loop_and_completion_reaches_client(self):
-        thread, holder = self._send_request_threaded("wiggle")
+        thread, holder = self._send_request_threaded("express", kind="wiggle")
 
         deadline = time.monotonic() + 2.0
         pending = None
@@ -280,7 +313,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
         self.assertIsNotNone(pending)
 
         request, complete = pending
-        self.assertEqual(request, {"tool": "wiggle"})
+        self.assertEqual(request, {"tool": "express", "kind": "wiggle"})
         complete({"ok": True, "result": "completed"})
 
         thread.join(timeout=2.0)
@@ -412,8 +445,54 @@ class MotionIntentBridgeTest(unittest.TestCase):
                 {"ok": False, "error": "invalid_relative_degrees"},
             )
 
+    def test_stop_replies_immediately_and_sets_flag(self):
+        result = request_motion_intent(self.socket_path, "stop", timeout=2.0)
+        self.assertEqual(result, {"ok": True, "result": "stopping"})
+        self.assertTrue(self.bridge.take_stop())
+        self.assertFalse(self.bridge.take_stop())
+
+    def test_stop_replies_while_a_motion_request_is_still_in_flight(self):
+        # Occupy the single pending slot with a move that never completes, mirroring a
+        # real drive that is mid-motion. The stop must still come straight back.
+        move_thread, _ = self._send_request_threaded("move", duration_seconds=2.0)
+
+        deadline = time.monotonic() + 2.0
+        pending = None
+        while pending is None and time.monotonic() < deadline:
+            pending = self.bridge.take_pending()
+            if pending is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(pending)
+
+        result = request_motion_intent(self.socket_path, "stop", timeout=2.0)
+        self.assertEqual(result, {"ok": True, "result": "stopping"})
+        self.assertTrue(self.bridge.take_stop())
+
+        # Release the in-flight move so its client thread can finish cleanly.
+        _, complete = pending
+        complete({"ok": False, "error": "stopped"})
+        move_thread.join(timeout=2.0)
+
+    def test_discard_pending_drops_queued_request_with_stopped(self):
+        thread, holder = self._send_request_threaded("move", duration_seconds=1.0)
+
+        deadline = time.monotonic() + 2.0
+        while self.bridge._pending is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertIsNotNone(self.bridge._pending)
+
+        self.bridge.discard_pending()
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": False, "error": "stopped"})
+
+    def test_express_rejects_invalid_kind_at_socket(self):
+        self.assertEqual(
+            request_motion_intent(self.socket_path, "express", timeout=2.0, kind="nod"),
+            {"ok": False, "error": "invalid_kind"},
+        )
+
     def test_completion_failure_result_reaches_client(self):
-        thread, holder = self._send_request_threaded("move_forward")
+        thread, holder = self._send_request_threaded("move", duration_seconds=1.0)
 
         deadline = time.monotonic() + 2.0
         pending = None
@@ -474,10 +553,10 @@ class MotionIntentClientErrorTest(unittest.TestCase):
 class MotionToolDispatchTest(unittest.TestCase):
     def test_motion_tool_calls_caller_and_feeds_result_back(self):
         async def run():
-            calls: list[str] = []
+            calls: list[tuple[str, dict]] = []
 
-            def fake_caller(tool):
-                calls.append(tool)
+            def fake_caller(tool, **params):
+                calls.append((tool, params))
                 return {"ok": True, "result": "completed"}
 
             class FakeResponses:
@@ -491,7 +570,10 @@ class MotionToolDispatchTest(unittest.TestCase):
                             SimpleNamespace(
                                 type="response.output_item.done",
                                 item=SimpleNamespace(
-                                    type="function_call", name="wiggle", call_id="call_1"
+                                    type="function_call",
+                                    name="express",
+                                    arguments='{"kind": "wiggle"}',
+                                    call_id="call_1",
                                 ),
                             ),
                             SimpleNamespace(
@@ -526,7 +608,7 @@ class MotionToolDispatchTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(calls, ["wiggle"])
+            self.assertEqual(calls, [("express", {"kind": "wiggle"})])
             self.assertEqual(chunks, ["Wiggled."])
             second_input = fake_responses.requests[1]["input"]
             self.assertEqual(second_input[0]["type"], "function_call_output")
@@ -552,7 +634,7 @@ class MotionToolDispatchTest(unittest.TestCase):
                                 type="response.output_item.done",
                                 item=SimpleNamespace(
                                     type="function_call",
-                                    name="move_forward",
+                                    name="move",
                                     call_id="call_x",
                                 ),
                             ),

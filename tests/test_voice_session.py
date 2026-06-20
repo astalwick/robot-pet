@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.voice import VoiceConfig
 from voice.assistant import (
-    ASSISTANT_TOOLS,
     OPERATIONAL_SYSTEM_PROMPT,
     AgentGoalRequest,
     ConversationHistory,
@@ -19,6 +18,7 @@ from voice.assistant import (
     compose_system_prompt,
     handle_scribe_events,
 )
+from voice.tools import ASSISTANT_TOOLS
 from voice.agent_runner import run_agent_goal
 from voice.session import VoiceSession
 from voice.turn_policy import TurnPolicy
@@ -153,7 +153,19 @@ class AssistantToolsTest(unittest.TestCase):
         tool_names = {tool["name"] for tool in ASSISTANT_TOOLS if tool.get("type") == "function"}
         self.assertEqual(
             tool_names,
-            {"end_session", "wiggle", "move_forward", "turn", "look_around", "inspect_robot", "face_me", "start_goal"},
+            {
+                "end_session",
+                "express",
+                "move",
+                "turn",
+                "stop",
+                "look",
+                "check_health",
+                "check_surroundings",
+                "face_me",
+                "inspect_speaker_direction",
+                "start_goal",
+            },
         )
 
 
@@ -483,7 +495,7 @@ class GoalRunnerIntegrationTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return goal_step(narration="Heading your way.", tool="move_forward")
+                return goal_step(narration="Heading your way.", tool="move")
             return goal_final("I am right next to you now.")
 
         async def run():
@@ -496,7 +508,7 @@ class GoalRunnerIntegrationTest(unittest.TestCase):
             self.assertEqual(exchanges[0].user_text, "Come over here.")
             self.assertEqual(exchanges[0].assistant_text, "I am right next to you now.")
             # The runner actually drove a tool, narrated, and spoke its final line.
-            self.assertEqual(h["moves"], ["move_forward"])
+            self.assertEqual(h["moves"], ["move"])
             self.assertIn("Heading your way.", h["spoken"])
             self.assertIn("I am right next to you now.", h["spoken"])
 

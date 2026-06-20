@@ -11,11 +11,12 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import (
+    CHECK_HEALTH_TOOL_NAME,
+    CHECK_SURROUNDINGS_TOOL_NAME,
     END_SESSION_TOOL_NAME,
     FACE_ME_TOOL_NAME,
-    INSPECT_ROBOT_TOOL_NAME,
-    LOOK_AROUND_TOOL_NAME,
-    MOVE_FORWARD_TOOL_NAME,
+    LOOK_TOOL_NAME,
+    MOVE_TOOL_NAME,
     START_GOAL_TOOL_NAME,
     ActiveGoal,
     ActiveTurn,
@@ -657,7 +658,7 @@ class AssistantStreamingTest(unittest.TestCase):
                                 type="response.output_item.done",
                                 item=SimpleNamespace(
                                     type="function_call",
-                                    name=INSPECT_ROBOT_TOOL_NAME,
+                                    name=CHECK_HEALTH_TOOL_NAME,
                                     call_id="call_inspect",
                                 ),
                             ),
@@ -692,7 +693,7 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(chunks, ["I feel fine."])
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output["battery"]["status"], "ok")
-            self.assertFalse(tool_output["sensors"]["available"])
+            self.assertNotIn("sensors", tool_output)
 
         asyncio.run(run())
 
@@ -711,7 +712,7 @@ class AssistantStreamingTest(unittest.TestCase):
                                 type="response.output_item.done",
                                 item=SimpleNamespace(
                                     type="function_call",
-                                    name=LOOK_AROUND_TOOL_NAME,
+                                    name=LOOK_TOOL_NAME,
                                     call_id="call_look",
                                 ),
                             ),
@@ -1222,7 +1223,7 @@ class AssistantStreamingTest(unittest.TestCase):
                                 type="response.output_item.done",
                                 item=SimpleNamespace(
                                     type="function_call",
-                                    name=LOOK_AROUND_TOOL_NAME,
+                                    name=LOOK_TOOL_NAME,
                                     call_id="call_look",
                                 ),
                             ),
@@ -3413,30 +3414,30 @@ class RobotToolDispatchTest(unittest.TestCase):
                 voice_state=VoiceState("test-voice"),
                 motion_intent_caller=motion_intent_caller,
             )
-            result = await dispatch_tool(self._call(MOVE_FORWARD_TOOL_NAME), context)
+            result = await dispatch_tool(self._call(MOVE_TOOL_NAME), context)
 
-            self.assertEqual(calls, [MOVE_FORWARD_TOOL_NAME])
+            self.assertEqual(calls, [MOVE_TOOL_NAME])
             self.assertTrue(result.ok)
-            self.assertEqual(result.output, {"ok": True, "intent": MOVE_FORWARD_TOOL_NAME})
+            self.assertEqual(result.output, {"ok": True, "intent": MOVE_TOOL_NAME})
 
         asyncio.run(run())
 
     def test_motion_tool_missing_caller_reports_error(self):
         async def run():
             context = VoiceToolContext(voice_state=VoiceState("test-voice"))
-            result = await dispatch_tool(self._call(MOVE_FORWARD_TOOL_NAME), context)
+            result = await dispatch_tool(self._call(MOVE_TOOL_NAME), context)
             self.assertFalse(result.ok)
             self.assertEqual(result.output, {"ok": False, "error": "motion_caller_missing"})
 
         asyncio.run(run())
 
-    def test_look_around_produces_image_parts(self):
+    def test_look_produces_image_parts(self):
         async def run():
             context = VoiceToolContext(
                 voice_state=VoiceState("test-voice"),
                 camera_snapshot_caller=lambda: b"jpeg-bytes",
             )
-            result = await dispatch_tool(self._call(LOOK_AROUND_TOOL_NAME), context)
+            result = await dispatch_tool(self._call(LOOK_TOOL_NAME), context)
 
             self.assertTrue(result.ok)
             self.assertEqual(result.output, {"ok": True, "image_attached": True})
@@ -3446,13 +3447,13 @@ class RobotToolDispatchTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_look_around_image_becomes_agent_observation(self):
+    def test_look_image_becomes_agent_observation(self):
         async def run():
             context = VoiceToolContext(
                 voice_state=VoiceState("test-voice"),
                 camera_snapshot_caller=lambda: b"jpeg-bytes",
             )
-            result = await dispatch_tool(self._call(LOOK_AROUND_TOOL_NAME), context)
+            result = await dispatch_tool(self._call(LOOK_TOOL_NAME), context)
             observation = agent_observation(result)
 
             # The image rides as a real input_image part, not base64 in the text.
@@ -3461,7 +3462,7 @@ class RobotToolDispatchTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_inspect_robot_returns_summarized_telemetry(self):
+    def test_check_health_returns_battery_not_surroundings(self):
         async def run():
             context = VoiceToolContext(
                 voice_state=VoiceState("test-voice"),
@@ -3470,11 +3471,50 @@ class RobotToolDispatchTest(unittest.TestCase):
                     "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
                 },
             )
-            result = await dispatch_tool(self._call(INSPECT_ROBOT_TOOL_NAME), context)
+            result = await dispatch_tool(self._call(CHECK_HEALTH_TOOL_NAME), context)
 
             self.assertTrue(result.ok)
             self.assertEqual(result.output["battery"]["status"], "ok")
+            self.assertNotIn("sensors", result.output)
+
+        asyncio.run(run())
+
+    def test_check_surroundings_returns_sensors_not_battery(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                robot_inspection_caller=lambda: {
+                    "sources": {"gamepad_teleop": {"stale": False}},
+                    "motor_battery": {"status": "ok", "pack_voltage": 11.8, "cell_voltage": 3.93},
+                },
+            )
+            result = await dispatch_tool(self._call(CHECK_SURROUNDINGS_TOOL_NAME), context)
+
+            self.assertTrue(result.ok)
             self.assertFalse(result.output["sensors"]["available"])
+            self.assertNotIn("battery", result.output)
+
+        asyncio.run(run())
+
+    def test_scan_caps_total_sweep_at_one_full_turn(self):
+        async def run():
+            turns = []
+
+            def motion_intent_caller(name, **kwargs):
+                turns.append(kwargs.get("degrees"))
+                return {"ok": True}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+                motion_intent_caller=motion_intent_caller,
+            )
+            # A wildly oversized argument must not turn into a hundred sequential turns.
+            result = await dispatch_tool(self._call("scan", arguments={"degrees": 10000}), context)
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output["degrees_covered"], 360)
+            self.assertEqual(len(turns), 4)
 
         asyncio.run(run())
 

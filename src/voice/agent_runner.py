@@ -28,17 +28,11 @@ from typing import Any
 
 from lib.log import setup_logging
 from voice.assistant import (
-    FACE_ME_TOOL,
-    INSPECT_ROBOT_TOOL,
-    LOOK_AROUND_TOOL,
-    MOVE_FORWARD_TOOL,
     OPENAI_CREATE_RETRY_DELAY_SECS,
-    TURN_TOOL,
-    WIGGLE_TOOL,
     VoiceState,
 )
 from voice.tools import (
-    INSPECT_SPEAKER_DIRECTION_TOOL,
+    AGENT_TOOLS,
     RobotToolCall,
     VoiceToolContext,
     dispatch_tool,
@@ -48,16 +42,6 @@ from voice.tools import (
 
 log = setup_logging("robot-voice")
 
-
-AGENT_TOOLS = [
-    MOVE_FORWARD_TOOL,
-    TURN_TOOL,
-    WIGGLE_TOOL,
-    FACE_ME_TOOL,
-    INSPECT_ROBOT_TOOL,
-    LOOK_AROUND_TOOL,
-    INSPECT_SPEAKER_DIRECTION_TOOL,
-]
 
 # The goal loop deliberates between physical actions, so it spends a little more
 # thinking time than the low-latency assistant turn, which runs with no reasoning.
@@ -86,9 +70,11 @@ AGENT_SYSTEM_PROMPT = """You are a small physical robot pet working toward a goa
 
 Use the tools to act and observe. Call one tool at a time. You get each tool's result back before you choose again.
 
-After any motion (move_forward, turn, face_me), call inspect_robot or look_around to observe the result before deciding the goal is finished. Do not assume a move succeeded.
+After any motion (move, turn, face_me), call check_surroundings or look to observe the result before deciding the goal is finished. Do not assume a move succeeded.
 
-Prefer the motion stack's own signals: when deciding whether you are blocked or close to something, trust drive.safety_blocked and drive.safety_reason from inspect_robot over inventing a raw distance threshold.
+Your camera is a wide-angle Pi Camera 3, so a single look already sees much more than a normal lens. To survey a whole space, use scan, which turns in a few coarse steps and returns a snapshot at each.
+
+Prefer the motion stack's own signals: when deciding whether you are blocked or close to something, trust drive.safety_blocked and drive.safety_reason from check_health over inventing a raw distance threshold.
 
 A failed tool is an observation, not the end. Try a different tool or finish. Do not repeat the same failing action.
 

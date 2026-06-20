@@ -99,14 +99,14 @@ class NativeToolMechanicsTest(unittest.TestCase):
         self.assertEqual(first["tools"], AGENT_TOOLS)
         self.assertIs(first["parallel_tool_calls"], False)
 
-    def test_move_forward_runs_with_arguments_parsed_from_json_string(self):
+    def test_move_runs_with_arguments_parsed_from_json_string(self):
         captured: dict = {}
         steps = {"n": 0}
 
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move_forward", arguments={"distance_m": 0.5})
+                return call("move", arguments={"distance_m": 0.5})
             return final("Done.")
 
         def move(_name, **kwargs):
@@ -133,7 +133,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move_forward", call_id="call_42")
+                return call("move", call_id="call_42")
             return final("Done.")
 
         openai = FakeOpenAI(responder)
@@ -152,13 +152,13 @@ class NativeToolMechanicsTest(unittest.TestCase):
         self.assertEqual(observation["type"], "function_call_output")
         self.assertEqual(observation["call_id"], "call_42")
 
-    def test_repeated_move_forward_until_observation_makes_it_done(self):
+    def test_repeated_move_until_observation_makes_it_done(self):
         moves: list[str] = []
 
         def responder(_input_items):
             if len(moves) >= 3:
                 return final("I am right next to you now.")
-            return call("move_forward")
+            return call("move")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -173,16 +173,16 @@ class NativeToolMechanicsTest(unittest.TestCase):
         )
 
         self.assertEqual(result, "I am right next to you now.")
-        self.assertEqual(moves, ["move_forward", "move_forward", "move_forward"])
+        self.assertEqual(moves, ["move", "move", "move"])
         self.assertGreater(len(openai.responses.calls), 3)
 
-    def test_look_around_image_is_sent_as_image_input_not_json(self):
+    def test_look_image_is_sent_as_image_input_not_json(self):
         snapshots: list[bool] = []
 
         def responder(_input_items):
             if snapshots:
                 return final("I see the ball by the couch.")
-            return call("look_around")
+            return call("look")
 
         def snapshot():
             snapshots.append(True)
@@ -243,7 +243,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
         def responder(_input_items):
             if failures:
                 return final("The drive is blocked, so I stopped.")
-            return call("move_forward")
+            return call("move")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -286,7 +286,7 @@ class ReasonsWellTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move_forward", call_id="call_x")
+                return call("move", call_id="call_x")
             return final("Done.")
 
         openai = FakeOpenAI(responder)
@@ -379,7 +379,7 @@ class ReasonsWellTest(unittest.TestCase):
         def responder(_input_items):
             if len(moves) >= 3:
                 return final("Reached you.")
-            return call("move_forward")
+            return call("move")
 
         openai = FakeOpenAI(responder)
         run(
@@ -412,7 +412,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Reached the goal.")
-            return call("move_forward", narration="Heading over now.")
+            return call("move", narration="Heading over now.")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -447,7 +447,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move_forward", narration="On my way.")
+            return call("move", narration="On my way.")
 
         def move(_name):
             order.append("tool")
@@ -483,7 +483,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move_forward", narration="On my way.")
+            return call("move", narration="On my way.")
 
         openai = FakeOpenAI(responder)
         run(
@@ -517,7 +517,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move_forward", narration="Working on it.")
+            return call("move", narration="Working on it.")
 
         openai = FakeOpenAI(responder)
         run(
@@ -550,7 +550,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Reached the goal.")
-            return call("move_forward", narration="On my way.")
+            return call("move", narration="On my way.")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -586,7 +586,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             stop_event.set()
             return {"ok": True}
 
-        openai = FakeOpenAI(lambda _input: call("move_forward", narration="Working."))
+        openai = FakeOpenAI(lambda _input: call("move", narration="Working."))
         result = run(
             run_agent_goal(
                 goal="Move.",
@@ -606,7 +606,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
 
 class GuardRailsTest(unittest.TestCase):
     def test_step_limit_returns_spoken_final(self):
-        openai = FakeOpenAI(lambda _input: call("move_forward"))
+        openai = FakeOpenAI(lambda _input: call("move"))
         result = run(
             run_agent_goal(
                 goal="Keep going.",
@@ -624,7 +624,7 @@ class GuardRailsTest(unittest.TestCase):
 
     def test_timeout_during_model_call_returns_final_without_running_tools(self):
         moves: list[str] = []
-        openai = FakeOpenAI(lambda _input: call("move_forward"))
+        openai = FakeOpenAI(lambda _input: call("move"))
         # The model call itself overruns the budget; the decision it eventually
         # returns must not be acted on.
         openai.responses.delay = 0.06
@@ -646,7 +646,7 @@ class GuardRailsTest(unittest.TestCase):
     def test_stop_event_set_before_start_runs_nothing(self):
         stop_event = asyncio.Event()
         stop_event.set()
-        openai = FakeOpenAI(lambda _input: call("move_forward"))
+        openai = FakeOpenAI(lambda _input: call("move"))
         result = run(
             run_agent_goal(
                 goal="Keep going.",

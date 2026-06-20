@@ -240,6 +240,7 @@ class MotionRunner:
         self._set_drive_state("waiting_for_roboclaw")
         while not self.stop_requested:
             now = self.clock()
+            self._service_stop_requests()
             self._service_intent_requests(now)
             self._fail_intent_if_roboclaw_wait_timed_out(now)
             drive = self._get_drive_command()
@@ -276,6 +277,7 @@ class MotionRunner:
             cycle_started = self.clock()
             now = cycle_started
             self.loop_samples.append(now)
+            self._service_stop_requests()
             self._service_intent_requests(now)
 
             drive = self._get_drive_command()
@@ -545,11 +547,21 @@ class MotionRunner:
             duration_seconds=request.get("duration_seconds"),
             relative_degrees=request.get("relative_degrees"),
             degrees=request.get("degrees"),
+            kind=request.get("kind"),
         )
         if error is not None:
             complete({"ok": False, "error": error})
             return
         self.pending_intent_complete = complete
+
+    def _service_stop_requests(self) -> None:
+        # A stop arrives out-of-band: it must cancel an intent that is mid-drive, so
+        # it runs every loop, even while pending_intent_complete is set.
+        if self.intent_bridge is None or not self.intent_bridge.take_stop():
+            return
+        self.intent_executor.cancel()
+        self._fail_pending_intent("stopped")
+        self.intent_bridge.discard_pending()
 
     def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
         if not self.intent_executor.is_active():

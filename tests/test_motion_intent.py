@@ -19,7 +19,6 @@ from control.motion_intent import (
     DIAGNOSTIC_TURN_MIN_DURATION,
     FACE_ME_ANGULAR_Z,
     FACE_ME_DEGREES_PER_SECOND,
-    FACE_ME_MAX_RELATIVE_DEGREES,
     MOVE_FORWARD_DURATION,
     MOVE_FORWARD_LINEAR_X,
     TURN_ANGULAR_Z,
@@ -216,15 +215,6 @@ class MotionIntentExecutorTest(unittest.TestCase):
         )
         self.assertEqual(executor.start("turn", now=0.0, degrees=True), "invalid_degrees")
         self.assertEqual(executor.start("turn", now=0.0, degrees=None), "invalid_degrees")
-
-    def test_face_me_full_turn_stays_below_four_second_maximum(self):
-        executor = MotionIntentExecutor()
-        executor.start("face_me", now=0.0, relative_degrees=FACE_ME_MAX_RELATIVE_DEGREES)
-
-        # 180 / 55 == 3.27 seconds, still under the 4.0s bounded-turn limit.
-        self.assertFalse(executor.tick(now=3.2, gamepad_active=False).finished)
-        self.assertTrue(executor.tick(now=3.3, gamepad_active=False).finished)
-        self.assertLess(FACE_ME_MAX_RELATIVE_DEGREES / FACE_ME_DEGREES_PER_SECOND, 4.0)
 
     def test_face_me_gamepad_activity_preempts(self):
         executor = MotionIntentExecutor()

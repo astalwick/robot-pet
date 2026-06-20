@@ -891,7 +891,7 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_stream_openai_words_start_goal_drops_co_emitted_text(self):
+    def test_stream_openai_words_start_goal_carries_co_emitted_text_as_preamble(self):
         async def run():
             class FakeResponses:
                 def __init__(self):
@@ -929,8 +929,11 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            # The goal wins: co-emitted text is never spoken.
-            self.assertEqual(chunks, [AgentGoalRequest(goal="find the ball")])
+            # Text emitted alongside start_goal rides along as the goal's preamble,
+            # so the handoff opens with a spoken acknowledgement.
+            self.assertEqual(
+                chunks, [AgentGoalRequest(goal="find the ball", preamble="On it.")]
+            )
             self.assertEqual(len(fake_responses.calls), 1)
 
         asyncio.run(run())

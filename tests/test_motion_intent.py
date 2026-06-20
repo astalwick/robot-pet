@@ -21,9 +21,12 @@ from control.motion_intent import (
     FACE_ME_DEGREES_PER_SECOND,
     MOVE_DURATION,
     MOVE_LINEAR_X,
+    MOVE_MAX_DURATION,
+    MOVE_MIN_DURATION,
     TURN_ANGULAR_Z,
     TURN_DEGREES_PER_SECOND,
     TURN_MAX_DEGREES,
+    TURN_MIN_DEGREES,
     WIGGLE_ANGULAR_Z,
     WIGGLE_HALF_DURATION,
     MotionIntentBridge,
@@ -119,11 +122,33 @@ class MotionIntentExecutorTest(unittest.TestCase):
         done = executor.tick(now=MOVE_DURATION + 0.05, gamepad_active=False)
         self.assertTrue(done.finished)
 
-    def test_move_rejects_out_of_range_duration(self):
+    def test_move_clamps_out_of_range_duration(self):
+        # An over-short magnitude clamps up to the minimum and still drives forward.
         executor = MotionIntentExecutor()
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=0.1), "invalid_duration")
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=-0.1), "invalid_duration")
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=99.0), "invalid_duration")
+        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=0.1))
+        running = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
+        self.assertTrue(executor.tick(now=MOVE_MIN_DURATION + 0.05, gamepad_active=False).finished)
+
+        # A negative magnitude clamps to the minimum but keeps driving backward.
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=-0.1))
+        running = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(-MOVE_LINEAR_X, 0.0))
+        self.assertTrue(executor.tick(now=MOVE_MIN_DURATION + 0.05, gamepad_active=False).finished)
+
+        # An over-long magnitude clamps down to the maximum.
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=99.0))
+        self.assertFalse(executor.tick(now=MOVE_MAX_DURATION - 0.05, gamepad_active=False).finished)
+        self.assertTrue(executor.tick(now=MOVE_MAX_DURATION + 0.05, gamepad_active=False).finished)
+
+    def test_move_rejects_non_numeric_duration(self):
+        executor = MotionIntentExecutor()
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=True), "invalid_duration")
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds="far"), "invalid_duration")
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=float("nan")), "invalid_duration")
+        self.assertEqual(executor.start("move", now=0.0, duration_seconds=float("inf")), "invalid_duration")
 
     def test_gamepad_active_preempts_mid_intent(self):
         executor = MotionIntentExecutor()
@@ -240,14 +265,26 @@ class MotionIntentExecutorTest(unittest.TestCase):
         running = executor.tick(now=0.1, gamepad_active=False)
         self.assertEqual(running.command, MotionCommand(0.0, TURN_ANGULAR_Z))
 
-    def test_turn_rejects_invalid_degrees(self):
+    def test_turn_rejects_non_numeric_degrees(self):
         executor = MotionIntentExecutor()
-        self.assertEqual(executor.start("turn", now=0.0, degrees=0), "invalid_degrees")
-        self.assertEqual(
-            executor.start("turn", now=0.0, degrees=TURN_MAX_DEGREES + 1), "invalid_degrees"
-        )
         self.assertEqual(executor.start("turn", now=0.0, degrees=True), "invalid_degrees")
         self.assertEqual(executor.start("turn", now=0.0, degrees=None), "invalid_degrees")
+        self.assertEqual(executor.start("turn", now=0.0, degrees=float("nan")), "invalid_degrees")
+        self.assertEqual(executor.start("turn", now=0.0, degrees=float("inf")), "invalid_degrees")
+
+    def test_turn_clamps_out_of_range_degrees(self):
+        # Zero degrees clamps up to the minimum so a turn still happens.
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("turn", now=0.0, degrees=0))
+        duration = TURN_MIN_DEGREES / TURN_DEGREES_PER_SECOND
+        self.assertTrue(executor.tick(now=duration + 0.05, gamepad_active=False).finished)
+
+        # An over-large magnitude clamps down to a single full turn.
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("turn", now=0.0, degrees=TURN_MAX_DEGREES + 1))
+        duration = TURN_MAX_DEGREES / TURN_DEGREES_PER_SECOND
+        self.assertFalse(executor.tick(now=duration - 0.05, gamepad_active=False).finished)
+        self.assertTrue(executor.tick(now=duration + 0.05, gamepad_active=False).finished)
 
     def test_face_me_gamepad_activity_preempts(self):
         executor = MotionIntentExecutor()
@@ -391,15 +428,16 @@ class MotionIntentBridgeTest(unittest.TestCase):
         thread.join(timeout=2.0)
         self.assertEqual(holder[0], {"ok": True, "result": "completed"})
 
-    def test_turn_rejects_invalid_degrees_at_socket(self):
+    def test_turn_rejects_non_numeric_degrees_at_socket(self):
+        # The socket only type-checks; out-of-range magnitudes are clamped later by
+        # the executor, so only a non-numeric degrees value is rejected here. NaN and
+        # inf survive json round-trips but never finish a timed turn, so reject them too.
         self.assertEqual(
-            request_motion_intent(self.socket_path, "turn", timeout=2.0, degrees=0),
+            request_motion_intent(self.socket_path, "turn", timeout=2.0, degrees="lots"),
             {"ok": False, "error": "invalid_degrees"},
         )
         self.assertEqual(
-            request_motion_intent(
-                self.socket_path, "turn", timeout=2.0, degrees=TURN_MAX_DEGREES + 1
-            ),
+            request_motion_intent(self.socket_path, "turn", timeout=2.0, degrees=float("nan")),
             {"ok": False, "error": "invalid_degrees"},
         )
 

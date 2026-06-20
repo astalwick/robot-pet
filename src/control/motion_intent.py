@@ -15,6 +15,7 @@ will replace it with a proper `robot-motion` service.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import threading
@@ -72,15 +73,6 @@ def valid_relative_degrees(value: Any) -> bool:
         isinstance(value, (int, float))
         and not isinstance(value, bool)
         and -FACE_ME_MAX_RELATIVE_DEGREES <= value <= FACE_ME_MAX_RELATIVE_DEGREES
-    )
-
-
-def valid_turn_degrees(value: Any) -> bool:
-    """A real number (not a bool) with a turn magnitude we are willing to drive."""
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and TURN_MIN_DEGREES <= abs(value) <= TURN_MAX_DEGREES
     )
 
 
@@ -153,13 +145,25 @@ class MotionIntentExecutor:
             if (
                 not isinstance(duration_seconds, (int, float))
                 or isinstance(duration_seconds, bool)
-                or not MOVE_MIN_DURATION <= abs(duration_seconds) <= MOVE_MAX_DURATION
+                or not math.isfinite(duration_seconds)
             ):
                 return "invalid_duration"
+            # Clamp an out-of-range magnitude into the drivable band instead of
+            # rejecting it. An over-long move just drives the max rather than bouncing
+            # back as an error the caller has to notice and redo on the next step.
+            magnitude = min(max(abs(duration_seconds), MOVE_MIN_DURATION), MOVE_MAX_DURATION)
+            duration_seconds = magnitude if duration_seconds >= 0 else -magnitude
         if tool == "face_me" and not valid_relative_degrees(relative_degrees):
             return "invalid_relative_degrees"
-        if tool == "turn" and not valid_turn_degrees(degrees):
-            return "invalid_degrees"
+        if tool == "turn":
+            if (
+                not isinstance(degrees, (int, float))
+                or isinstance(degrees, bool)
+                or not math.isfinite(degrees)
+            ):
+                return "invalid_degrees"
+            magnitude = min(max(abs(degrees), TURN_MIN_DEGREES), TURN_MAX_DEGREES)
+            degrees = magnitude if degrees >= 0 else -magnitude
         self._active = _ActiveIntent(
             tool=tool,
             started_at=now,
@@ -433,19 +437,27 @@ class MotionIntentBridge:
                 return
         if tool == "move":
             duration_seconds = request.get("duration_seconds")
+            # Range is clamped by the executor, so only the type is rejected here.
+            # NaN/inf pass json.loads but would never finish a timed move, so reject them.
             if duration_seconds is not None and (
                 not isinstance(duration_seconds, (int, float))
                 or isinstance(duration_seconds, bool)
-                or not MOVE_MIN_DURATION <= abs(duration_seconds) <= MOVE_MAX_DURATION
+                or not math.isfinite(duration_seconds)
             ):
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return
         if tool == "face_me" and not valid_relative_degrees(request.get("relative_degrees")):
             self._send(conn, {"ok": False, "error": "invalid_relative_degrees"})
             return
-        if tool == "turn" and not valid_turn_degrees(request.get("degrees")):
-            self._send(conn, {"ok": False, "error": "invalid_degrees"})
-            return
+        if tool == "turn":
+            degrees = request.get("degrees")
+            if (
+                not isinstance(degrees, (int, float))
+                or isinstance(degrees, bool)
+                or not math.isfinite(degrees)
+            ):
+                self._send(conn, {"ok": False, "error": "invalid_degrees"})
+                return
 
         done_event = threading.Event()
         holder: list[dict[str, Any] | None] = [None]

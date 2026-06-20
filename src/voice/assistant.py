@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from config.voice import DEFAULT_OPENAI_MODEL
+from control.motion_intent import MOVE_LINEAR_X
 from lib.log import setup_logging
 from voice.conversation import ConversationHistory
 from voice.turn_policy import DEFAULT_TURN_POLICY, TurnPolicy
@@ -22,8 +23,13 @@ log = setup_logging("robot-voice")
 OPENAI_MODEL = DEFAULT_OPENAI_MODEL
 DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 ALTERNATE_VOICE_ID = "Pj4KiuLufWTFgLAn5sAM"
-DEFAULT_OPERATIONAL_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "operational_system_prompt.md"
+CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
+DEFAULT_OPERATIONAL_PROMPT_PATH = CONFIG_DIR / "operational_system_prompt.md"
 OPERATIONAL_SYSTEM_PROMPT = DEFAULT_OPERATIONAL_PROMPT_PATH.read_text().strip()
+# Shared robot principles appended to both the assistant prompt and the goal
+# runner prompt, so the guidance lives in exactly one file and can't drift.
+SHARED_ROBOT_GUIDANCE_PATH = CONFIG_DIR / "shared_robot_guidance.md"
+SHARED_ROBOT_GUIDANCE = SHARED_ROBOT_GUIDANCE_PATH.read_text().strip()
 END_SESSION_TOOL_NAME = "end_session"
 EXPRESS_TOOL_NAME = "express"
 MOVE_TOOL_NAME = "move"
@@ -68,7 +74,7 @@ END_SESSION_UTTERANCES = {
 
 
 def compose_system_prompt(character_prose: str) -> str:
-    return f"{character_prose.strip()}\n\n{OPERATIONAL_SYSTEM_PROMPT}"
+    return f"{character_prose.strip()}\n\n{OPERATIONAL_SYSTEM_PROMPT}\n\n{SHARED_ROBOT_GUIDANCE}"
 
 
 def is_end_session_request(text: str, policy: TurnPolicy = DEFAULT_TURN_POLICY) -> bool:
@@ -191,10 +197,11 @@ MOVE_TOOL = {
     "type": "function",
     "name": MOVE_TOOL_NAME,
     "description": (
-        "Drive the robot straight at a slow, steady pace. The duration_seconds argument is "
-        "signed: positive values drive forward, negative values drive backward. The magnitude "
-        "sets how long it drives, from 0.5 seconds (a tiny nudge) up to 5 seconds (a longer "
-        "stroll). Use a small value for a little bump and a larger value to go farther."
+        f"Drive the robot straight at a slow, steady pace of about {MOVE_LINEAR_X} m/s. The "
+        "duration_seconds argument is signed: positive values drive forward, negative values "
+        "drive backward. The magnitude sets how long it drives, from 0.5 seconds (a tiny nudge) "
+        "up to 5 seconds (a longer stroll). To cover a distance, divide it by the speed: at "
+        f"{MOVE_LINEAR_X} m/s, one second moves roughly {MOVE_LINEAR_X} meters."
     ),
     "parameters": {
         "type": "object",
@@ -528,6 +535,10 @@ class AgentGoalRequest:
     """
 
     goal: str
+    # Any text the assistant produced alongside the start_goal call (e.g. "On it.").
+    # The goal runner speaks it as the opening acknowledgement so the handoff is not
+    # silent until the goal's first narration.
+    preamble: str = ""
 
 
 @dataclass
@@ -901,12 +912,15 @@ async def stream_openai_words(
             )
             log.info("tool call: %s", call.name)
 
-            # A goal handoff ends this turn: yield the request and stop. We do not
-            # send a function-call output back to the model, so any text it also
-            # produced in this response is dropped and never spoken — the goal wins.
+            # A goal handoff ends this turn: yield the request and stop. Any text the
+            # model produced alongside the call rides along as the goal's opening
+            # acknowledgement, so the handoff is not silent until the first narration.
             if call.name == START_GOAL_TOOL_NAME:
                 log.info("goal handoff: %s", call.arguments.get("goal", ""))
-                yield AgentGoalRequest(goal=str(call.arguments.get("goal", "")).strip())
+                yield AgentGoalRequest(
+                    goal=str(call.arguments.get("goal", "")).strip(),
+                    preamble="".join(response_text_chunks).strip(),
+                )
                 return
 
             # Physical motion must not fire for a speculative turn that gets
@@ -1068,6 +1082,7 @@ async def handle_scribe_events(
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     progress_speaker: Callable[..., Any] | None = None,
+    character_prose: str | Callable[[], str] | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> None:
     state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
@@ -1081,6 +1096,11 @@ async def handle_scribe_events(
 
     def current_system_prompt() -> str:
         return system_prompt() if callable(system_prompt) else system_prompt
+
+    def current_character_prose() -> str:
+        if character_prose is None:
+            return ""
+        return character_prose() if callable(character_prose) else character_prose
 
     def note_user_speech() -> None:
         nonlocal user_speech_on
@@ -1378,6 +1398,8 @@ async def handle_scribe_events(
                 speaker_direction_caller=speaker_direction_caller,
                 speak_progress=speak_progress,
                 is_speaking=lambda: current_playback() is not None,
+                character_prose=current_character_prose(),
+                preamble=goal_request.preamble,
             )
 
         goal.task = asyncio.create_task(run_goal())

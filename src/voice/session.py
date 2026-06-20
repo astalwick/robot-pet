@@ -78,6 +78,7 @@ class VoiceSession:
         self.card_map = personalities if personalities is not None else load_personalities()
         self.personality_name, voice_id, prose = lookup_personality(config.personality, self.card_map)
         self.system_prompt = compose_system_prompt(prose)
+        self.character_prose = prose
         self.voice_state = VoiceState(
             default_voice_id=voice_id,
             alternate_voice_id=config.alternate_voice_id or ALTERNATE_VOICE_ID,
@@ -97,6 +98,7 @@ class VoiceSession:
         """
         self.personality_name, voice_id, prose = lookup_personality(name, self.card_map)
         self.system_prompt = compose_system_prompt(prose)
+        self.character_prose = prose
         self.voice_state.set_voice(voice_id)
         log.info("personality switched: %s voice=%s", self.personality_name, voice_id)
         self.status_callback({"personality": self.personality_name})
@@ -161,6 +163,7 @@ class VoiceSession:
                     face_me_caller=self.face_me_caller,
                     speaker_direction_caller=self.speaker_direction_caller,
                     progress_speaker=progress_speaker,
+                    character_prose=lambda: self.character_prose,
                     openai_model=self.config.openai_model,
                     stop_playback_now=self.stop_playback_now,
                 )

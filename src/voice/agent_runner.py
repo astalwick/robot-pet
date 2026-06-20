@@ -28,7 +28,9 @@ from typing import Any
 
 from lib.log import setup_logging
 from voice.assistant import (
+    CONFIG_DIR,
     OPENAI_CREATE_RETRY_DELAY_SECS,
+    SHARED_ROBOT_GUIDANCE,
     VoiceState,
 )
 from voice.tools import (
@@ -66,21 +68,14 @@ NUDGE_TEXT = (
 )
 
 
-AGENT_SYSTEM_PROMPT = """You are a small physical robot pet working toward a goal over several steps. Your motion is real, timed, and happens in the world.
+AGENT_SYSTEM_PROMPT = (CONFIG_DIR / "agent_system_prompt.md").read_text().strip()
 
-Use the tools to act and observe. Call one tool at a time. You get each tool's result back before you choose again.
 
-After any motion (move, turn, face_me), call check_surroundings or look to observe the result before deciding the goal is finished. Do not assume a move succeeded.
-
-Your camera is a wide-angle Pi Camera 3, so a single look already sees much more than a normal lens. To survey a whole space, use scan, which turns in a few coarse steps and returns a snapshot at each.
-
-Prefer the motion stack's own signals: when deciding whether you are blocked or close to something, trust drive.safety_blocked and drive.safety_reason from check_health over inventing a raw distance threshold.
-
-A failed tool is an observation, not the end. Try a different tool or finish. Do not repeat the same failing action.
-
-You may speak short progress updates as plain text while you work. Keep spoken text easy to say out loud: no symbols, lists, or markdown.
-
-Finish by replying with a short final sentence and no tool call. Say what happened in plain words: that you reached the goal, or that you could not and why. Do not keep calling tools once you are done."""
+def compose_agent_prompt(character_prose: str) -> str:
+    """Build the goal runner's developer prompt: character voice, then the goal
+    runner's operational guidance, then the shared robot principles."""
+    blocks = [block for block in (character_prose.strip(), AGENT_SYSTEM_PROMPT, SHARED_ROBOT_GUIDANCE) if block]
+    return "\n\n".join(blocks)
 
 
 def _response_text(response: Any) -> str:
@@ -143,6 +138,8 @@ async def run_agent_goal(
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     speak_progress: Callable[[str], Awaitable[None]] | None = None,
     is_speaking: Callable[[], bool] | None = None,
+    character_prose: str = "",
+    preamble: str = "",
     max_steps: int = MAX_STEPS,
     max_seconds: float = MAX_SECONDS,
 ) -> str:
@@ -202,11 +199,16 @@ async def run_agent_goal(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + max_seconds
     input_items: list[dict[str, Any]] = [
-        {"role": "developer", "content": AGENT_SYSTEM_PROMPT},
+        {"role": "developer", "content": compose_agent_prompt(character_prose)},
         {"role": "user", "content": f"Goal: {goal}"},
     ]
     previous_response_id: str | None = None
     empty_responses = 0
+
+    # The acknowledgement the assistant spoke alongside start_goal plays here, riding
+    # the same narration lifecycle so it overlaps the first model call and is
+    # cancelled cleanly on exit instead of blocking the first tool.
+    launch_narration(preamble)
 
     try:
         for step in range(1, max_steps + 1):

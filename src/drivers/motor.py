@@ -132,6 +132,23 @@ class MotorDriver:
                 return None, None
             raise
 
+    def read_wheel_positions(self) -> tuple[int | None, int | None]:
+        """Read encoder positions in counts for both wheels.
+
+        Returns (left_count, right_count), or (None, None) if the read is not
+        acknowledged or a recoverable RoboClaw error occurs.
+        """
+        try:
+            result = self.controller.GetEncoders(self.address)
+            if not result[0]:
+                return None, None
+            return result[1], result[2]
+        except Exception as exc:
+            if is_recoverable_roboclaw_error(exc):
+                log.warning("RoboClaw encoder position read timed out: %s", exc)
+                return None, None
+            raise
+
     def read_max_qpps(self) -> tuple[int | None, int | None]:
         """Read configured velocity PID max speeds in encoder counts per second."""
         try:

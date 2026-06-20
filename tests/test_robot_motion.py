@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import unittest
+from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -9,7 +10,8 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
 from control.commands import MotionCommand, WheelSpeedCommand
 from control.motion_drive import DriveCommand
-from robot_motion import MotionConfig, MotionRunner
+from control.safety_gate import SafetyState
+from robot_motion import ENCODER_COUNTS_PER_METER, EncoderMove, MotionConfig, MotionRunner
 
 logging.getLogger("robot-motion").disabled = True
 
@@ -18,10 +20,22 @@ class FakeMotor:
     def __init__(self):
         self.commands = []
         self.telemetry_reads = []
+        # Encoder positions handed back one per read; once drained the last value
+        # repeats, so a stalled move keeps reporting the same counts. (None, None)
+        # simulates a recoverable read failure.
+        self.positions = deque()
+        self.last_position = (0, 0)
+        self.position_calls = 0
 
     def set_wheel_speeds(self, left_qpps, right_qpps):
         self.commands.append((left_qpps, right_qpps))
         return True
+
+    def read_wheel_positions(self):
+        self.position_calls += 1
+        if self.positions:
+            self.last_position = self.positions.popleft()
+        return self.last_position
 
     def read_wheel_speeds(self):
         self.telemetry_reads.append("speeds")
@@ -204,8 +218,9 @@ class RobotMotionTest(unittest.TestCase):
             clock=clock,
             telemetry_publisher=lambda *_args: True,
         )
-        runner.intent_executor.start("move", now=0.0)
+        runner.intent_executor.start("move", now=0.0, distance_meters=0.1)
         runner.pending_intent_complete = completed.append
+        motor.positions = deque([(0, 0), (50, 50), (100, 100), (200, 200)])
 
         runner._run_motor_loop(motor)
 
@@ -298,7 +313,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=lambda: 0.0,
             telemetry_publisher=lambda _socket, message: published.append(message) or True,
         )
-        runner.intent_executor.start("move", now=0.0)
+        runner.intent_executor.start("move", now=0.0, distance_meters=0.5)
         runner.pending_intent_complete = completed.append
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
@@ -450,6 +465,161 @@ class RobotMotionTest(unittest.TestCase):
         runner._run_motor_loop(motor)
 
         self.assertIn({"ok": True, "result": "completed"}, completed)
+
+    def _move_runner(self, motor, distance, completed):
+        runner = self._runner(motor)
+        runner.intent_executor.start("move", now=0.0, distance_meters=distance)
+        runner.pending_intent_complete = completed.append
+        return runner
+
+    def test_encoder_move_snapshots_start_before_checking_travel(self):
+        motor = FakeMotor()
+        motor.positions = deque([(1000, 1000)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        stopped = runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False))
+
+        self.assertFalse(stopped)
+        self.assertEqual(completed, [])
+        self.assertEqual(runner.encoder_move.left_start, 1000)
+        self.assertEqual(runner.encoder_move.right_start, 1000)
+
+    def test_encoder_move_completes_at_target_travel(self):
+        motor = FakeMotor()
+        target = 0.1 * ENCODER_COUNTS_PER_METER
+        motor.positions = deque([(0, 0), (target, target)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, True, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": True, "result": "completed"}])
+        self.assertIsNone(runner.encoder_move)
+        self.assertFalse(runner.intent_executor.is_active())
+
+    def test_encoder_move_completes_reverse_on_absolute_travel(self):
+        motor = FakeMotor()
+        target = 0.1 * ENCODER_COUNTS_PER_METER
+        motor.positions = deque([(0, 0), (-target, -target)])
+        completed = []
+        runner = self._move_runner(motor, -0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, False, SafetyState(blocked=False)))
+        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, False, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": True, "result": "completed"}])
+
+    def test_encoder_move_fails_when_start_read_fails(self):
+        motor = FakeMotor()
+        motor.positions = deque([(None, None)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        self.assertTrue(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": False, "error": "encoder_read_failed"}])
+        self.assertIsNone(runner.encoder_move)
+        self.assertFalse(runner.intent_executor.is_active())
+
+    def test_encoder_move_fails_when_mid_read_fails(self):
+        motor = FakeMotor()
+        motor.positions = deque([(0, 0), (None, None)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, True, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": False, "error": "encoder_read_failed"}])
+
+    def test_encoder_move_fails_forward_on_safety_block(self):
+        motor = FakeMotor()
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        stopped = runner._encoder_move_should_stop(
+            motor, 0.0, True, SafetyState(blocked=True, reason="cliff_left_cliff")
+        )
+
+        self.assertTrue(stopped)
+        self.assertEqual(completed, [{"ok": False, "error": "safety_blocked"}])
+        self.assertEqual(motor.position_calls, 0)
+
+    def test_encoder_move_reverse_survives_safety_block(self):
+        motor = FakeMotor()
+        motor.positions = deque([(0, 0)])
+        completed = []
+        runner = self._move_runner(motor, -0.1, completed)
+
+        stopped = runner._encoder_move_should_stop(
+            motor, 0.0, False, SafetyState(blocked=True, reason="cliff_left_cliff")
+        )
+
+        self.assertFalse(stopped)
+        self.assertEqual(completed, [])
+        self.assertIsNotNone(runner.encoder_move)
+
+    def test_encoder_move_fails_on_no_progress(self):
+        motor = FakeMotor()
+        motor.positions = deque([(0, 0)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.5, True, SafetyState(blocked=False)))
+        self.assertTrue(runner._encoder_move_should_stop(motor, 1.0, True, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": False, "error": "encoder_no_progress"}])
+
+    def test_encoder_move_progress_resets_no_progress_watchdog(self):
+        motor = FakeMotor()
+        motor.positions = deque([(0, 0), (10, 10), (20, 20)])
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.9, True, SafetyState(blocked=False)))
+        self.assertFalse(runner._encoder_move_should_stop(motor, 1.5, True, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [])
+
+    def test_gamepad_preemption_clears_encoder_move(self):
+        motor = FakeMotor()
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+        runner.encoder_move = EncoderMove(
+            target_counts=178.3, left_start=0, right_start=0, last_travel=0.0, last_progress_at=0.0
+        )
+
+        command = runner._tick_intent(now=0.1, gamepad_active=True)
+
+        self.assertIsNone(command)
+        self.assertIsNone(runner.encoder_move)
+        self.assertEqual(completed, [{"ok": False, "error": "preempted_by_gamepad"}])
+
+    def test_stop_clears_encoder_move(self):
+        motor = FakeMotor()
+        completed = []
+        runner = self._move_runner(motor, 0.1, completed)
+        runner.encoder_move = EncoderMove(
+            target_counts=178.3, left_start=0, right_start=0, last_travel=0.0, last_progress_at=0.0
+        )
+
+        class StopBridge:
+            def take_stop(self):
+                return True
+
+            def discard_pending(self):
+                pass
+
+        runner.intent_bridge = StopBridge()
+        runner._service_stop_requests()
+
+        self.assertIsNone(runner.encoder_move)
+        self.assertFalse(runner.intent_executor.is_active())
+        self.assertEqual(completed, [{"ok": False, "error": "stopped"}])
 
 
 if __name__ == "__main__":

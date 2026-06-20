@@ -37,14 +37,12 @@ SHAKE_HALF_SWINGS = 6
 SHAKE_ANGULAR_Z = 0.6
 EXPRESS_KINDS = ("wiggle", "spin", "shake")
 
-# `move` drives straight at a steady pace. duration_seconds is signed: positive
-# drives forward, negative drives backward. The magnitude sets how long it drives.
-MOVE_DURATION = 0.5
-MOVE_MIN_DURATION = 0.5
-MOVE_MAX_DURATION = 30.0
+# `move` drives straight at a steady pace. distance_meters is signed: positive
+# drives forward, negative drives backward. robot-motion stops the move using
+# RoboClaw encoder travel, so the executor just keeps commanding motion while the
+# intent is active.
 MOVE_LINEAR_X = 0.3
-# Voice distance moves are calibrated time estimates, not measured odometry.
-MOVE_METERS_PER_SECOND = 0.10791
+MOVE_MAX_DISTANCE_METERS = 2.0
 DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1
 DIAGNOSTIC_TURN_MAX_DURATION = 4.0
@@ -66,7 +64,19 @@ TURN_MAX_DEGREES = 360
 
 KNOWN_TOOLS = ("express", "move", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
-MOTION_INTENT_REPLY_TIMEOUT_SECONDS = MOVE_MAX_DURATION + 5.0
+# Caller waits this long for a motion intent to finish. An encoder move is bounded
+# by distance and the no-progress watchdog, so this is just a generous upper bound.
+MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 35.0
+
+
+def valid_move_distance(value: Any) -> bool:
+    """A finite, non-zero real number (not a bool). Magnitude is clamped later."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value != 0
+    )
 
 
 def valid_relative_degrees(value: Any) -> bool:
@@ -93,6 +103,7 @@ class _ActiveIntent:
     started_at: float
     direction: str | None = None
     duration_seconds: float | None = None
+    distance_meters: float | None = None
     relative_degrees: float | None = None
     degrees: float | None = None
     kind: str | None = None
@@ -123,6 +134,7 @@ class MotionIntentExecutor:
         now: float,
         direction: str | None = None,
         duration_seconds: float | None = None,
+        distance_meters: float | None = None,
         relative_degrees: float | None = None,
         degrees: float | None = None,
         kind: str | None = None,
@@ -143,18 +155,13 @@ class MotionIntentExecutor:
                 or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
             ):
                 return "invalid_duration"
-        if tool == "move" and duration_seconds is not None:
-            if (
-                not isinstance(duration_seconds, (int, float))
-                or isinstance(duration_seconds, bool)
-                or not math.isfinite(duration_seconds)
-            ):
-                return "invalid_duration"
-            # Clamp an out-of-range magnitude into the drivable band instead of
-            # rejecting it. An over-long move just drives the max rather than bouncing
-            # back as an error the caller has to notice and redo on the next step.
-            magnitude = min(max(abs(duration_seconds), MOVE_MIN_DURATION), MOVE_MAX_DURATION)
-            duration_seconds = magnitude if duration_seconds >= 0 else -magnitude
+        if tool == "move":
+            if not valid_move_distance(distance_meters):
+                return "invalid_distance"
+            # Clamp an over-long distance to the max instead of rejecting it, keeping
+            # the requested direction. robot-motion stops the move on encoder travel.
+            magnitude = min(abs(distance_meters), MOVE_MAX_DISTANCE_METERS)
+            distance_meters = magnitude if distance_meters > 0 else -magnitude
         if tool == "face_me" and not valid_relative_degrees(relative_degrees):
             return "invalid_relative_degrees"
         if tool == "turn":
@@ -171,11 +178,18 @@ class MotionIntentExecutor:
             started_at=now,
             direction=direction,
             duration_seconds=duration_seconds,
+            distance_meters=distance_meters,
             relative_degrees=relative_degrees,
             degrees=degrees,
             kind=kind,
         )
         return None
+
+    def active_move_distance_meters(self) -> float | None:
+        """Signed distance of the active move intent, or None when no move is active."""
+        if self._active is None or self._active.tool != "move":
+            return None
+        return self._active.distance_meters
 
     def tick(self, now: float, gamepad_active: bool) -> IntentTick:
         if self._active is None:
@@ -194,17 +208,15 @@ class MotionIntentExecutor:
             return IntentTick(command=None, finished=True, result="completed")
 
         if self._active.tool == "move":
-            duration_seconds = self._active.duration_seconds
-            duration = abs(duration_seconds) if duration_seconds is not None else MOVE_DURATION
-            if elapsed < duration:
-                linear_x = -MOVE_LINEAR_X if duration_seconds is not None and duration_seconds < 0 else MOVE_LINEAR_X
-                return IntentTick(
-                    command=MotionCommand(linear_x=linear_x, angular_z=0.0),
-                    finished=False,
-                    result=None,
-                )
-            self._active = None
-            return IntentTick(command=None, finished=True, result="completed")
+            # Encoder travel, not elapsed time, completes a move. robot-motion owns
+            # the encoder reads and clears the intent; the executor just keeps the
+            # wheels driving in the requested direction until then.
+            linear_x = -MOVE_LINEAR_X if self._active.distance_meters < 0 else MOVE_LINEAR_X
+            return IntentTick(
+                command=MotionCommand(linear_x=linear_x, angular_z=0.0),
+                finished=False,
+                result=None,
+            )
 
         if self._active.tool == "diagnostic_turn":
             if elapsed < self._active.duration_seconds:
@@ -438,15 +450,15 @@ class MotionIntentBridge:
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return
         if tool == "move":
-            duration_seconds = request.get("duration_seconds")
-            # Range is clamped by the executor, so only the type is rejected here.
-            # NaN/inf pass json.loads but would never finish a timed move, so reject them.
-            if duration_seconds is not None and (
-                not isinstance(duration_seconds, (int, float))
-                or isinstance(duration_seconds, bool)
-                or not math.isfinite(duration_seconds)
-            ):
-                self._send(conn, {"ok": False, "error": "invalid_duration"})
+            # Move is distance-only. Reject the legacy timed-move field so it can't
+            # ride along silently and resurrect the old time-based contract.
+            if request.get("duration_seconds") is not None:
+                self._send(conn, {"ok": False, "error": "unexpected_duration"})
+                return
+            # Magnitude is clamped by the executor, so only validity is rejected here.
+            # A move needs a finite, non-zero signed distance; NaN/inf/0/bool are out.
+            if not valid_move_distance(request.get("distance_meters")):
+                self._send(conn, {"ok": False, "error": "invalid_distance"})
                 return
         if tool == "face_me" and not valid_relative_degrees(request.get("relative_degrees")):
             self._send(conn, {"ok": False, "error": "invalid_relative_degrees"})

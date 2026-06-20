@@ -19,10 +19,8 @@ from control.motion_intent import (
     DIAGNOSTIC_TURN_MIN_DURATION,
     FACE_ME_ANGULAR_Z,
     FACE_ME_DEGREES_PER_SECOND,
-    MOVE_DURATION,
     MOVE_LINEAR_X,
-    MOVE_MAX_DURATION,
-    MOVE_MIN_DURATION,
+    MOVE_MAX_DISTANCE_METERS,
     TURN_ANGULAR_Z,
     TURN_DEGREES_PER_SECOND,
     TURN_MAX_DEGREES,
@@ -88,71 +86,53 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(done.result, "completed")
         self.assertFalse(executor.is_active())
 
-    def test_move_runs_forward_for_duration_then_completes(self):
+    def test_move_drives_forward_for_positive_distance(self):
+        # robot-motion stops the move on encoder travel, so the executor keeps
+        # commanding forward across ticks and never finishes from elapsed time.
         executor = MotionIntentExecutor()
-        executor.start("move", now=0.0, duration_seconds=1.0)
+        self.assertIsNone(executor.start("move", now=0.0, distance_meters=1.0))
 
-        running = executor.tick(now=0.1, gamepad_active=False)
-        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
-        self.assertFalse(running.finished)
+        first = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(first.command, MotionCommand(MOVE_LINEAR_X, 0.0))
+        self.assertFalse(first.finished)
 
-        done = executor.tick(now=1.05, gamepad_active=False)
-        self.assertTrue(done.finished)
-        self.assertEqual(done.result, "completed")
+        later = executor.tick(now=999.0, gamepad_active=False)
+        self.assertEqual(later.command, MotionCommand(MOVE_LINEAR_X, 0.0))
+        self.assertFalse(later.finished)
+        self.assertEqual(executor.active_move_distance_meters(), 1.0)
 
-    def test_move_negative_duration_drives_backward(self):
+    def test_move_drives_backward_for_negative_distance(self):
         executor = MotionIntentExecutor()
-        executor.start("move", now=0.0, duration_seconds=-1.0)
+        self.assertIsNone(executor.start("move", now=0.0, distance_meters=-1.0))
 
-        running = executor.tick(now=0.1, gamepad_active=False)
-        self.assertEqual(running.command, MotionCommand(-MOVE_LINEAR_X, 0.0))
-        self.assertFalse(running.finished)
-
-        done = executor.tick(now=1.05, gamepad_active=False)
-        self.assertTrue(done.finished)
-        self.assertEqual(done.result, "completed")
-
-    def test_move_default_duration_when_unspecified(self):
-        executor = MotionIntentExecutor()
-        executor.start("move", now=0.0)
-
-        running = executor.tick(now=0.1, gamepad_active=False)
-        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
-
-        done = executor.tick(now=MOVE_DURATION + 0.05, gamepad_active=False)
-        self.assertTrue(done.finished)
-
-    def test_move_clamps_out_of_range_duration(self):
-        # An over-short magnitude clamps up to the minimum and still drives forward.
-        executor = MotionIntentExecutor()
-        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=0.1))
-        running = executor.tick(now=0.1, gamepad_active=False)
-        self.assertEqual(running.command, MotionCommand(MOVE_LINEAR_X, 0.0))
-        self.assertTrue(executor.tick(now=MOVE_MIN_DURATION + 0.05, gamepad_active=False).finished)
-
-        # A negative magnitude clamps to the minimum but keeps driving backward.
-        executor = MotionIntentExecutor()
-        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=-0.1))
         running = executor.tick(now=0.1, gamepad_active=False)
         self.assertEqual(running.command, MotionCommand(-MOVE_LINEAR_X, 0.0))
-        self.assertTrue(executor.tick(now=MOVE_MIN_DURATION + 0.05, gamepad_active=False).finished)
+        self.assertFalse(running.finished)
+        self.assertEqual(executor.active_move_distance_meters(), -1.0)
 
-        # An over-long magnitude clamps down to the maximum.
+    def test_move_clamps_out_of_range_distance(self):
+        # An over-long forward distance clamps down to the max, staying forward.
         executor = MotionIntentExecutor()
-        self.assertIsNone(executor.start("move", now=0.0, duration_seconds=99.0))
-        self.assertFalse(executor.tick(now=MOVE_MAX_DURATION - 0.05, gamepad_active=False).finished)
-        self.assertTrue(executor.tick(now=MOVE_MAX_DURATION + 0.05, gamepad_active=False).finished)
+        self.assertIsNone(executor.start("move", now=0.0, distance_meters=99.0))
+        self.assertEqual(executor.active_move_distance_meters(), MOVE_MAX_DISTANCE_METERS)
 
-    def test_move_rejects_non_numeric_duration(self):
+        # An over-long reverse distance clamps to the negated max.
         executor = MotionIntentExecutor()
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=True), "invalid_duration")
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds="far"), "invalid_duration")
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=float("nan")), "invalid_duration")
-        self.assertEqual(executor.start("move", now=0.0, duration_seconds=float("inf")), "invalid_duration")
+        self.assertIsNone(executor.start("move", now=0.0, distance_meters=-99.0))
+        self.assertEqual(executor.active_move_distance_meters(), -MOVE_MAX_DISTANCE_METERS)
+
+    def test_move_rejects_invalid_distance(self):
+        executor = MotionIntentExecutor()
+        self.assertEqual(executor.start("move", now=0.0), "invalid_distance")
+        self.assertEqual(executor.start("move", now=0.0, distance_meters=True), "invalid_distance")
+        self.assertEqual(executor.start("move", now=0.0, distance_meters="far"), "invalid_distance")
+        self.assertEqual(executor.start("move", now=0.0, distance_meters=0), "invalid_distance")
+        self.assertEqual(executor.start("move", now=0.0, distance_meters=float("nan")), "invalid_distance")
+        self.assertEqual(executor.start("move", now=0.0, distance_meters=float("inf")), "invalid_distance")
 
     def test_gamepad_active_preempts_mid_intent(self):
         executor = MotionIntentExecutor()
-        executor.start("move", now=0.0, duration_seconds=1.0)
+        executor.start("move", now=0.0, distance_meters=1.0)
 
         tick = executor.tick(now=0.1, gamepad_active=True)
         self.assertTrue(tick.finished)
@@ -361,6 +341,71 @@ class MotionIntentBridgeTest(unittest.TestCase):
         result = request_motion_intent(self.socket_path, "spin", timeout=2.0)
         self.assertEqual(result, {"ok": False, "error": "unknown_tool"})
 
+    def _take_pending(self):
+        deadline = time.monotonic() + 2.0
+        pending = None
+        while pending is None and time.monotonic() < deadline:
+            pending = self.bridge.take_pending()
+            if pending is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(pending)
+        return pending
+
+    def test_move_distance_arrives_at_main_loop(self):
+        thread, holder = self._send_request_threaded("move", distance_meters=0.5)
+
+        request, complete = self._take_pending()
+        self.assertEqual(request, {"tool": "move", "distance_meters": 0.5})
+        complete({"ok": True, "result": "completed"})
+
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_move_over_range_distance_is_accepted_and_clamped(self):
+        # The socket accepts an over-long distance; the executor clamps the magnitude
+        # while keeping the requested direction.
+        thread, holder = self._send_request_threaded("move", distance_meters=99.0)
+
+        request, complete = self._take_pending()
+        self.assertEqual(request["distance_meters"], 99.0)
+        executor = MotionIntentExecutor()
+        self.assertIsNone(
+            executor.start("move", now=0.0, distance_meters=request["distance_meters"])
+        )
+        self.assertEqual(executor.active_move_distance_meters(), MOVE_MAX_DISTANCE_METERS)
+        complete({"ok": True, "result": "completed"})
+
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_move_rejects_duration_seconds_at_socket(self):
+        # The legacy timed-move field is gone: a move carrying duration_seconds is
+        # rejected, even alongside a valid distance.
+        self.assertEqual(
+            request_motion_intent(self.socket_path, "move", timeout=2.0, duration_seconds=1.0),
+            {"ok": False, "error": "unexpected_duration"},
+        )
+        self.assertEqual(
+            request_motion_intent(
+                self.socket_path, "move", timeout=2.0, distance_meters=0.5, duration_seconds=1.0
+            ),
+            {"ok": False, "error": "unexpected_duration"},
+        )
+
+    def test_move_rejects_invalid_distance_at_socket(self):
+        for parameters in (
+            {},
+            {"distance_meters": "far"},
+            {"distance_meters": True},
+            {"distance_meters": 0},
+            {"distance_meters": float("nan")},
+            {"distance_meters": float("inf")},
+        ):
+            self.assertEqual(
+                request_motion_intent(self.socket_path, "move", timeout=2.0, **parameters),
+                {"ok": False, "error": "invalid_distance"},
+            )
+
     def test_diagnostic_turn_parameters_arrive_at_main_loop(self):
         thread, holder = self._send_request_threaded(
             "diagnostic_turn",
@@ -492,7 +537,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
     def test_stop_replies_while_a_motion_request_is_still_in_flight(self):
         # Occupy the single pending slot with a move that never completes, mirroring a
         # real drive that is mid-motion. The stop must still come straight back.
-        move_thread, _ = self._send_request_threaded("move", duration_seconds=2.0)
+        move_thread, _ = self._send_request_threaded("move", distance_meters=2.0)
 
         deadline = time.monotonic() + 2.0
         pending = None
@@ -512,7 +557,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
         move_thread.join(timeout=2.0)
 
     def test_discard_pending_drops_queued_request_with_stopped(self):
-        thread, holder = self._send_request_threaded("move", duration_seconds=1.0)
+        thread, holder = self._send_request_threaded("move", distance_meters=1.0)
 
         deadline = time.monotonic() + 2.0
         while self.bridge._pending is None and time.monotonic() < deadline:
@@ -530,7 +575,7 @@ class MotionIntentBridgeTest(unittest.TestCase):
         )
 
     def test_completion_failure_result_reaches_client(self):
-        thread, holder = self._send_request_threaded("move", duration_seconds=1.0)
+        thread, holder = self._send_request_threaded("move", distance_meters=1.0)
 
         deadline = time.monotonic() + 2.0
         pending = None

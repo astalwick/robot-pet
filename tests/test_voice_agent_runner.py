@@ -7,7 +7,6 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from control.motion_intent import MOVE_METERS_PER_SECOND
 from voice.agent_runner import (
     AGENT_TOOLS,
     BLOCKED_FINAL,
@@ -126,7 +125,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
             )
         )
 
-        self.assertAlmostEqual(captured["duration_seconds"], 0.5 / MOVE_METERS_PER_SECOND)
+        self.assertEqual(captured["distance_meters"], 0.5)
 
     def test_tool_output_goes_back_with_matching_call_id(self):
         steps = {"n": 0}
@@ -134,7 +133,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move", call_id="call_42")
+                return call("move", call_id="call_42", arguments={"distance_meters": 0.5})
             return final("Done.")
 
         openai = FakeOpenAI(responder)
@@ -145,7 +144,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
             )
         )
 
@@ -159,7 +158,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
         def responder(_input_items):
             if len(moves) >= 3:
                 return final("I am right next to you now.")
-            return call("move")
+            return call("move", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -169,7 +168,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                motion_intent_caller=lambda name, **_: moves.append(name) or {"ok": True},
             )
         )
 
@@ -237,14 +236,14 @@ class NativeToolMechanicsTest(unittest.TestCase):
     def test_tool_failure_becomes_observation_and_model_recovers(self):
         failures: list[bool] = []
 
-        def blocked_move(_name):
+        def blocked_move(_name, **_):
             failures.append(True)
             return {"ok": False, "error": "safety_blocked"}
 
         def responder(_input_items):
             if failures:
                 return final("The drive is blocked, so I stopped.")
-            return call("move")
+            return call("move", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -287,7 +286,7 @@ class ReasonsWellTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return call("move", call_id="call_x")
+                return call("move", call_id="call_x", arguments={"distance_meters": 0.5})
             return final("Done.")
 
         openai = FakeOpenAI(responder)
@@ -298,7 +297,7 @@ class ReasonsWellTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
             )
         )
 
@@ -380,7 +379,7 @@ class ReasonsWellTest(unittest.TestCase):
         def responder(_input_items):
             if len(moves) >= 3:
                 return final("Reached you.")
-            return call("move")
+            return call("move", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         run(
@@ -390,7 +389,7 @@ class ReasonsWellTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                motion_intent_caller=lambda name, **_: moves.append(name) or {"ok": True},
             )
         )
 
@@ -413,7 +412,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Reached the goal.")
-            return call("move", narration="Heading over now.")
+            return call("move", narration="Heading over now.", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -423,7 +422,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
                 speak_progress=speak_progress,
                 is_speaking=lambda: False,
             )
@@ -448,9 +447,9 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move", narration="On my way.")
+            return call("move", narration="On my way.", arguments={"distance_meters": 0.5})
 
-        def move(_name):
+        def move(_name, **_):
             order.append("tool")
             return {"ok": True}
 
@@ -484,7 +483,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move", narration="On my way.")
+            return call("move", narration="On my way.", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         run(
@@ -494,7 +493,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
                 speak_progress=speak_progress,
                 is_speaking=lambda: True,
             )
@@ -518,7 +517,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Done.")
-            return call("move", narration="Working on it.")
+            return call("move", narration="Working on it.", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         run(
@@ -528,7 +527,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
                 speak_progress=speak_progress,
                 is_speaking=lambda: False,
             )
@@ -551,7 +550,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
             steps["n"] += 1
             if steps["n"] >= 2:
                 return final("Reached the goal.")
-            return call("move", narration="On my way.")
+            return call("move", narration="On my way.", arguments={"distance_meters": 0.5})
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -561,7 +560,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
                 speak_progress=speak_progress,
                 is_speaking=lambda: False,
             )
@@ -583,11 +582,11 @@ class SpeechConcurrencyTest(unittest.TestCase):
                 cancelled["value"] = True
                 raise
 
-        def move(_name):
+        def move(_name, **_):
             stop_event.set()
             return {"ok": True}
 
-        openai = FakeOpenAI(lambda _input: call("move", narration="Working."))
+        openai = FakeOpenAI(lambda _input: call("move", narration="Working.", arguments={"distance_meters": 0.5}))
         result = run(
             run_agent_goal(
                 goal="Move.",
@@ -607,7 +606,7 @@ class SpeechConcurrencyTest(unittest.TestCase):
 
 class GuardRailsTest(unittest.TestCase):
     def test_step_limit_returns_spoken_final(self):
-        openai = FakeOpenAI(lambda _input: call("move"))
+        openai = FakeOpenAI(lambda _input: call("move", arguments={"distance_meters": 0.5}))
         result = run(
             run_agent_goal(
                 goal="Keep going.",
@@ -615,7 +614,7 @@ class GuardRailsTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
                 max_steps=2,
             )
         )
@@ -625,7 +624,7 @@ class GuardRailsTest(unittest.TestCase):
 
     def test_timeout_during_model_call_returns_final_without_running_tools(self):
         moves: list[str] = []
-        openai = FakeOpenAI(lambda _input: call("move"))
+        openai = FakeOpenAI(lambda _input: call("move", arguments={"distance_meters": 0.5}))
         # The model call itself overruns the budget; the decision it eventually
         # returns must not be acted on.
         openai.responses.delay = 0.06
@@ -636,7 +635,7 @@ class GuardRailsTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                motion_intent_caller=lambda name, **_: moves.append(name) or {"ok": True},
                 max_seconds=0.05,
             )
         )
@@ -647,7 +646,7 @@ class GuardRailsTest(unittest.TestCase):
     def test_stop_event_set_before_start_runs_nothing(self):
         stop_event = asyncio.Event()
         stop_event.set()
-        openai = FakeOpenAI(lambda _input: call("move"))
+        openai = FakeOpenAI(lambda _input: call("move", arguments={"distance_meters": 0.5}))
         result = run(
             run_agent_goal(
                 goal="Keep going.",
@@ -655,7 +654,7 @@ class GuardRailsTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
+                motion_intent_caller=lambda _name, **_: {"ok": True},
             )
         )
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import threading
@@ -24,7 +25,7 @@ from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
-from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety
+from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
 from telemetry.messages import (
@@ -46,6 +47,28 @@ from telemetry.socket_client import publish_message, subscribe
 log = setup_logging("robot-motion")
 
 DRIVE_COMMAND_STALE_SECONDS = 0.5
+
+# Encoder-distance move physics. Distance completion is derived from these
+# physical facts rather than a single opaque counts-per-meter constant: goBILDA
+# 5203-2402-0019 motors (537.7 counts per output-shaft revolution) with 96 mm
+# Hogback wheels mounted directly on the output shaft.
+WHEEL_DIAMETER_METERS = 0.096
+ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7
+ENCODER_COUNTS_PER_METER = ENCODER_COUNTS_PER_WHEEL_REVOLUTION / (math.pi * WHEEL_DIAMETER_METERS)
+# A move commanding motion must keep gaining encoder travel; if it stalls this
+# long the no-progress watchdog stops and fails it.
+ENCODER_MOVE_NO_PROGRESS_TIMEOUT_SECONDS = 1.0
+
+
+@dataclass
+class EncoderMove:
+    """Live state for an in-flight encoder-distance move."""
+
+    target_counts: float
+    left_start: int
+    right_start: int
+    last_travel: float
+    last_progress_at: float
 
 
 @dataclass(frozen=True)
@@ -100,6 +123,7 @@ class MotionRunner:
         self.intent_bridge: MotionIntentBridge | None = None
         self.pending_intent_complete: Callable[[dict[str, Any]], None] | None = None
         self._intent_wait_started_at: float | None = None
+        self.encoder_move: EncoderMove | None = None
 
         self.mixer = DifferentialDriveMixer(qpps=config.qpps, speed_scale=1.0, turbo_scale=1.0)
         self.stop_requested = False
@@ -265,6 +289,7 @@ class MotionRunner:
         return None
 
     def _run_motor_loop(self, motor: Any) -> None:
+        self.encoder_move = None
         closed_loop_active = False
         idle_started_at = self.clock()
         idle_released = False
@@ -312,9 +337,14 @@ class MotionRunner:
                 readings = list(self._sensor_readings)
                 sensors_live = self._sensors_live
             safety = evaluate_safety(readings, self.sensors_config, sensors_live=sensors_live)
+            commanding_forward = is_forward_motion(left_qpps, right_qpps)
             left_qpps, right_qpps = cancel_forward_qpps_when_blocked(left_qpps, right_qpps, safety)
             self._last_safety_blocked = safety.blocked
             self._last_safety_reason = safety.reason
+
+            if self.intent_executor.active_move_distance_meters() is not None:
+                if self._encoder_move_should_stop(motor, now, commanding_forward, safety):
+                    left_qpps, right_qpps = 0, 0
 
             target = WheelSpeedCommand(left_qpps=left_qpps, right_qpps=right_qpps)
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
@@ -545,6 +575,7 @@ class MotionRunner:
             now,
             direction=request.get("direction"),
             duration_seconds=request.get("duration_seconds"),
+            distance_meters=request.get("distance_meters"),
             relative_degrees=request.get("relative_degrees"),
             degrees=request.get("degrees"),
             kind=request.get("kind"),
@@ -570,13 +601,84 @@ class MotionRunner:
         if tick.finished and self.pending_intent_complete is not None:
             complete = self.pending_intent_complete
             self.pending_intent_complete = None
+            self.encoder_move = None
             if tick.result == "completed":
                 complete({"ok": True, "result": "completed"})
             else:
                 complete({"ok": False, "error": tick.result or "unknown"})
         return tick.command
 
+    def _encoder_move_should_stop(
+        self,
+        motor: Any,
+        now: float,
+        commanding_forward: bool,
+        safety: Any,
+    ) -> bool:
+        """Drive completion/failure for the active encoder-distance move.
+
+        Returns True when the move has ended this loop, so the caller commands
+        zero speed. Reads encoder positions, snapshots the start on the first
+        loop, completes at the target travel, and fails on read error, a safety
+        block of forward progress, or a no-progress stall.
+        """
+        distance = self.intent_executor.active_move_distance_meters()
+
+        # A forward move that safety blocks is no longer making progress.
+        if distance > 0 and commanding_forward and safety.blocked:
+            self._end_encoder_move("safety_blocked")
+            return True
+
+        if self.encoder_move is None:
+            left_start, right_start = motor.read_wheel_positions()
+            if left_start is None or right_start is None:
+                self._end_encoder_move("encoder_read_failed")
+                return True
+            self.encoder_move = EncoderMove(
+                target_counts=abs(distance) * ENCODER_COUNTS_PER_METER,
+                left_start=left_start,
+                right_start=right_start,
+                last_travel=0.0,
+                last_progress_at=now,
+            )
+            return False
+
+        left_now, right_now = motor.read_wheel_positions()
+        if left_now is None or right_now is None:
+            self._end_encoder_move("encoder_read_failed")
+            return True
+
+        travel = (
+            abs(left_now - self.encoder_move.left_start)
+            + abs(right_now - self.encoder_move.right_start)
+        ) / 2
+        if travel >= self.encoder_move.target_counts:
+            self._complete_encoder_move()
+            return True
+
+        if travel > self.encoder_move.last_travel:
+            self.encoder_move.last_travel = travel
+            self.encoder_move.last_progress_at = now
+        elif now - self.encoder_move.last_progress_at >= ENCODER_MOVE_NO_PROGRESS_TIMEOUT_SECONDS:
+            self._end_encoder_move("encoder_no_progress")
+            return True
+
+        return False
+
+    def _complete_encoder_move(self) -> None:
+        self.intent_executor.cancel()
+        complete = self.pending_intent_complete
+        self.pending_intent_complete = None
+        self.encoder_move = None
+        if complete is not None:
+            complete({"ok": True, "result": "completed"})
+
+    def _end_encoder_move(self, reason: str) -> None:
+        self.intent_executor.cancel()
+        self._fail_pending_intent(reason)
+
     def _fail_pending_intent(self, reason: str) -> None:
+        self.encoder_move = None
         if self.pending_intent_complete is None:
             return
         complete = self.pending_intent_complete

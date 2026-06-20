@@ -46,6 +46,10 @@ class FakeRoboClaw:
         self.calls.append(("ReadSpeedM2", address))
         return True, -456
 
+    def GetEncoders(self, address):
+        self.calls.append(("GetEncoders", address))
+        return True, 1000, 2000
+
     def ReadM1VelocityPID(self, address):
         self.calls.append(("ReadM1VelocityPID", address))
         return True, 1.0, 0.5, 0.25, 11180
@@ -98,6 +102,10 @@ class ReadTimeoutRoboClaw(FakeRoboClaw):
         self.calls.append(("ReadSpeedM1", address))
         raise PacketTimeoutError("timed out")
 
+    def GetEncoders(self, address):
+        self.calls.append(("GetEncoders", address))
+        raise PacketTimeoutError("timed out")
+
     def ReadM1VelocityPID(self, address):
         self.calls.append(("ReadM1VelocityPID", address))
         raise PacketTimeoutError("timed out")
@@ -114,6 +122,10 @@ class ReadTimeoutRoboClaw(FakeRoboClaw):
 class NonRecoverableReadRoboClaw(FakeRoboClaw):
     def ReadSpeedM1(self, address):
         self.calls.append(("ReadSpeedM1", address))
+        raise RuntimeError("unexpected read failure")
+
+    def GetEncoders(self, address):
+        self.calls.append(("GetEncoders", address))
         raise RuntimeError("unexpected read failure")
 
 
@@ -142,6 +154,25 @@ class MotorDriverTest(unittest.TestCase):
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         self.assertEqual(driver.read_wheel_speeds(), (123, -456))
+
+    def test_read_wheel_positions_reads_both_encoders(self):
+        fake = FakeRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.read_wheel_positions(), (1000, 2000))
+
+    def test_read_wheel_positions_returns_none_on_roboclaw_timeout(self):
+        fake = ReadTimeoutRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        self.assertEqual(driver.read_wheel_positions(), (None, None))
+
+    def test_read_wheel_positions_reraises_unexpected_error(self):
+        fake = NonRecoverableReadRoboClaw("/dev/fake", 38400)
+        driver = MotorDriver(controller_factory=lambda port, baud: fake)
+
+        with self.assertRaises(RuntimeError):
+            driver.read_wheel_positions()
 
     def test_read_max_qpps_reads_velocity_pid_caps(self):
         fake = FakeRoboClaw("/dev/fake", 38400)

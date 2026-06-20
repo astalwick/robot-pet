@@ -19,7 +19,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from control.motion_intent import MOVE_METERS_PER_SECOND
 from voice.assistant import (
     CHECK_HEALTH_TOOL,
     CHECK_HEALTH_TOOL_NAME,
@@ -245,15 +244,15 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
         if context.motion_intent_caller is None:
             return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
         arguments = call.arguments
-        if name == MOVE_TOOL_NAME and "distance_meters" in call.arguments:
-            distance_meters = call.arguments["distance_meters"]
+        if name == MOVE_TOOL_NAME:
+            distance_meters = call.arguments.get("distance_meters")
             if (
                 not isinstance(distance_meters, (int, float))
                 or isinstance(distance_meters, bool)
                 or not math.isfinite(distance_meters)
             ):
                 return _result(call, False, {"ok": False, "error": "invalid_distance"})
-            arguments = {"duration_seconds": distance_meters / MOVE_METERS_PER_SECOND}
+            arguments = {"distance_meters": distance_meters}
         result = await asyncio.to_thread(context.motion_intent_caller, name, **arguments)
         return _result(call, result.get("ok") is not False, result)
 

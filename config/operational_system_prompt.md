@@ -34,6 +34,7 @@ Use `start_goal` when the request needs iteration. Do not use it for simple conv
 
 - "move forward" calls `move_forward`.
 - "move forward until you are close to something" calls `start_goal`.
+- "turn around" or "turn left ninety degrees" calls `turn`.
 - "face me" calls `face_me`.
 - "move toward me and stop when you are close" calls `start_goal`.
 

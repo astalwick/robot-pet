@@ -45,7 +45,7 @@ class VoiceSession:
         audio: ReSpeakerAudio,
         scribe_streamer: Callable[..., Any] = stream_audio_to_scribe,
         event_callback: Callable[[dict[str, object]], None] | None = None,
-        motion_intent_caller: Callable[[str], Any] | None = None,
+        motion_intent_caller: Callable[..., Any] | None = None,
         session_end_caller: Callable[[], Any] | None = None,
         camera_snapshot_caller: Callable[[], bytes] | None = None,
         personalities: dict[str, tuple[str, str]] | None = None,

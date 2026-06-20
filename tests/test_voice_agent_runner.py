@@ -2,19 +2,37 @@ import asyncio
 import json
 import os
 import sys
-import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from voice.agent_runner import STEP_LIMIT_FINAL, TIMEOUT_FINAL, run_agent_goal
+from voice.agent_runner import (
+    AGENT_TOOLS,
+    BLOCKED_FINAL,
+    NUDGE_TEXT,
+    STEP_LIMIT_FINAL,
+    TIMEOUT_FINAL,
+    run_agent_goal,
+)
 from voice.assistant import VoiceState
 
 
+class FakeFunctionCall:
+    """One native `function_call` output item, as the Responses API returns it."""
+
+    def __init__(self, name: str, arguments: str, call_id: str):
+        self.type = "function_call"
+        self.name = name
+        self.arguments = arguments
+        self.call_id = call_id
+
+
 class FakeResponse:
-    def __init__(self, text: str):
-        self.output_text = text
+    def __init__(self, output: list, output_text: str = "", response_id: str | None = None):
+        self.output = output
+        self.output_text = output_text
+        self.id = response_id
 
 
 class FakeResponses:
@@ -29,7 +47,10 @@ class FakeResponses:
         self.calls.append(kwargs)
         if self.delay:
             await asyncio.sleep(self.delay)
-        return FakeResponse(self.responder(kwargs["input"]))
+        response = self.responder(kwargs["input"])
+        if response.id is None:
+            response.id = f"resp_{len(self.calls)}"
+        return response
 
 
 class FakeOpenAI:
@@ -37,14 +58,20 @@ class FakeOpenAI:
         self.responses = FakeResponses(responder)
 
 
-def decision(**fields) -> str:
-    payload = {"narration": "", "tool_calls": [], "done": False, "blocked": False, "final": None}
-    payload.update(fields)
-    return json.dumps(payload)
+def call(name: str, *, call_id: str = "call_1", arguments: dict | None = None, narration: str = "") -> FakeResponse:
+    """A response that makes one native tool call, optionally with progress narration."""
+    function_call = FakeFunctionCall(name, json.dumps(arguments or {}), call_id)
+    return FakeResponse(output=[function_call], output_text=narration)
 
 
-def call_tool(name: str) -> dict:
-    return {"name": name, "arguments": {}}
+def final(text: str) -> FakeResponse:
+    """A response with no tool call: its text is the final answer."""
+    return FakeResponse(output=[], output_text=text)
+
+
+def empty() -> FakeResponse:
+    """A response with no tool call and no words."""
+    return FakeResponse(output=[], output_text="")
 
 
 def serialized(input_items) -> str:
@@ -55,16 +82,83 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class AgentRunnerTest(unittest.TestCase):
+class NativeToolMechanicsTest(unittest.TestCase):
+    def test_request_includes_native_tools_and_no_parallel_calls(self):
+        openai = FakeOpenAI(lambda _input: final("Hi."))
+        run(
+            run_agent_goal(
+                goal="Say hi.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+            )
+        )
+
+        first = openai.responses.calls[0]
+        self.assertEqual(first["tools"], AGENT_TOOLS)
+        self.assertIs(first["parallel_tool_calls"], False)
+
+    def test_move_forward_runs_with_arguments_parsed_from_json_string(self):
+        captured: dict = {}
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] == 1:
+                return call("move_forward", arguments={"distance_m": 0.5})
+            return final("Done.")
+
+        def move(_name, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True}
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=move,
+            )
+        )
+
+        self.assertEqual(captured, {"distance_m": 0.5})
+
+    def test_tool_output_goes_back_with_matching_call_id(self):
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] == 1:
+                return call("move_forward", call_id="call_42")
+            return final("Done.")
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+            )
+        )
+
+        observation = openai.responses.calls[1]["input"][0]
+        self.assertEqual(observation["type"], "function_call_output")
+        self.assertEqual(observation["call_id"], "call_42")
+
     def test_repeated_move_forward_until_observation_makes_it_done(self):
         moves: list[str] = []
 
         def responder(_input_items):
-            # The model keeps nudging forward and stops once it has observed three
-            # move_forward results come back.
             if len(moves) >= 3:
-                return decision(done=True, final="I am right next to you now.")
-            return decision(tool_calls=[call_tool("move_forward")])
+                return final("I am right next to you now.")
+            return call("move_forward")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -87,8 +181,8 @@ class AgentRunnerTest(unittest.TestCase):
 
         def responder(_input_items):
             if snapshots:
-                return decision(done=True, final="I see the ball by the couch.")
-            return decision(tool_calls=[call_tool("look_around")])
+                return final("I see the ball by the couch.")
+            return call("look_around")
 
         def snapshot():
             snapshots.append(True)
@@ -108,7 +202,7 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertEqual(result, "I see the ball by the couch.")
         follow_up_input = openai.responses.calls[1]["input"]
-        observation = next(item for item in follow_up_input if isinstance(item["content"], list))
+        observation = next(item for item in follow_up_input if isinstance(item.get("content"), list))
         image_parts = [part for part in observation["content"] if part.get("type") == "input_image"]
         self.assertEqual(len(image_parts), 1)
         self.assertTrue(image_parts[0]["image_url"].startswith("data:image/jpeg;base64,"))
@@ -116,52 +210,14 @@ class AgentRunnerTest(unittest.TestCase):
         text_parts = [part for part in observation["content"] if part.get("type") == "input_text"]
         self.assertNotIn("base64", text_parts[0]["text"])
 
-    def test_motion_is_awaited_before_inspect_robot_in_same_step(self):
-        order: list[str] = []
-
-        def slow_move(_name):
-            # motion_intent_caller is sync and runs via asyncio.to_thread; emulate
-            # the motion intent taking real wall-clock time to finish.
-            order.append("move_start")
-            time.sleep(0.02)
-            order.append("move_done")
-            return {"ok": True}
-
-        def inspect():
-            order.append("inspect")
-            return {"drive_status": {"state": "idle"}}
-
-        responder_calls = {"n": 0}
-
-        def responder(_input_items):
-            responder_calls["n"] += 1
-            if responder_calls["n"] == 1:
-                return decision(tool_calls=[call_tool("move_forward"), call_tool("inspect_robot")])
-            return decision(done=True, final="Done.")
-
-        openai = FakeOpenAI(responder)
-        run(
-            run_agent_goal(
-                goal="Step forward and check.",
-                stop_event=asyncio.Event(),
-                openai_client=openai,
-                openai_model="test-model",
-                voice_state=VoiceState("voice"),
-                motion_intent_caller=slow_move,
-                robot_inspection_caller=inspect,
-            )
-        )
-
-        self.assertEqual(order, ["move_start", "move_done", "inspect"])
-
     def test_inspect_speaker_direction_observation_reaches_the_model(self):
         def speaker_direction():
             return {"connected": True, "relative_degrees": 90, "age_seconds": 0.1, "fresh": True}
 
         def responder(input_items):
             if "relative_degrees" in serialized(input_items):
-                return decision(done=True, final="You are on my right.")
-            return decision(tool_calls=[call_tool("inspect_speaker_direction")])
+                return final("You are on my right.")
+            return call("inspect_speaker_direction")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -186,8 +242,8 @@ class AgentRunnerTest(unittest.TestCase):
 
         def responder(_input_items):
             if failures:
-                return decision(blocked=True, final="The drive is blocked, so I stopped.")
-            return decision(tool_calls=[call_tool("move_forward")])
+                return final("The drive is blocked, so I stopped.")
+            return call("move_forward")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -205,9 +261,9 @@ class AgentRunnerTest(unittest.TestCase):
 
     def test_unknown_tool_name_becomes_observation_not_crash(self):
         def responder(input_items):
-            if "unknown tool" in serialized(input_items):
-                return decision(done=True, final="Okay, I will skip that.")
-            return decision(tool_calls=[call_tool("teleport")])
+            if "unsupported tool" in serialized(input_items):
+                return final("Okay, I will skip that.")
+            return call("teleport")
 
         openai = FakeOpenAI(responder)
         result = run(
@@ -222,63 +278,108 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertEqual(result, "Okay, I will skip that.")
 
-    def test_step_limit_returns_spoken_final(self):
-        openai = FakeOpenAI(lambda _input: decision(tool_calls=[call_tool("move_forward")]))
-        result = run(
+
+class ReasonsWellTest(unittest.TestCase):
+    def test_each_call_after_first_chains_and_sends_only_new_output(self):
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] == 1:
+                return call("move_forward", call_id="call_x")
+            return final("Done.")
+
+        openai = FakeOpenAI(responder)
+        run(
             run_agent_goal(
-                goal="Keep going.",
+                goal="Move.",
                 stop_event=asyncio.Event(),
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
                 motion_intent_caller=lambda _name: {"ok": True},
-                max_steps=2,
             )
         )
 
-        self.assertEqual(result, STEP_LIMIT_FINAL)
-        self.assertEqual(len(openai.responses.calls), 2)
+        first, second = openai.responses.calls[0], openai.responses.calls[1]
+        # The first call has no chain and carries the developer prompt and goal.
+        self.assertNotIn("previous_response_id", first)
+        self.assertTrue(any(item.get("role") == "developer" for item in first["input"]))
+        # The second call chains on the first response and carries only the new
+        # observation, not a rebuilt transcript.
+        self.assertEqual(second["previous_response_id"], "resp_1")
+        self.assertEqual(len(second["input"]), 1)
+        self.assertEqual(second["input"][0]["type"], "function_call_output")
+        self.assertEqual(second["input"][0]["call_id"], "call_x")
 
-    def test_timeout_during_model_call_returns_final_without_running_tools(self):
-        moves: list[str] = []
-        openai = FakeOpenAI(lambda _input: decision(tool_calls=[call_tool("move_forward")]))
-        # The model call itself overruns the budget; the decision it eventually
-        # returns must not be acted on.
-        openai.responses.delay = 0.06
+    def test_natural_termination_speaks_final_with_no_nudge(self):
+        spoken: list[str] = []
+
+        async def speak_progress(text):
+            spoken.append(text)
+
+        openai = FakeOpenAI(lambda _input: final("All set."))
         result = run(
             run_agent_goal(
-                goal="Keep going.",
+                goal="Say something.",
                 stop_event=asyncio.Event(),
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
-                max_seconds=0.05,
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
             )
         )
 
-        self.assertEqual(result, TIMEOUT_FINAL)
-        self.assertEqual(moves, [])
+        self.assertEqual(result, "All set.")
+        self.assertEqual(spoken, ["All set."])
+        self.assertEqual(len(openai.responses.calls), 1)
 
-    def test_narration_before_tool_sets_speaking_on_then_off(self):
-        speaking = {"value": False}
-        speaking_seen: list[bool] = []
-
-        async def speak_progress(_text):
-            speaking["value"] = True
-            await asyncio.sleep(0)
-            speaking["value"] = False
-
+    def test_empty_responses_nudge_then_finish(self):
         steps = {"n": 0}
 
         def responder(_input_items):
             steps["n"] += 1
-            # Snapshot whether speaking is set at the moment the model is consulted;
-            # it must be false between batches, never left stuck on.
-            speaking_seen.append(speaking["value"])
-            if steps["n"] >= 2:
-                return decision(done=True, final="All done.")
-            return decision(narration="Heading over now.", tool_calls=[call_tool("move_forward")])
+            if steps["n"] <= 2:
+                return empty()
+            return final("Okay, finished.")
+
+        openai = FakeOpenAI(responder)
+        result = run(
+            run_agent_goal(
+                goal="Do it.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+            )
+        )
+
+        self.assertEqual(result, "Okay, finished.")
+        nudges = [c for c in openai.responses.calls if NUDGE_TEXT in serialized(c["input"])]
+        self.assertEqual(len(nudges), 2)
+
+    def test_all_empty_responses_eventually_blocks(self):
+        openai = FakeOpenAI(lambda _input: empty())
+        result = run(
+            run_agent_goal(
+                goal="Do it.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+            )
+        )
+
+        self.assertEqual(result, BLOCKED_FINAL)
+
+    def test_normal_run_injects_no_bookkeeping_or_wrap_up(self):
+        moves: list[str] = []
+
+        def responder(_input_items):
+            if len(moves) >= 3:
+                return final("Reached you.")
+            return call("move_forward")
 
         openai = FakeOpenAI(responder)
         run(
@@ -288,23 +389,56 @@ class AgentRunnerTest(unittest.TestCase):
                 openai_client=openai,
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
-                speak_progress=speak_progress,
-                is_speaking=lambda: speaking["value"],
+                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
             )
         )
 
-        # Speaking was off each time we asked the model, so narration toggled it on
-        # and back off rather than leaving it set.
-        self.assertEqual(speaking_seen, [False, False])
-        self.assertFalse(speaking["value"])
+        # A healthy multi-step run never injects a nudge or a "wrap up soon" line.
+        for request in openai.responses.calls:
+            self.assertNotIn(NUDGE_TEXT, serialized(request["input"]))
+            self.assertNotIn("wrap up", serialized(request["input"]).lower())
 
-    def test_tool_not_started_until_narration_finishes(self):
+
+class SpeechConcurrencyTest(unittest.TestCase):
+    def test_text_alongside_tool_call_is_narrated_not_the_final(self):
+        spoken: list[str] = []
+
+        async def speak_progress(text):
+            spoken.append(text)
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Reached the goal.")
+            return call("move_forward", narration="Heading over now.")
+
+        openai = FakeOpenAI(responder)
+        result = run(
+            run_agent_goal(
+                goal="Come here.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
+            )
+        )
+
+        # The narration was spoken, but only the no-tool-call text is the final the
+        # runner returns (and thus the only text the caller commits to history).
+        self.assertEqual(result, "Reached the goal.")
+        self.assertEqual(spoken, ["Heading over now.", "Reached the goal."])
+
+    def test_narration_does_not_block_the_next_tool(self):
         order: list[str] = []
 
         async def speak_progress(_text):
             order.append("narrate_start")
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.02)
             order.append("narrate_done")
 
         steps = {"n": 0}
@@ -312,8 +446,8 @@ class AgentRunnerTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] >= 2:
-                return decision(done=True, final="Done.")
-            return decision(narration="On my way.", tool_calls=[call_tool("move_forward")])
+                return final("Done.")
+            return call("move_forward", narration="On my way.")
 
         def move(_name):
             order.append("tool")
@@ -333,9 +467,11 @@ class AgentRunnerTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(order[:3], ["narrate_start", "narrate_done", "tool"])
+        # The tool ran while narration was still playing, not after it finished.
+        self.assertIn("narrate_start", order)
+        self.assertLess(order.index("tool"), order.index("narrate_done"))
 
-    def test_narration_skipped_when_already_speaking(self):
+    def test_narration_skipped_while_already_speaking(self):
         spoken: list[str] = []
 
         async def speak_progress(text):
@@ -346,8 +482,8 @@ class AgentRunnerTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] >= 2:
-                return decision(done=True, final="Done.")
-            return decision(narration="On my way.", tool_calls=[call_tool("move_forward")])
+                return final("Done.")
+            return call("move_forward", narration="On my way.")
 
         openai = FakeOpenAI(responder)
         run(
@@ -363,37 +499,7 @@ class AgentRunnerTest(unittest.TestCase):
             )
         )
 
-        # Interim narration is suppressed while speaking, but the final is always said.
-        self.assertEqual(spoken, ["Done."])
-
-    def test_tool_completion_while_speaking_does_not_narrate(self):
-        spoken: list[str] = []
-
-        async def speak_progress(text):
-            spoken.append(text)
-
-        steps = {"n": 0}
-
-        def responder(_input_items):
-            steps["n"] += 1
-            if steps["n"] >= 3:
-                return decision(done=True, final="Done.")
-            return decision(narration="Still going.", tool_calls=[call_tool("move_forward")])
-
-        openai = FakeOpenAI(responder)
-        run(
-            run_agent_goal(
-                goal="Move.",
-                stop_event=asyncio.Event(),
-                openai_client=openai,
-                openai_model="test-model",
-                voice_state=VoiceState("voice"),
-                motion_intent_caller=lambda _name: {"ok": True},
-                speak_progress=speak_progress,
-                is_speaking=lambda: True,
-            )
-        )
-
+        # Interim narration is suppressed while speaking; the final is always said.
         self.assertEqual(spoken, ["Done."])
 
     def test_final_speech_does_not_overlap_with_progress_speech(self):
@@ -410,8 +516,8 @@ class AgentRunnerTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] >= 2:
-                return decision(done=True, final="Done.")
-            return decision(narration="Working on it.", tool_calls=[call_tool("move_forward")])
+                return final("Done.")
+            return call("move_forward", narration="Working on it.")
 
         openai = FakeOpenAI(responder)
         run(
@@ -429,10 +535,118 @@ class AgentRunnerTest(unittest.TestCase):
 
         self.assertEqual(concurrency["max"], 1)
 
-    def test_stop_event_cancels_the_goal(self):
+    def test_narration_failure_does_not_sink_the_final(self):
+        spoken: list[str] = []
+
+        async def speak_progress(text):
+            if text == "On my way.":
+                await asyncio.sleep(0.01)
+                raise RuntimeError("tts socket died")
+            spoken.append(text)
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Reached the goal.")
+            return call("move_forward", narration="On my way.")
+
+        openai = FakeOpenAI(responder)
+        result = run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
+            )
+        )
+
+        # The narration blew up mid-flight, but the goal still finished and spoke
+        # its final line.
+        self.assertEqual(result, "Reached the goal.")
+        self.assertEqual(spoken, ["Reached the goal."])
+
+    def test_stop_cancels_the_goal_and_in_flight_narration(self):
+        stop_event = asyncio.Event()
+        cancelled = {"value": False}
+
+        async def speak_progress(_text):
+            try:
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                cancelled["value"] = True
+                raise
+
+        def move(_name):
+            stop_event.set()
+            return {"ok": True}
+
+        openai = FakeOpenAI(lambda _input: call("move_forward", narration="Working."))
+        result = run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=stop_event,
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=move,
+                speak_progress=speak_progress,
+                is_speaking=lambda: False,
+            )
+        )
+
+        self.assertEqual(result, "")
+        self.assertTrue(cancelled["value"])
+
+
+class GuardRailsTest(unittest.TestCase):
+    def test_step_limit_returns_spoken_final(self):
+        openai = FakeOpenAI(lambda _input: call("move_forward"))
+        result = run(
+            run_agent_goal(
+                goal="Keep going.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name: {"ok": True},
+                max_steps=2,
+            )
+        )
+
+        self.assertEqual(result, STEP_LIMIT_FINAL)
+        self.assertEqual(len(openai.responses.calls), 2)
+
+    def test_timeout_during_model_call_returns_final_without_running_tools(self):
+        moves: list[str] = []
+        openai = FakeOpenAI(lambda _input: call("move_forward"))
+        # The model call itself overruns the budget; the decision it eventually
+        # returns must not be acted on.
+        openai.responses.delay = 0.06
+        result = run(
+            run_agent_goal(
+                goal="Keep going.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                max_seconds=0.05,
+            )
+        )
+
+        self.assertEqual(result, TIMEOUT_FINAL)
+        self.assertEqual(moves, [])
+
+    def test_stop_event_set_before_start_runs_nothing(self):
         stop_event = asyncio.Event()
         stop_event.set()
-        openai = FakeOpenAI(lambda _input: decision(tool_calls=[call_tool("move_forward")]))
+        openai = FakeOpenAI(lambda _input: call("move_forward"))
         result = run(
             run_agent_goal(
                 goal="Keep going.",

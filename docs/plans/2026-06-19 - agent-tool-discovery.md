@@ -13,12 +13,18 @@ The target shape is:
 ```text
 agent loop
     |
-    +-- always-on read-only tools: ls, tree, find, rg, cat, head, tail, wc, stat
+    +-- always-on core robot tools: move_forward, face_me (turn later),
+    |       inspect_robot, look_around
+    +-- always-on discovery tools: ls, tree, find, rg, cat
     +-- always-on executor: call_tool
     |
-    +-- reads docs/agent/tools/**/*.md
+    +-- reads docs/agent/tools/**/*.md to discover the rest
     +-- chooses useful executable tools by name
-    +-- calls them through the harness allowlist
+    +-- calls them through call_tool / the harness allowlist
+    |
+    +-- discoverable robot tools: wiggle, inspect_speaker_direction,
+    |       end_session, switch_voice, ...
+    +-- discoverable read refinements: head, tail, wc, stat
 ```
 
 The Markdown files are documentation and discovery. They do not make a tool
@@ -27,6 +33,39 @@ registry.
 
 Follow `AGENTS.md`: keep this plain. Do not build a plugin framework, schema
 registry, package manager, or generalized shell.
+
+## Always-On Vs Discoverable
+
+Every agent iteration always carries a small fixed tool set. That set does not
+grow as the robot gains capabilities — new robot tools are added as docs and
+reached by name through `call_tool`.
+
+Always-on:
+
+- Core robot tools the agent almost always needs:
+  - `move_forward`
+  - `face_me`
+  - `turn` (later, once the IMU is connected)
+  - `inspect_robot` (basic body and drive state)
+  - `look_around` (camera photo)
+- Discovery tools for navigating and reading the tool docs:
+  - `ls`, `tree`, `find`, `rg`, `cat`
+- The executor:
+  - `call_tool`
+- The structured `done/final` response.
+
+Discoverable (documented, not always-on, executed via `call_tool`):
+
+- Other robot tools: `wiggle`, `inspect_speaker_direction`, `end_session`,
+  `switch_voice`, and anything added later.
+- Read refinements: `head`, `tail`, `wc`, `stat`.
+
+The read-tool split is deliberate. The directory tools exist only for tool
+discovery, so the always-on read subset is exactly what you need to navigate,
+search, and read the doc tree: list, tree, find, search, read. The refinements
+(partial reads, counts, metadata) are niceties the agent can reach through
+`call_tool` when it wants them. All nine read tools are still implemented with
+full, Unix-faithful behavior; only the discovery-focused subset is always-on.
 
 ## Non-Goals
 
@@ -57,7 +96,18 @@ docs/agent/tools/
   session/
     end_session.md
     switch_voice.md
+  read/
+    head.md
+    tail.md
+    wc.md
+    stat.md
 ```
+
+The discoverable read refinements (`head`, `tail`, `wc`, `stat`) get docs here so
+the agent can find them the same way it finds robot tools. The always-on read
+tools (`ls`, `tree`, `find`, `rg`, `cat`) do not need docs to be discovered — they
+are already in the prompt — but a short `read/` doc for them is fine if it helps
+the agent reason about them.
 
 Generated or runtime-added tool docs can later live under a data directory such
 as:
@@ -108,12 +158,19 @@ Notes:
 Do not over-structure the Markdown. The frontmatter is for humans, tests, and
 simple filtering. The body is the primary model-facing documentation.
 
-## Always-On Read-Only Tools
+## Read-Only Unix-Shaped Tools
 
-Expose a small Unix-shaped tool set to the agent runner.
+Expose a Unix-shaped read tool set to the agent runner. These exist for tool
+discovery: reading the Markdown tool docs.
 
-These should feel familiar to models that know Unix commands, while still being
-bounded by the harness.
+Make them feel native. Each tool should support the real capabilities of the
+underlying command so a model can lean on its existing Unix habits, while still
+being bounded by the harness roots, timeouts, and output caps. If a flag the
+model would reach for is missing, the tool is not finished.
+
+`ls`, `tree`, `find`, `rg`, and `cat` are always-on. `head`, `tail`, `wc`, and
+`stat` are implemented the same way but are discoverable through `call_tool`
+rather than always-on (see Always-On Vs Discoverable).
 
 ### `ls`
 
@@ -178,7 +235,8 @@ two similarly named files exist.
 
 ### `rg`
 
-Search file contents. Use ripgrep internally when available.
+Search file contents by shelling out to the real `rg` binary. Mirror ripgrep's
+flags and output format so the model's existing ripgrep habits work unchanged.
 
 Arguments:
 
@@ -190,10 +248,13 @@ Arguments:
 - `files_with_matches`
 - `max_matches`
 
-Returns matching path, line number, and line text. Cap output bytes.
+Pass these through to the corresponding ripgrep flags, and accept the common
+ripgrep flags directly so the tool feels native. Returns matching path, line
+number, and line text. Enforce the root, a timeout, and an output byte cap.
 
-This is intentionally closer to `rg` than a weak "search documents" helper. The
-agent should be able to use normal search tactics.
+This is intentionally the real `rg`, not a weak "search documents" helper. The
+agent should be able to use normal ripgrep search tactics. If the `rg` binary is
+absent on the host, return a clear observation rather than silently degrading.
 
 ### `cat`
 
@@ -284,6 +345,22 @@ Expose one executor tool to the agent:
 
 `call_tool` checks the real harness registry, not the Markdown tree.
 
+`call_tool` can execute any registered tool by name, whether or not that tool is
+in the always-on schema set. That is the whole point: the always-on robot tools
+can also be called directly, but everything else — `wiggle`,
+`inspect_speaker_direction`, `end_session`, `switch_voice`, the `head`/`tail`/
+`wc`/`stat` read refinements, and future tools — is reachable only through
+`call_tool`. Route by name to the right executor: robot tools go through the
+existing `dispatch_tool`, read tools through the read-tool dispatch.
+
+There is no separate registry object to build. The "registry" is the set of
+names the harness already knows how to execute (`dispatch_tool`'s tool names plus
+the read-tool names). Do not add a registry abstraction or plugin layer for this.
+
+Session tools are in scope. `end_session` and `switch_voice` are documented and
+callable via `call_tool`, so a goal can end the session or switch voice. Validate
+their side effects the same way the assistant path does.
+
 Rules:
 
 - Unknown tool names return an observation, not a crash.
@@ -296,27 +373,28 @@ Rules:
 ## Agent Prompt Changes
 
 Once this plan lands, the agent runner should no longer include every robot tool
-schema in every iteration when the list grows.
+schema in every iteration when the list grows. The always-on schema set stays
+fixed regardless of how many robot tools exist.
 
-Start with:
+The always-on schema set is:
 
-- `ls`
-- `tree`
-- `find`
-- `rg`
-- `cat`
-- `head`
-- `tail`
-- `wc`
-- `stat`
+- Core robot tools: `move_forward`, `face_me`, `turn` (later), `inspect_robot`,
+  `look_around`
+- Discovery tools: `ls`, `tree`, `find`, `rg`, `cat`
 - `call_tool`
 - `finish_goal` or the existing structured `done/final` response
+
+Everything else (`wiggle`, `inspect_speaker_direction`, `end_session`,
+`switch_voice`, `head`, `tail`, `wc`, `stat`, and future tools) is reached via
+`call_tool` after the agent discovers it in the docs.
 
 The prompt should explain:
 
 - Tool documentation lives under `docs/agent/tools/`.
-- Use `rg`, `find`, `ls`, `tree`, `cat`, `head`, `tail`, `wc`, and `stat` to discover relevant tools.
-- Use `call_tool` to execute a documented tool by name.
+- The core robot tools and discovery tools are already available directly.
+- Use `rg`, `find`, `ls`, `tree`, and `cat` to discover other tools.
+- Use `call_tool` to execute any documented tool by name, including ones not in
+  the always-on set.
 - Reading a doc does not execute anything.
 - If a tool result suggests a new direction, search/read again.
 
@@ -332,16 +410,18 @@ Create the Markdown registry for the tools that already exist.
 
 ### Work
 
-Add docs for:
+Add docs for every callable tool, both always-on and discoverable. Always-on
+tools still get docs so the agent can answer questions about them and so the
+consistency test has one source of truth:
 
-- `move_forward`
-- `wiggle`
-- `face_me`
-- `look_around`
-- `inspect_robot`
-- `inspect_speaker_direction` if added by the harness plan
-- `end_session`
-- `switch_voice`
+- `move_forward` (always-on)
+- `face_me` (always-on)
+- `inspect_robot` (always-on)
+- `look_around` (always-on)
+- `wiggle` (discoverable)
+- `inspect_speaker_direction` (discoverable)
+- `end_session` (discoverable)
+- `switch_voice` (discoverable)
 
 Add `docs/agent/tools/README.md` explaining the directory structure.
 
@@ -375,7 +455,7 @@ Let the agent inspect the tool docs with familiar search/read operations.
 Add `src/voice/read_tools.py` or similar. Keep the name concrete once the code
 shape is clear.
 
-Implement:
+Implement all nine, each with full, Unix-faithful behavior:
 
 - `ls`
 - `tree`
@@ -387,8 +467,14 @@ Implement:
 - `wc`
 - `stat`
 
-Use simple subprocess calls for `rg` if that stays clear, with timeout and output
-caps. Use Python filesystem APIs for the other read tools.
+`ls`, `tree`, `find`, `rg`, and `cat` are wired into the agent's always-on schema
+set. `head`, `tail`, `wc`, and `stat` are implemented the same way but reached via
+`call_tool` (Phase 3), so they need docs in the tool tree too. Route read-tool
+names to the read dispatch; this is the second executor `call_tool` knows about.
+
+Shell out to the real `rg` binary with a timeout and output caps, mirroring its
+flags so the model's ripgrep habits work. Use Python filesystem APIs for the
+other read tools, supporting the real capabilities of each underlying command.
 
 Do not support pipes, redirects, shell command strings, command substitution, or
 arbitrary environment variables.
@@ -426,10 +512,12 @@ Add `call_tool` to the agent runner's always-on tool set.
 
 Implementation:
 
-- Look up the name in the real tool registry.
+- Look up the name in the names the harness can execute: `dispatch_tool`'s robot
+  tools plus the read-tool names. There is no separate registry object to build.
+- Route robot tools to `dispatch_tool` and read tools to the read dispatch.
 - Validate arguments the same way direct tool calls are validated.
-- Execute through the same dispatcher as Phase 1 of the harness plan.
 - Return the same structured observation as direct calls.
+- Session tools (`end_session`, `switch_voice`) are reachable through `call_tool`.
 
 ### Tests
 
@@ -457,22 +545,28 @@ call by name."
 
 Update the agent prompt:
 
-- Start each goal knowing only the always-on tools.
-- Tell the model where tool docs live.
-- Encourage `rg` first for vague needs and `cat` for exact docs.
+- Start each goal knowing the always-on set: core robot tools, discovery tools,
+  and `call_tool`.
+- Tell the model where tool docs live and that the always-on robot tools are
+  already directly available.
+- Encourage `rg` first for vague needs and `cat` for exact docs when reaching for
+  a tool outside the always-on set.
 - Encourage observing after physical tools.
 
-For the first implementation, keep direct schemas available as a fallback. Log
-whether a goal used doc discovery. Once real use looks good, remove direct
-schemas from the agent loop, not from the normal assistant path.
+The core robot tools stay always-on permanently — moving and basic inspection are
+the agent's bread and butter, so they should never require a doc lookup. What
+gets removed from the loop over time is the long tail of less-common robot tools,
+not the core set. For the first implementation, keep those tail schemas available
+as a fallback. Log whether a goal used doc discovery. Once real use looks good,
+remove the tail schemas from the agent loop, not from the normal assistant path.
 
 ### Tests
 
 Use fake model responses:
 
-- Search docs for "move".
-- Read `move_forward.md`.
-- Call `move_forward`.
+- Search docs for a tool outside the always-on set (for example `wiggle`).
+- Read its doc.
+- Call it via `call_tool`.
 - Observe.
 - Finish.
 

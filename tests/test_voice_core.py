@@ -1618,6 +1618,74 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_delayed_echo_of_progress_narration_is_suppressed_mid_goal(self):
+        # A goal narrates a progress line, the narration finishes (so state.progress
+        # clears) but the goal keeps working. A delayed STT echo of that line must be
+        # recognized as assistant echo and must not cancel the goal or start a turn.
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            narrated = asyncio.Event()
+            prompts = []
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                prompts.append(openai_input[-1]["content"])
+                return AgentGoalRequest(goal="patrol the room")
+
+            async def fake_progress_speaker(text_chunks, *args, **kwargs):
+                async for _chunk in text_chunks:
+                    pass
+
+            async def fake_goal_runner(*, goal, stop_event, speak_progress=None, **kwargs):
+                await speak_progress("Heading over to you now.")
+                narrated.set()
+                await stop_event.wait()
+                return "I am right next to you."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    progress_speaker=fake_progress_speaker,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Patrol the room."})
+            await asyncio.wait_for(narrated.wait(), 1.0)
+
+            await scribe_events.put({"type": "commit", "text": "Heading over to you now."})
+            for _ in range(50):
+                if any(event["type"] == "echo_suppressed" for event in events):
+                    break
+                await asyncio.sleep(0.01)
+
+            # The echo was suppressed: the goal was never cancelled and no second
+            # turn ran for the echoed line.
+            self.assertTrue(any(event["type"] == "echo_suppressed" for event in events))
+            self.assertFalse(any(event["type"] == "goal_cancel" for event in events))
+            self.assertEqual(prompts, ["Patrol the room."])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_shutdown_cancels_active_goal(self):
         async def run():
             history = ConversationHistory()

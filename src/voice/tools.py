@@ -83,7 +83,7 @@ class AgentObservation:
 @dataclass
 class VoiceToolContext:
     voice_state: VoiceState
-    motion_intent_caller: Callable[[str], Any] | None = None
+    motion_intent_caller: Callable[..., Any] | None = None
     camera_snapshot_caller: Callable[[], bytes] | None = None
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None
     face_me_caller: Callable[[], dict[str, Any]] | None = None
@@ -140,7 +140,7 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
     if name in MOTION_TOOL_NAMES:
         if context.motion_intent_caller is None:
             return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
-        result = await asyncio.to_thread(context.motion_intent_caller, name)
+        result = await asyncio.to_thread(context.motion_intent_caller, name, **call.arguments)
         return _result(call, result.get("ok") is not False, result)
 
     if name == LOOK_AROUND_TOOL_NAME:

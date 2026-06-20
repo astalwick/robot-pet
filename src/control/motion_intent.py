@@ -28,6 +28,8 @@ from control.commands import MotionCommand
 WIGGLE_HALF_DURATION = 0.25
 WIGGLE_ANGULAR_Z = 0.5
 MOVE_FORWARD_DURATION = 0.5
+MOVE_FORWARD_MIN_DURATION = 0.5
+MOVE_FORWARD_MAX_DURATION = 5.0
 MOVE_FORWARD_LINEAR_X = 0.3
 DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1
@@ -41,9 +43,15 @@ FACE_ME_DEGREES_PER_SECOND = 55
 FACE_ME_ALREADY_FACING_DEGREES = 15
 FACE_ME_MAX_RELATIVE_DEGREES = 180
 
-KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn", "face_me")
+# `turn` reuses the verified turn speed and degrees-per-second calibration from
+# diagnostic_turn / face_me. Positive degrees turn the robot to its left.
+TURN_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
+TURN_DEGREES_PER_SECOND = FACE_ME_DEGREES_PER_SECOND
+TURN_MIN_DEGREES = 1
+TURN_MAX_DEGREES = 360
+
+KNOWN_TOOLS = ("wiggle", "move_forward", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
-START_ACK_TOOLS = ("wiggle", "move_forward", "diagnostic_turn")
 MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 10.0
 
 
@@ -53,6 +61,15 @@ def valid_relative_degrees(value: Any) -> bool:
         isinstance(value, (int, float))
         and not isinstance(value, bool)
         and -FACE_ME_MAX_RELATIVE_DEGREES <= value <= FACE_ME_MAX_RELATIVE_DEGREES
+    )
+
+
+def valid_turn_degrees(value: Any) -> bool:
+    """A real number (not a bool) with a turn magnitude we are willing to drive."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and TURN_MIN_DEGREES <= abs(value) <= TURN_MAX_DEGREES
     )
 
 
@@ -72,6 +89,7 @@ class _ActiveIntent:
     direction: str | None = None
     duration_seconds: float | None = None
     relative_degrees: float | None = None
+    degrees: float | None = None
 
 
 class MotionIntentExecutor:
@@ -100,6 +118,7 @@ class MotionIntentExecutor:
         direction: str | None = None,
         duration_seconds: float | None = None,
         relative_degrees: float | None = None,
+        degrees: float | None = None,
     ) -> str | None:
         """Begin a new intent. Returns None on success, error string on failure."""
         if tool not in KNOWN_TOOLS:
@@ -115,14 +134,24 @@ class MotionIntentExecutor:
                 or not DIAGNOSTIC_TURN_MIN_DURATION <= duration_seconds <= DIAGNOSTIC_TURN_MAX_DURATION
             ):
                 return "invalid_duration"
+        if tool == "move_forward" and duration_seconds is not None:
+            if (
+                not isinstance(duration_seconds, (int, float))
+                or isinstance(duration_seconds, bool)
+                or not MOVE_FORWARD_MIN_DURATION <= duration_seconds <= MOVE_FORWARD_MAX_DURATION
+            ):
+                return "invalid_duration"
         if tool == "face_me" and not valid_relative_degrees(relative_degrees):
             return "invalid_relative_degrees"
+        if tool == "turn" and not valid_turn_degrees(degrees):
+            return "invalid_degrees"
         self._active = _ActiveIntent(
             tool=tool,
             started_at=now,
             direction=direction,
             duration_seconds=duration_seconds,
             relative_degrees=relative_degrees,
+            degrees=degrees,
         )
         return None
 
@@ -152,7 +181,12 @@ class MotionIntentExecutor:
             return IntentTick(command=None, finished=True, result="completed")
 
         if self._active.tool == "move_forward":
-            if elapsed < MOVE_FORWARD_DURATION:
+            duration = (
+                self._active.duration_seconds
+                if self._active.duration_seconds is not None
+                else MOVE_FORWARD_DURATION
+            )
+            if elapsed < duration:
                 return IntentTick(
                     command=MotionCommand(linear_x=MOVE_FORWARD_LINEAR_X, angular_z=0.0),
                     finished=False,
@@ -190,6 +224,19 @@ class MotionIntentExecutor:
             self._active = None
             return IntentTick(command=None, finished=True, result="completed")
 
+        if self._active.tool == "turn":
+            degrees = self._active.degrees
+            duration = abs(degrees) / TURN_DEGREES_PER_SECOND
+            if elapsed < duration:
+                angular_z = -TURN_ANGULAR_Z if degrees > 0 else TURN_ANGULAR_Z
+                return IntentTick(
+                    command=MotionCommand(linear_x=0.0, angular_z=angular_z),
+                    finished=False,
+                    result=None,
+                )
+            self._active = None
+            return IntentTick(command=None, finished=True, result="completed")
+
         self._active = None
         return IntentTick(command=None, finished=True, result="completed")
 
@@ -199,8 +246,8 @@ class MotionIntentBridge:
 
     The main loop polls `take_pending()` each tick; if a request is waiting it
     runs through the executor and reports the outcome via the returned callback.
-    Some tools answer when motion starts; result-sensitive tools can answer when
-    they finish.
+    The reply comes when the motion finishes, so a caller that issues a motion
+    cannot start another action until this one is done.
     """
 
     INTENT_MAX_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
@@ -316,8 +363,20 @@ class MotionIntentBridge:
             ):
                 self._send(conn, {"ok": False, "error": "invalid_duration"})
                 return
+        if tool == "move_forward":
+            duration_seconds = request.get("duration_seconds")
+            if duration_seconds is not None and (
+                not isinstance(duration_seconds, (int, float))
+                or isinstance(duration_seconds, bool)
+                or not MOVE_FORWARD_MIN_DURATION <= duration_seconds <= MOVE_FORWARD_MAX_DURATION
+            ):
+                self._send(conn, {"ok": False, "error": "invalid_duration"})
+                return
         if tool == "face_me" and not valid_relative_degrees(request.get("relative_degrees")):
             self._send(conn, {"ok": False, "error": "invalid_relative_degrees"})
+            return
+        if tool == "turn" and not valid_turn_degrees(request.get("degrees")):
+            self._send(conn, {"ok": False, "error": "invalid_degrees"})
             return
 
         done_event = threading.Event()

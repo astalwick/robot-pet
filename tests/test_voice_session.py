@@ -154,7 +154,7 @@ class AssistantToolsTest(unittest.TestCase):
         self.assertIn("switch_voice", tool_names)
         self.assertEqual(
             tool_names,
-            {"switch_voice", "end_session", "wiggle", "move_forward", "look_around", "inspect_robot", "face_me", "start_goal"},
+            {"switch_voice", "end_session", "wiggle", "move_forward", "turn", "look_around", "inspect_robot", "face_me", "start_goal"},
         )
 
 
@@ -365,26 +365,48 @@ class GoalProgressSpeechTest(unittest.TestCase):
         asyncio.run(run())
 
 
-def goal_decision(**fields) -> str:
-    payload = {"narration": "", "tool_calls": [], "done": False, "blocked": False, "final": None}
-    payload.update(fields)
-    return json.dumps(payload)
+class FakeFunctionCall:
+    def __init__(self, name, arguments, call_id):
+        self.type = "function_call"
+        self.name = name
+        self.arguments = json.dumps(arguments)
+        self.call_id = call_id
 
 
 class FakeResponse:
-    def __init__(self, text: str):
-        self.output_text = text
+    def __init__(self, *, output=None, output_text=""):
+        self.output = output or []
+        self.output_text = output_text
+        self.id = None
+
+
+def goal_step(*, narration="", tool):
+    """One goal step: a tool call, optionally with progress narration."""
+    return FakeResponse(
+        output=[FakeFunctionCall(tool, {}, "call_1")],
+        output_text=narration,
+    )
+
+
+def goal_final(final):
+    """The natural finish: text and no tool call."""
+    return FakeResponse(output=[], output_text=final)
 
 
 class FakeOpenAI:
-    """Scripts the goal model: each create() asks a responder for the next decision."""
+    """Scripts the goal model: each create() asks a responder for the next response."""
 
     def __init__(self, responder):
         self.responder = responder
+        self.calls = []
 
         class Responses:
             async def create(_self, **kwargs):
-                return FakeResponse(responder(kwargs["input"]))
+                self.calls.append(kwargs)
+                response = responder(kwargs["input"])
+                if response.id is None:
+                    response.id = f"resp_{len(self.calls)}"
+                return response
 
         self.responses = Responses()
 
@@ -462,8 +484,8 @@ class GoalRunnerIntegrationTest(unittest.TestCase):
         def responder(_input_items):
             steps["n"] += 1
             if steps["n"] == 1:
-                return goal_decision(narration="Heading your way.", tool_calls=[{"name": "move_forward", "arguments": {}}])
-            return goal_decision(done=True, final="I am right next to you now.")
+                return goal_step(narration="Heading your way.", tool="move_forward")
+            return goal_final("I am right next to you now.")
 
         async def run():
             h = self._harness(assistant_result=AgentGoalRequest(goal="come here"), responder=responder)

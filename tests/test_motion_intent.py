@@ -22,6 +22,9 @@ from control.motion_intent import (
     FACE_ME_MAX_RELATIVE_DEGREES,
     MOVE_FORWARD_DURATION,
     MOVE_FORWARD_LINEAR_X,
+    TURN_ANGULAR_Z,
+    TURN_DEGREES_PER_SECOND,
+    TURN_MAX_DEGREES,
     WIGGLE_ANGULAR_Z,
     WIGGLE_HALF_DURATION,
     MotionIntentBridge,
@@ -193,6 +196,35 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(tick.result, "completed")
         self.assertIsNone(tick.command)
 
+    def test_turn_positive_degrees_turns_left_then_completes(self):
+        executor = MotionIntentExecutor()
+        self.assertIsNone(executor.start("turn", now=0.0, degrees=90))
+
+        # 90 / 55 == 1.636 seconds: still turning just before, done just after.
+        running = executor.tick(now=1.0, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
+        self.assertFalse(running.finished)
+
+        done = executor.tick(now=90 / TURN_DEGREES_PER_SECOND + 0.05, gamepad_active=False)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+
+    def test_turn_negative_degrees_turns_right(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=-45)
+
+        running = executor.tick(now=0.1, gamepad_active=False)
+        self.assertEqual(running.command, MotionCommand(0.0, TURN_ANGULAR_Z))
+
+    def test_turn_rejects_invalid_degrees(self):
+        executor = MotionIntentExecutor()
+        self.assertEqual(executor.start("turn", now=0.0, degrees=0), "invalid_degrees")
+        self.assertEqual(
+            executor.start("turn", now=0.0, degrees=TURN_MAX_DEGREES + 1), "invalid_degrees"
+        )
+        self.assertEqual(executor.start("turn", now=0.0, degrees=True), "invalid_degrees")
+        self.assertEqual(executor.start("turn", now=0.0, degrees=None), "invalid_degrees")
+
     def test_face_me_full_turn_stays_below_four_second_maximum(self):
         executor = MotionIntentExecutor()
         executor.start("face_me", now=0.0, relative_degrees=FACE_ME_MAX_RELATIVE_DEGREES)
@@ -325,6 +357,35 @@ class MotionIntentBridgeTest(unittest.TestCase):
                 duration_seconds=DIAGNOSTIC_TURN_MAX_DURATION + 0.1,
             ),
             {"ok": False, "error": "invalid_duration"},
+        )
+
+    def test_turn_parameters_arrive_at_main_loop(self):
+        thread, holder = self._send_request_threaded("turn", degrees=-120)
+
+        deadline = time.monotonic() + 2.0
+        pending = None
+        while pending is None and time.monotonic() < deadline:
+            pending = self.bridge.take_pending()
+            if pending is None:
+                time.sleep(0.01)
+        self.assertIsNotNone(pending)
+
+        request, complete = pending
+        self.assertEqual(request, {"tool": "turn", "degrees": -120})
+        complete({"ok": True, "result": "completed"})
+        thread.join(timeout=2.0)
+        self.assertEqual(holder[0], {"ok": True, "result": "completed"})
+
+    def test_turn_rejects_invalid_degrees_at_socket(self):
+        self.assertEqual(
+            request_motion_intent(self.socket_path, "turn", timeout=2.0, degrees=0),
+            {"ok": False, "error": "invalid_degrees"},
+        )
+        self.assertEqual(
+            request_motion_intent(
+                self.socket_path, "turn", timeout=2.0, degrees=TURN_MAX_DEGREES + 1
+            ),
+            {"ok": False, "error": "invalid_degrees"},
         )
 
     def test_face_me_parameters_arrive_at_main_loop(self):

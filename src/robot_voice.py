@@ -572,10 +572,11 @@ class RobotVoiceService:
             lambda update: self.publish(config, **update),
             audio=self.audio,
             event_callback=self.timeline.add_event,
-            motion_intent_caller=lambda tool: request_motion_intent(
+            motion_intent_caller=lambda tool, **params: request_motion_intent(
                 motion_socket,
                 tool,
                 timeout=MOTION_INTENT_REPLY_TIMEOUT_SECONDS,
+                **params,
             ),
             session_end_caller=self.request_end_session,
             camera_snapshot_caller=lambda: fetch_camera_snapshot(self.camera_url),

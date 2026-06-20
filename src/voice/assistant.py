@@ -28,11 +28,12 @@ VOICE_SWITCH_TOOL_NAME = "switch_voice"
 END_SESSION_TOOL_NAME = "end_session"
 WIGGLE_TOOL_NAME = "wiggle"
 MOVE_FORWARD_TOOL_NAME = "move_forward"
+TURN_TOOL_NAME = "turn"
 LOOK_AROUND_TOOL_NAME = "look_around"
 INSPECT_ROBOT_TOOL_NAME = "inspect_robot"
 FACE_ME_TOOL_NAME = "face_me"
 START_GOAL_TOOL_NAME = "start_goal"
-MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME)
+MOTION_TOOL_NAMES = (WIGGLE_TOOL_NAME, MOVE_FORWARD_TOOL_NAME, TURN_TOOL_NAME)
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
 OPENAI_CREATE_RETRY_DELAY_SECS = 0.2
@@ -190,11 +191,44 @@ WIGGLE_TOOL = {
 MOVE_FORWARD_TOOL = {
     "type": "function",
     "name": MOVE_FORWARD_TOOL_NAME,
-    "description": "Move the robot a tiny bit forward, about half a second of slow forward motion.",
+    "description": (
+        "Move the robot forward at a slow, steady pace. The duration_seconds argument "
+        "sets how long it drives, from 0.5 seconds (a tiny nudge) up to 5 seconds "
+        "(a longer stroll). Use a small value for a little bump forward and a larger "
+        "value when asked to go farther."
+    ),
     "parameters": {
         "type": "object",
-        "properties": {},
-        "required": [],
+        "properties": {
+            "duration_seconds": {
+                "type": "number",
+                "description": "How long to drive forward, between 0.5 and 5 seconds.",
+            },
+        },
+        "required": ["duration_seconds"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+TURN_TOOL = {
+    "type": "function",
+    "name": TURN_TOOL_NAME,
+    "description": (
+        "Turn the robot in place by a number of degrees. The degrees argument is "
+        "signed: positive degrees turn the robot to its left, negative degrees turn "
+        "it to its right. Magnitude can be from 1 up to 360 degrees."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "degrees": {
+                "type": "number",
+                "description": "How far to turn: positive for left, negative for right, 1 to 360 degrees.",
+            },
+        },
+        "required": ["degrees"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -292,6 +326,7 @@ ASSISTANT_TOOLS = [
     END_SESSION_TOOL,
     WIGGLE_TOOL,
     MOVE_FORWARD_TOOL,
+    TURN_TOOL,
     LOOK_AROUND_TOOL,
     INSPECT_ROBOT_TOOL,
     FACE_ME_TOOL,
@@ -703,7 +738,7 @@ async def stream_openai_words(
     openai_input: list[dict[str, Any]],
     openai_client: Any,
     voice_state: VoiceState,
-    motion_intent_caller: Callable[[str], Any] | None = None,
+    motion_intent_caller: Callable[..., Any] | None = None,
     end_session_pending: list[bool] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
@@ -869,7 +904,7 @@ async def run_assistant_turn(
     voice_state: VoiceState,
     on_assistant_chunk: Callable[[str], None] | None = None,
     tts_speaker: Callable[..., Any] | None = None,
-    motion_intent_caller: Callable[[str], Any] | None = None,
+    motion_intent_caller: Callable[..., Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     usage: Any = None,
@@ -970,7 +1005,7 @@ async def handle_scribe_events(
     on_event: Callable[[dict[str, object]], None] | None = None,
     assistant_runner: Callable[..., Any] = run_assistant_turn,
     goal_runner: Callable[..., Any] | None = None,
-    motion_intent_caller: Callable[[str], Any] | None = None,
+    motion_intent_caller: Callable[..., Any] | None = None,
     session_end_caller: Callable[[], Any] | None = None,
     camera_snapshot_caller: Callable[[], bytes] | None = None,
     stop_playback_now: Callable[[], Any] | None = None,
@@ -1211,6 +1246,7 @@ async def handle_scribe_events(
             await cancel_active_turn(reason)
 
     async def speak_progress(text: str) -> None:
+        nonlocal recent_assistant_text, recent_assistant_echo_until
         text = (text or "").strip()
         if not text:
             return
@@ -1241,6 +1277,12 @@ async def handle_scribe_events(
                 state.progress = None
             progress.playback_event.clear()
             progress.speaking_event.clear()
+
+        # Narration played to completion (a cancel re-raises above and skips this).
+        # Record what we just said so a delayed STT echo of this line is suppressed
+        # even after state.progress clears and the goal keeps working.
+        recent_assistant_text = text
+        recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
 
         # The narration ended but the goal keeps working. The session speaker flips
         # status back to listening when speech stops, so restore thinking here or the

@@ -39,7 +39,7 @@ DIAGNOSTIC_TURN_MAX_DURATION = 4.0
 # diagnostic_turn. robot-voice supplies a signed angle; robot-motion derives the
 # direction and duration. Positive degrees turn toward the left drive wheel.
 FACE_ME_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
-FACE_ME_DEGREES_PER_SECOND = 55
+FACE_ME_DEGREES_PER_SECOND = 40
 FACE_ME_ALREADY_FACING_DEGREES = 15
 FACE_ME_MAX_RELATIVE_DEGREES = 180
 

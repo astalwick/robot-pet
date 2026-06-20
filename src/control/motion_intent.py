@@ -44,7 +44,7 @@ MOVE_MIN_DURATION = 0.5
 MOVE_MAX_DURATION = 30.0
 MOVE_LINEAR_X = 0.3
 # Voice distance moves are calibrated time estimates, not measured odometry.
-MOVE_METERS_PER_SECOND = 0.15
+MOVE_METERS_PER_SECOND = 0.099
 DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1
 DIAGNOSTIC_TURN_MAX_DURATION = 4.0
@@ -53,7 +53,7 @@ DIAGNOSTIC_TURN_MAX_DURATION = 4.0
 # diagnostic_turn. robot-voice supplies a signed angle; robot-motion derives the
 # direction and duration. Positive degrees turn toward the left drive wheel.
 FACE_ME_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
-FACE_ME_DEGREES_PER_SECOND = 55
+FACE_ME_DEGREES_PER_SECOND = 36.7
 FACE_ME_ALREADY_FACING_DEGREES = 15
 FACE_ME_MAX_RELATIVE_DEGREES = 180
 

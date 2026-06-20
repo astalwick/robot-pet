@@ -9,8 +9,8 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 ROBOT_DASHBOARD_IMPORT_ERROR = None
 try:
-from config.teleop import DriveTuning
-from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
+    from config.teleop import DriveTuning
+    from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
 except ModuleNotFoundError as exc:
     if exc.name not in {"rich", "textual"}:
         raise

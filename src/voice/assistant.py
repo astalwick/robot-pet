@@ -1241,6 +1241,12 @@ async def handle_scribe_events(
             progress.playback_event.clear()
             progress.speaking_event.clear()
 
+        # The narration ended but the goal keeps working. The session speaker flips
+        # status back to listening when speech stops, so restore thinking here or the
+        # idle timer would treat an active goal as an idle session.
+        if state.active_goal is not None:
+            status(status="thinking", assistant_speaking=False)
+
     async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
         # The normal turn is finished and is handing off to an iterative goal. Drop
         # it as the active turn so it is not treated as a speaking turn, and surface

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -18,6 +19,7 @@ from voice.assistant import (
     compose_system_prompt,
     handle_scribe_events,
 )
+from voice.agent_runner import run_agent_goal
 from voice.session import VoiceSession
 from voice.turn_policy import TurnPolicy
 
@@ -90,6 +92,29 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         self.assertEqual(session.voice_state.default_voice_id, "scientist-voice")
         self.assertEqual(session.voice_state.alternate_voice_id, "alt-voice-id")
         self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
+
+    def test_start_wires_run_agent_goal_as_goal_runner(self):
+        class FakeAudio:
+            def mic_frames(self, _stop_event):
+                return object()
+
+        session = make_session("default")
+        session.audio = FakeAudio()
+
+        async def run():
+            async def fake_scribe_streamer(*_args, **_kwargs):
+                await session.stop_event.wait()
+
+            async def fake_handle_scribe_events(*_args, **kwargs):
+                self.assertIs(kwargs["goal_runner"], run_agent_goal)
+                await session.stop_event.wait()
+
+            session.scribe_streamer = fake_scribe_streamer
+            with mock.patch("voice.session.handle_scribe_events", fake_handle_scribe_events):
+                await session.start()
+                await session.stop()
+
+        asyncio.run(run())
 
     def test_start_passes_configured_openai_model_to_scribe_handler(self):
         class FakeAudio:
@@ -268,6 +293,64 @@ class GoalProgressSpeechTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_thinking_restored_after_narration_while_goal_continues(self):
+        async def run():
+            statuses: list[dict] = []
+            narrated = asyncio.Event()
+            release = asyncio.Event()
+            scribe_events: asyncio.Queue = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(*args, **kwargs):
+                return AgentGoalRequest(goal="come here")
+
+            async def fake_progress_tts(text_chunks, api_key, voice_id, playback_event, speaking_event):
+                # Speech that actually ends, like real TTS finishing a clip.
+                speaking_event.set()
+                async for _chunk in text_chunks:
+                    pass
+                speaking_event.clear()
+
+            async def fake_goal_runner(*, goal, stop_event, speak_progress, is_speaking, **kwargs):
+                await speak_progress("Heading over to you.")
+                narrated.set()
+                await release.wait()
+                return "I am next to you now."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=ConversationHistory(),
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    progress_speaker=fake_progress_tts,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Come over here."})
+            await asyncio.wait_for(narrated.wait(), 1.0)
+
+            # Narration finished, but the goal is still running. The session must not
+            # look idle: the latest status is thinking, not listening.
+            last_status = [s for s in statuses if "status" in s][-1]
+            self.assertEqual(last_status["status"], "thinking")
+            self.assertFalse(last_status["assistant_speaking"])
+
+            release.set()
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_shutdown_during_progress_speech_stops_the_goal(self):
         async def run():
             h = self._harness()
@@ -278,5 +361,142 @@ class GoalProgressSpeechTest(unittest.TestCase):
 
             # The progress speaker was cancelled on shutdown, which stops playback.
             self.assertTrue(h["stop_playback_calls"])
+
+        asyncio.run(run())
+
+
+def goal_decision(**fields) -> str:
+    payload = {"narration": "", "tool_calls": [], "done": False, "blocked": False, "final": None}
+    payload.update(fields)
+    return json.dumps(payload)
+
+
+class FakeResponse:
+    def __init__(self, text: str):
+        self.output_text = text
+
+
+class FakeOpenAI:
+    """Scripts the goal model: each create() asks a responder for the next decision."""
+
+    def __init__(self, responder):
+        self.responder = responder
+
+        class Responses:
+            async def create(_self, **kwargs):
+                return FakeResponse(responder(kwargs["input"]))
+
+        self.responses = Responses()
+
+
+class GoalRunnerIntegrationTest(unittest.TestCase):
+    """The real run_agent_goal wired in as goal_runner, with fake OpenAI/TTS/tools.
+
+    These drive handle_scribe_events end to end: an assistant turn hands off a goal,
+    the runner deliberates against the fake model and tools, narrates progress, and
+    its final answer lands in history exactly once.
+    """
+
+    def _harness(self, *, assistant_result, responder):
+        events: list[dict] = []
+        statuses: list[dict] = []
+        spoken: list[str] = []
+        moves: list[str] = []
+        history = ConversationHistory()
+        scribe_events: asyncio.Queue = asyncio.Queue()
+        stop_event = asyncio.Event()
+
+        async def fake_run_assistant_turn(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
+            # A normal reply opens playback so the turn commits to history; a goal
+            # handoff returns its request and records nothing here.
+            if not isinstance(assistant_result, AgentGoalRequest):
+                playback_event.set()
+            return assistant_result
+
+        async def fake_progress_tts(text_chunks, api_key, voice_id, playback_event, speaking_event):
+            speaking_event.set()
+            async for chunk in text_chunks:
+                spoken.append(chunk)
+            speaking_event.clear()
+
+        handler_task = asyncio.create_task(
+            handle_scribe_events(
+                scribe_events,
+                openai_client=FakeOpenAI(responder),
+                elevenlabs_api_key="test-key",
+                voice_state=VoiceState("test-voice"),
+                stop_event=stop_event,
+                system_prompt="test system prompt",
+                policy=TurnPolicy(),
+                conversation_history=history,
+                assistant_runner=fake_run_assistant_turn,
+                goal_runner=run_agent_goal,
+                progress_speaker=fake_progress_tts,
+                motion_intent_caller=lambda name: moves.append(name) or {"ok": True},
+                on_event=events.append,
+                on_status=statuses.append,
+            )
+        )
+        return {
+            "events": events, "statuses": statuses, "spoken": spoken, "moves": moves,
+            "history": history, "scribe_events": scribe_events, "stop_event": stop_event,
+            "handler_task": handler_task,
+        }
+
+    async def _shutdown(self, h):
+        h["stop_event"].set()
+        h["handler_task"].cancel()
+        with suppress(asyncio.CancelledError):
+            await h["handler_task"]
+
+    async def _wait_for_event(self, h, event_type):
+        for _ in range(200):
+            if any(e["type"] == event_type for e in h["events"]):
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError(f"event {event_type!r} never arrived: {[e['type'] for e in h['events']]}")
+
+    def test_committed_goal_runs_runner_and_commits_final_once(self):
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] == 1:
+                return goal_decision(narration="Heading your way.", tool_calls=[{"name": "move_forward", "arguments": {}}])
+            return goal_decision(done=True, final="I am right next to you now.")
+
+        async def run():
+            h = self._harness(assistant_result=AgentGoalRequest(goal="come here"), responder=responder)
+            await h["scribe_events"].put({"type": "commit", "text": "Come over here."})
+            await self._wait_for_event(h, "goal_done")
+
+            exchanges = list(h["history"].exchanges())
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].user_text, "Come over here.")
+            self.assertEqual(exchanges[0].assistant_text, "I am right next to you now.")
+            # The runner actually drove a tool, narrated, and spoke its final line.
+            self.assertEqual(h["moves"], ["move_forward"])
+            self.assertIn("Heading your way.", h["spoken"])
+            self.assertIn("I am right next to you now.", h["spoken"])
+
+            await self._shutdown(h)
+
+        asyncio.run(run())
+
+    def test_normal_reply_uses_turn_path_not_the_goal_runner(self):
+        def responder(_input_items):
+            raise AssertionError("goal runner must not be invoked for a normal reply")
+
+        async def run():
+            h = self._harness(assistant_result="Hello there.", responder=responder)
+            await h["scribe_events"].put({"type": "commit", "text": "Tell me a joke please."})
+            await self._wait_for_event(h, "assistant")
+
+            self.assertFalse(any(e["type"] in ("goal_start", "goal_done") for e in h["events"]))
+            exchanges = list(h["history"].exchanges())
+            self.assertEqual(len(exchanges), 1)
+            self.assertEqual(exchanges[0].assistant_text, "Hello there.")
+
+            await self._shutdown(h)
 
         asyncio.run(run())

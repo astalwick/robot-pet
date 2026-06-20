@@ -9,6 +9,7 @@ from typing import Any
 from config.voice import VoiceConfig
 from drivers.respeaker import ReSpeakerAudio
 from lib.log import setup_logging
+from voice.agent_runner import run_agent_goal
 from voice.assistant import (
     ALTERNATE_VOICE_ID,
     DEFAULT_VOICE_ID,
@@ -150,6 +151,7 @@ class VoiceSession:
                     on_status=self.status_callback,
                     on_event=self.event_callback,
                     assistant_runner=assistant_runner,
+                    goal_runner=run_agent_goal,
                     motion_intent_caller=self.motion_intent_caller,
                     session_end_caller=self.session_end_caller,
                     camera_snapshot_caller=self.camera_snapshot_caller,

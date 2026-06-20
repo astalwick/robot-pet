@@ -911,7 +911,7 @@ async def stream_openai_words(
                 arguments=parse_tool_arguments(getattr(function_call, "arguments", "")),
                 call_id=getattr(function_call, "call_id", ""),
             )
-            log.info("tool call: %s", call.name)
+            log.info("tool call: %s args=%s", call.name, call.arguments)
 
             # A goal handoff ends this turn: yield the request and stop. Any text the
             # model produced alongside the call rides along as the goal's opening
@@ -948,9 +948,14 @@ async def stream_openai_words(
                 image_messages.append({"role": "user", "content": result.image_parts})
 
             if result.ok:
-                log.info("tool call %s ok", call.name)
+                log.info("tool call %s args=%s ok", call.name, call.arguments)
             else:
-                log.warning("tool call %s failed: %s", call.name, result.output.get("error"))
+                log.warning(
+                    "tool call %s args=%s failed: %s",
+                    call.name,
+                    call.arguments,
+                    result.output.get("error"),
+                )
 
         if end_session_pending and end_session_pending[0] and (text_streamed or end_session_tool_output_sent):
             return

@@ -264,7 +264,7 @@ async def run_agent_goal(
             result = await dispatch_tool(call, context)
             if stop_event.is_set():
                 return ""
-            log.info("tool call %s ok=%s", call.name, result.ok)
+            log.info("tool call %s args=%s ok=%s", call.name, call.arguments, result.ok)
 
             input_items = [
                 {"type": "function_call_output", "call_id": call.call_id, "output": json.dumps(result.output)}

@@ -1302,6 +1302,25 @@ async def handle_scribe_events(
             return None
         return result if isinstance(result, AgentGoalRequest) else None
 
+    async def maybe_finish_silent_turn(turn: ActiveTurn) -> None:
+        if (
+            state.active_turn is not turn
+            or turn.history_committed
+            or turn.playback_event.is_set()
+            or not turn.task.done()
+        ):
+            return
+        try:
+            assistant_text = turn.task.result()
+        except (asyncio.CancelledError, Exception):
+            return
+        if isinstance(assistant_text, AgentGoalRequest) or assistant_text.strip():
+            return
+        state.active_turn = None
+        await cancel_task(turn.playback_release_task)
+        turn.playback_release_task = None
+        status(status="listening", assistant_speaking=False)
+
     async def cancel_active_goal(reason: str) -> None:
         goal = state.active_goal
         state.active_goal = None
@@ -1716,6 +1735,7 @@ async def handle_scribe_events(
                     await begin_goal_handoff(turn, goal_request)
                 else:
                     await maybe_commit_history(turn)
+                    await maybe_finish_silent_turn(turn)
                 continue
 
             if event_type == "goal_task_done":

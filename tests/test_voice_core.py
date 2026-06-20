@@ -2302,6 +2302,45 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_silent_completed_turn_returns_to_listening(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            statuses: list[dict[str, object]] = []
+
+            async def silent_assistant(*_args, **_kwargs):
+                return ""
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    on_status=statuses.append,
+                    assistant_runner=silent_assistant,
+                    policy=TurnPolicy(commit_playback_delay_secs=10.0),
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "please move forward"})
+            for _ in range(100):
+                if statuses and statuses[-1].get("status") == "listening":
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertEqual(statuses[-1].get("status"), "listening")
+            self.assertFalse(statuses[-1].get("assistant_speaking"))
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_end_session_commit_ends_session_without_model_turn(self):
         async def run():
             started_inputs = []

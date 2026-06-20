@@ -81,6 +81,7 @@ plan_service_restarts() {
       src/gamepad_teleop.py | src/control/*)
         want_restart gamepad-teleop.service
         want_restart robot-motion.service
+        want_restart robot-voice.service
         ;;
       src/robot_vision.py)
         want_restart robot-vision.service

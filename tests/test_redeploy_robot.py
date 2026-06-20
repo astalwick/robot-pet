@@ -49,6 +49,7 @@ def planned_services(paths: list[str]) -> set[str]:
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
             want("gamepad-teleop.service")
             want("robot-motion.service")
+            want("robot-voice.service")
         elif path == "src/robot_vision.py":
             want("robot-vision.service")
         elif path == "src/robot_sensors.py":
@@ -125,6 +126,12 @@ class TestRedeployRobot(unittest.TestCase):
     def test_voice_paths_restart_voice_only(self):
         services = planned_services(["src/voice/assistant.py"])
         self.assertEqual(services, {"robot-voice.service"})
+
+    def test_control_paths_restart_voice_for_calibration_constants(self):
+        services = planned_services(["src/control/motion_intent.py"])
+        self.assertIn("robot-voice.service", services)
+        self.assertIn("robot-motion.service", services)
+        self.assertIn("gamepad-teleop.service", services)
 
     def test_config_paths_restart_dashboard_too(self):
         services = planned_services(["src/config/voice.py"])

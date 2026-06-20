@@ -262,11 +262,13 @@ SCAN_TOOL = {
     "type": "function",
     "name": SCAN_TOOL_NAME,
     "description": (
-        "Look around by turning in steps and capturing a camera snapshot at each step. The "
-        "degrees argument is the total sweep to cover; pass 360 for a full look around, which is "
-        "also the most it will sweep. The camera is a wide-angle Pi Camera 3, so each snapshot "
-        "already sees much more than a normal lens; a few coarse steps cover the whole space "
-        "without fine increments."
+        "Look around by turning in steps and capturing a camera snapshot at each step, then "
+        "returning to your starting direction. Best when you need to survey a whole space; for a "
+        "quick check of what is in front of you, a single look is usually enough. The degrees "
+        "argument is the total sweep to cover; pass 360 for a full look around, which is also the "
+        "most it will sweep. The camera is a wide-angle Pi Camera 3, so each snapshot already sees "
+        "much more than a normal lens; a few coarse steps cover the whole space without fine "
+        "increments."
     ),
     "parameters": {
         "type": "object",

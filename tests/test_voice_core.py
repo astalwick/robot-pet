@@ -3521,6 +3521,29 @@ class RobotToolDispatchTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_scan_returns_to_starting_heading_after_partial_sweep(self):
+        async def run():
+            turns = []
+
+            def motion_intent_caller(name, **kwargs):
+                turns.append(kwargs.get("degrees"))
+                return {"ok": True}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+                motion_intent_caller=motion_intent_caller,
+            )
+            result = await dispatch_tool(self._call("scan", arguments={"degrees": 180}), context)
+
+            self.assertTrue(result.ok)
+            # Two snapshot turns of +90, then a corrective turn back to start so the
+            # snapshot labels stay true from where the robot now sits.
+            self.assertEqual(turns[:2], [90, 90])
+            self.assertEqual(sum(turns), 0)
+
+        asyncio.run(run())
+
     def test_face_me_calls_caller(self):
         async def run():
             calls = []

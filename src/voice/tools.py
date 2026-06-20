@@ -191,15 +191,34 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
-        image_parts.append(
-            {"type": "input_text", "text": f"Scan snapshot {index + 1} of {captures}, facing {round(heading)} degrees from the start."}
-        )
+        facing = round(heading)
+        if facing == 0:
+            label = f"Scan snapshot 1 of {captures}: the view straight ahead, where you started."
+        else:
+            label = (
+                f"Scan snapshot {index + 1} of {captures}: the view {facing} degrees to your left of start. "
+                f"To face what you see here, turn {facing} degrees left (call turn with degrees={facing})."
+            )
+        image_parts.append({"type": "input_text", "text": label})
         image_parts.append({"type": "input_image", "image_url": data_url})
 
         turn = await asyncio.to_thread(context.motion_intent_caller, "turn", degrees=step)
         if turn.get("ok") is False:
             return _result(call, False, {"ok": False, "error": turn.get("error", "turn_failed")})
         heading += step
+
+    # Return to the starting heading so each snapshot's "degrees to your left" label
+    # stays true from where the robot now sits. Turn back the short way; a full 360
+    # sweep already lands on start, so there is nothing to undo.
+    offset = heading % 360.0
+    if offset:
+        back = -offset if offset <= 180.0 else 360.0 - offset
+        turn = await asyncio.to_thread(context.motion_intent_caller, "turn", degrees=back)
+        if turn.get("ok") is False:
+            return _result(call, False, {"ok": False, "error": turn.get("error", "turn_failed")})
+    image_parts.append(
+        {"type": "input_text", "text": "Scan complete. You are now facing your starting direction again."}
+    )
 
     return RobotToolResult(
         name=call.name,

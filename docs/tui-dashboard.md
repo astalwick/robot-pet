@@ -31,12 +31,12 @@ The dashboard expects `robot-telemetry.service` to be running and listening on `
 
 ## Drive Tuning
 
-Drive tuning is stored at `/home/pi/.config/robot-pet/teleop.json`. Press `c` to open the config dialog for normal speed, turbo speed, turn scale, per-stick deadzones, and QPPS slew.
+Drive tuning is stored at `/home/pi/.config/robot-pet/drive_tuning.json`. Press `c` to open the config dialog for normal speed, turbo speed, turn scale, per-stick deadzones, and QPPS slew. The QPPS slew is read by `robot-motion`, which owns acceleration shaping for both gamepad and voice motion.
 
 Keys:
 
 - `c`: open config.
-- `OK`: save tuning and restart `gamepad-teleop.service`.
+- `OK`: save tuning and restart `gamepad-teleop.service` and `robot-motion.service`.
 - `Cancel` or `Esc`: close without saving.
 
 The active values are also published by `gamepad-teleop.service` in telemetry, so the dashboard can show when displayed values differ from the running service.

@@ -64,7 +64,7 @@ PYTHONPATH=src python src/gamepad_teleop.py --speed-scale 0.15
 
 Useful flags:
 
-- `--config /home/pi/.config/robot-pet/teleop.json`
+- `--config /home/pi/.config/robot-pet/drive_tuning.json`
 - `--device /dev/input/eventX`
 - `--port /dev/serial0`
 - `--address 0x80`
@@ -75,9 +75,10 @@ Useful flags:
 - `--turn-scale 1.0`
 - `--left-stick-deadzone 0.15`
 - `--right-stick-deadzone 0.15`
-- `--qpps-slew-limit 5000`
 
-Drive tuning defaults are loaded from `/home/pi/.config/robot-pet/teleop.json` when present. The dashboard writes this file and restarts `gamepad-teleop.service` to apply changes.
+Acceleration shaping (slew) is owned by `robot-motion`, which reads the `qpps_slew_limit` from the shared drive tuning config; the gamepad sends raw targets and has no slew flag.
+
+Drive tuning defaults are loaded from `/home/pi/.config/robot-pet/drive_tuning.json` when present. The dashboard writes this file and restarts `gamepad-teleop.service` and `robot-motion.service` to apply changes.
 
 ## Controls
 

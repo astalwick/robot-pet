@@ -70,6 +70,19 @@ or a cheap API call.
   downweight it rather than silently keeping both.
 - **Dashboard review.** Since the filesystem-wiki shape is greppable and editable,
   surface stored facts in the web dashboard for inspection / correction / deletion.
+- **Read-only Unix tools over the memory root.** If memory lands as a markdown wiki
+  (shape A), `recall` doesn't have to be bespoke: give the agent a small set of
+  read-only, Unix-shaped tools (`rg`, `cat`, `ls`, `tree`, `find`) rooted at the
+  memory directory and let it grep and read facts the way it would any file tree.
+  Keep them bounded — resolve symlinks, reject paths outside the memory root, reject
+  binary files, enforce timeouts and output caps. This is the one piece worth
+  salvaging from the abandoned `agent-tool-discovery` plan: those read tools were a
+  good idea aimed at the wrong target (discovering executable tools, which native
+  tool calls + `tool_search` now cover). Pointed at memory instead, they're a real
+  capability — but motivated by recall, not tool discovery. Tradeoff vs. a dedicated
+  `recall(query)` tool: more general and more "native-feeling" for the model, but it
+  leans on keyword/substring search and won't handle paraphrase any better than
+  shape B's keyword recall.
 
 ## Open questions
 

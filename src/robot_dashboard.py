@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from config.teleop import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
+from config.drive_tuning import DEFAULT_CONFIG_PATH, DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -66,6 +66,16 @@ def stream_command_output(
 def restart_gamepad_teleop() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["sudo", "systemctl", "restart", "gamepad-teleop.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
+def restart_robot_motion() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "robot-motion.service"],
         check=False,
         capture_output=True,
         text=True,
@@ -425,10 +435,10 @@ class RobotDashboard(App):
         ("v", "toggle_view", "View"),
     ]
 
-    def __init__(self, socket_path: str, teleop_config_path: str = DEFAULT_CONFIG_PATH):
+    def __init__(self, socket_path: str, drive_tuning_config_path: str = DEFAULT_CONFIG_PATH):
         super().__init__()
         self.socket_path = socket_path
-        self.teleop_config_path = teleop_config_path
+        self.drive_tuning_config_path = drive_tuning_config_path
         self.last_snapshot: dict[str, Any] | None = None
         self.session_started = time.monotonic()
         self.history: dict[str, deque[float | None]] = {
@@ -446,7 +456,7 @@ class RobotDashboard(App):
         self.redeploy_running = False
         self.drive_tuning_error: str | None = None
         try:
-            self.drive_tuning = load_drive_tuning(teleop_config_path)
+            self.drive_tuning = load_drive_tuning(drive_tuning_config_path)
         except DriveTuningConfigError as exc:
             self.drive_tuning = DriveTuning()
             self.drive_tuning_error = str(exc)
@@ -570,25 +580,31 @@ class RobotDashboard(App):
             return
 
         self.tuning_apply_running = True
-        logs.write("Saving drive tuning and restarting gamepad-teleop...")
+        logs.write("Saving drive tuning and restarting gamepad-teleop and robot-motion...")
         threading.Thread(target=self._apply_tuning_thread, daemon=True).start()
 
     def _apply_tuning_thread(self):
+        # robot-motion now reads the slew limit from this config at startup, so it
+        # must restart alongside gamepad-teleop for a change to take effect.
         try:
-            save_drive_tuning(self.drive_tuning, self.teleop_config_path)
+            save_drive_tuning(self.drive_tuning, self.drive_tuning_config_path)
             self.drive_tuning_dirty = False
-            result = restart_gamepad_teleop()
+            teleop_result = restart_gamepad_teleop()
+            motion_result = restart_robot_motion()
         except Exception as exc:
             self.tuning_apply_running = False
             self.call_from_thread(self._write_log, f"Drive tuning apply failed: {exc}")
             return
 
         self.tuning_apply_running = False
-        if result.returncode == 0:
-            self.call_from_thread(self._write_log, "Drive tuning saved. gamepad-teleop restarted.")
+        if teleop_result.returncode != 0:
+            output = (teleop_result.stderr or teleop_result.stdout).strip()
+            self.call_from_thread(self._write_log, f"Drive tuning saved, but gamepad-teleop restart failed: {output}")
+        elif motion_result.returncode != 0:
+            output = (motion_result.stderr or motion_result.stdout).strip()
+            self.call_from_thread(self._write_log, f"Drive tuning saved, but robot-motion restart failed: {output}")
         else:
-            output = (result.stderr or result.stdout).strip()
-            self.call_from_thread(self._write_log, f"Drive tuning saved, but restart failed: {output}")
+            self.call_from_thread(self._write_log, "Drive tuning saved. gamepad-teleop and robot-motion restarted.")
 
     def _redeploy_thread(self):
         command, env = redeploy_command()
@@ -1165,13 +1181,13 @@ class RobotDashboard(App):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot telemetry dashboard.")
     parser.add_argument("--socket", default=DEFAULT_SUBSCRIBE_SOCKET, help="Telemetry hub subscriber socket")
-    parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH, help="Gamepad teleop drive tuning config path")
+    parser.add_argument("--drive-tuning-config", default=DEFAULT_CONFIG_PATH, help="Drive tuning config path")
     return parser
 
 
 def main():
     args = build_parser().parse_args()
-    RobotDashboard(args.socket, args.teleop_config).run()
+    RobotDashboard(args.socket, args.drive_tuning_config).run()
 
 
 if __name__ == "__main__":

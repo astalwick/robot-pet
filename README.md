@@ -21,7 +21,7 @@ python scripts/test-motor.py  # Verify motors work
 
 ## Operator Surfaces
 
-Two operator UIs ship today; both read from `robot-telemetry.service` and can write drive tuning + restart `gamepad-teleop.service`.
+Two operator UIs ship today; both read from `robot-telemetry.service` and can write drive tuning + restart `gamepad-teleop.service` and `robot-motion.service` (both read the tuning config at startup).
 
 - **Web dashboard** — `http://<pi-host>:8080/`. Live MJPEG camera, telemetry, service logs, redeploy, and drive tuning. Default surface from a laptop.
 - **SSH TUI** — `python src/robot_dashboard.py` on the Pi. Same telemetry/logs/redeploy/tuning, no video. Emergency surface when the network or browser is unavailable.

@@ -126,8 +126,9 @@ class RobotMotionTest(unittest.TestCase):
 
     def test_motor_commands_are_clamped_to_motion_qpps(self):
         motor = FakeMotor()
+        # A huge slew limit lets one tick reach the target, isolating the qpps clamp.
         runner = MotionRunner(
-            MotionConfig(qpps=1000, loop_interval=0.05),
+            MotionConfig(qpps=1000, loop_interval=0.05, qpps_slew_limit=10_000_000.0),
             motor_factory=lambda: motor,
             sleep=lambda _seconds: runner.request_stop(),
             clock=lambda: 0.0,
@@ -138,6 +139,21 @@ class RobotMotionTest(unittest.TestCase):
         runner._run_motor_loop(motor)
 
         self.assertIn((1000, -1000), motor.commands)
+
+    def test_apply_slew_ramps_toward_target_over_ticks(self):
+        # qpps_slew_limit 5000 over a 0.05s tick is 250 qpps per step, so a 600 qpps
+        # target is reached over three ticks rather than snapping there at once.
+        runner = self._runner(FakeMotor())
+        self.assertEqual(runner._apply_slew(600, 600, 0.0).left_qpps, 250)
+        self.assertEqual(runner._apply_slew(600, 600, 0.05).left_qpps, 500)
+        self.assertEqual(runner._apply_slew(600, 600, 0.10).left_qpps, 600)
+
+    def test_apply_slew_no_slew_snaps_immediately(self):
+        # An explicit stop or safety block must halt now, not ramp down.
+        runner = self._runner(FakeMotor())
+        runner._apply_slew(600, 600, 0.0)
+        snapped = runner._apply_slew(0, 0, 0.05, no_slew=True)
+        self.assertEqual((snapped.left_qpps, snapped.right_qpps), (0, 0))
 
     def test_telemetry_reads_rotate_across_publish_ticks(self):
         motor = FakeMotor()

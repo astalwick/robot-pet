@@ -40,8 +40,10 @@ EXPRESS_KINDS = ("wiggle", "spin", "shake")
 # `move` drives straight at a steady pace. distance_meters is signed: positive
 # drives forward, negative drives backward. robot-motion stops the move using
 # RoboClaw encoder travel, so the executor just keeps commanding motion while the
-# intent is active.
-MOVE_LINEAR_X = 0.3
+# intent is active. A full 1.0 here means a move runs at the same normal-mode speed
+# as a full forward stick on the gamepad (the drive mixer's speed_scale governs the
+# actual qpps), so voice/agent moves feel as brisk as teleop.
+MOVE_LINEAR_X = 1.0
 MOVE_MAX_DISTANCE_METERS = 2.0
 DIAGNOSTIC_TURN_ANGULAR_Z = 0.3
 DIAGNOSTIC_TURN_MIN_DURATION = 0.1

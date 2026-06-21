@@ -122,7 +122,7 @@ src/
 
 `robot-battery` (Body Phase 2, planned) would own the high-side MOSFET on the LiPo motor rail. It would stay running when the rail is off, subscribe to telemetry, and apply a power policy still under design in [body-phase-2.md](phases/body-phase-2.md#robot-battery--motor-rail-power) (brainstorm table — not spec). It would not open RoboClaw serial; that stays `robot-motion` once power is applied.
 
-`robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/teleop.json` and restart `gamepad-teleop.service`; it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
+`robot-telemetry` and `robot-dashboard` are pre-ROS2 scaffolding. The hub gives current services a local Unix-socket stream for operator visibility. The dashboard can also write drive tuning to `/home/pi/.config/robot-pet/drive_tuning.json` and restart `gamepad-teleop.service` and `robot-motion.service` (both read the config at startup); it still does not open controller or RoboClaw hardware directly. Hardware drivers remain framework-agnostic and do not depend on the telemetry transport.
 
 `robot-camera` is the only normal owner of the Pi camera. It instantiates one `CameraDriver`, captures JPEG frames continuously, and fans them out as HTTP responses (`GET /snapshot.jpg`, `GET /stream.mjpg`). Other consumers — the browser dashboard today, perception services later — subscribe over HTTP rather than opening the camera themselves. Telemetry stays separate: `robot-telemetry` carries low-rate JSON state, never video.
 

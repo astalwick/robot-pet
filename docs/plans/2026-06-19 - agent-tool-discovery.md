@@ -1,5 +1,21 @@
 # Agent Tool Discovery Plan
 
+> **SUPERSEDED — WON'T DO (2026-06-20).** This plan's core goal (keep full tool
+> schemas out of every model call as the tool set grows) is now covered by native
+> OpenAI tool calls — see `docs/plans/2026-06-20 - voice-agent-native-tool-calls.md`
+> — plus `tool_search` for on-demand schema discovery when the list actually grows
+> large. At the robot's current scale (~7 tools) schema bloat is a non-problem, so
+> building a markdown tool registry, a `call_tool` executor, and reimplemented Unix
+> read tools would be speculative generality. The `call_tool` indirection would also
+> reintroduce the two-protocol split the native-tool-calls plan deliberately removed.
+>
+> The one piece worth keeping — read-only, Unix-shaped read tools (`rg`, `cat`,
+> `ls`, `tree`, `find`) — survives in a different place and for a different reason:
+> reading the memory wiki, not discovering executable tools. See the "Read-only Unix
+> tools over the memory root" note in `docs/ideas/memory.md`.
+>
+> The rest of this document is kept for history.
+
 Goal: let the agent discover and understand a growing tool set using familiar
 read-only filesystem/search tools and Markdown tool documents.
 

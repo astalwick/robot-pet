@@ -84,6 +84,10 @@ def planned_services(paths: list[str]) -> set[str]:
         elif path == "src/config/sensors.py":
             want("robot-sensors.service")
             want("robot-motion.service")
+        elif path == "src/config/drive_tuning.py":
+            want("gamepad-teleop.service")
+            want("robot-motion.service")
+            want("robot-web-dashboard.service")
         elif path.startswith("src/config/"):
             want("gamepad-teleop.service")
             want("robot-vision.service")
@@ -137,6 +141,14 @@ class TestRedeployRobot(unittest.TestCase):
         services = planned_services(["src/config/voice.py"])
         self.assertIn("robot-web-dashboard.service", services)
         self.assertIn("robot-voice.service", services)
+
+    def test_drive_tuning_config_restarts_motion_and_teleop(self):
+        # robot-motion and gamepad-teleop both read drive_tuning at startup.
+        services = planned_services(["src/config/drive_tuning.py"])
+        self.assertEqual(
+            services,
+            {"gamepad-teleop.service", "robot-motion.service", "robot-web-dashboard.service"},
+        )
 
     def test_pyproject_restarts_all_services(self):
         self.assertEqual(planned_services(["pyproject.toml"]), ALL_SERVICES)

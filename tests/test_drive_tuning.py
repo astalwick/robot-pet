@@ -6,7 +6,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from config.teleop import DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
+from config.drive_tuning import DriveTuning, DriveTuningConfigError, load_drive_tuning, save_drive_tuning
 
 
 class DriveTuningConfigTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class DriveTuningConfigTest(unittest.TestCase):
 
     def test_save_and_load_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "teleop.json")
+            path = os.path.join(tmpdir, "drive_tuning.json")
             save_drive_tuning(DriveTuning(speed_scale=0.3, left_stick_deadzone=0.2), path)
 
             tuning = load_drive_tuning(path)
@@ -28,7 +28,7 @@ class DriveTuningConfigTest(unittest.TestCase):
 
     def test_malformed_file_raises_clear_config_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "teleop.json")
+            path = os.path.join(tmpdir, "drive_tuning.json")
             with open(path, "w") as file_obj:
                 file_obj.write("{not json")
 
@@ -37,7 +37,7 @@ class DriveTuningConfigTest(unittest.TestCase):
 
     def test_non_object_file_raises_clear_config_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "teleop.json")
+            path = os.path.join(tmpdir, "drive_tuning.json")
             with open(path, "w") as file_obj:
                 file_obj.write("[]")
 

@@ -1,4 +1,4 @@
-"""Persistent drive tuning for gamepad teleop."""
+"""Persistent drive tuning shared by gamepad teleop and robot motion."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/teleop.json"
+DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/drive_tuning.json"
 DEFAULT_QPPS = 2425
 
 

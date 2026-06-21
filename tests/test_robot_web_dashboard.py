@@ -87,7 +87,7 @@ class FormatSseEventTest(unittest.TestCase):
 class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
-        self.teleop_config_path = os.path.join(self.tmpdir.name, "teleop.json")
+        self.drive_tuning_config_path = os.path.join(self.tmpdir.name, "drive_tuning.json")
         self.vision_config_path = os.path.join(self.tmpdir.name, "vision.json")
         self.voice_config_path = os.path.join(self.tmpdir.name, "voice.json")
         self.sensors_config_path = os.path.join(self.tmpdir.name, "sensors.json")
@@ -98,7 +98,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             asyncio.get_running_loop(),
             self.store,
             STATIC_DIR,
-            self.teleop_config_path,
+            self.drive_tuning_config_path,
             self.vision_config_path,
             self.voice_config_path,
             self.voice_command_socket,
@@ -499,7 +499,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             asyncio.get_running_loop(),
             self.store,
             STATIC_DIR,
-            self.teleop_config_path,
+            self.drive_tuning_config_path,
             self.vision_config_path,
             self.voice_config_path,
             self.voice_command_socket,

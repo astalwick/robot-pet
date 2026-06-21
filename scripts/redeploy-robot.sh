@@ -127,6 +127,11 @@ plan_service_restarts() {
         want_restart robot-sensors.service
         want_restart robot-motion.service
         ;;
+      src/config/drive_tuning.py)
+        want_restart gamepad-teleop.service
+        want_restart robot-motion.service
+        want_restart robot-web-dashboard.service
+        ;;
       src/config/*)
         want_restart gamepad-teleop.service
         want_restart robot-vision.service

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from config.teleop import DriveTuning
+from config.drive_tuning import DriveTuning
 from gamepad_teleop import GamepadTeleopRunner, TeleopConfig
 
 logging.getLogger("gamepad-teleop").disabled = True
@@ -89,43 +89,30 @@ class FakeMotion:
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
-    def test_slew_limits_wheel_target_changes(self):
-        runner = GamepadTeleopRunner(TeleopConfig(qpps=1000, loop_interval=0.05), sleep=lambda _seconds: None)
-
-        first = runner._slew_target(SimpleNamespace(left_qpps=1000, right_qpps=1000), now=1.0)
-        second = runner._slew_target(SimpleNamespace(left_qpps=1000, right_qpps=1000), now=1.05)
-
-        self.assertEqual(first.left_qpps, 250)
-        self.assertEqual(second.left_qpps, 500)
-
-    def test_slew_smooths_normal_to_turbo_transition(self):
+    def test_raw_target_sent_without_slew(self):
+        # Slew now lives in robot-motion; the gamepad sends the raw mixer target.
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
         controller = FakeController(state)
         motion = FakeMotion()
-        current_time = 0.0
         sleeps = 0
 
-        def clock():
-            return current_time
-
         def sleep(_seconds):
-            nonlocal current_time, sleeps
+            nonlocal sleeps
             sleeps += 1
-            current_time += 0.05
             if sleeps == 1:
                 state.lb = True
             elif sleeps == 3:
                 runner.request_stop()
 
         runner = GamepadTeleopRunner(
-            TeleopConfig(qpps=1000, drive_tuning=DriveTuning(qpps_slew_limit=5000.0)),
+            TeleopConfig(qpps=1000, drive_tuning=DriveTuning(speed_scale=0.25, turbo_scale=0.75)),
             sleep=sleep,
-            clock=clock,
         )
 
         runner._run_connected(controller, motion)
 
-        self.assertEqual(motion.commands[:3], [(250, 250), (500, 500), (750, 750)])
+        # Full forward: 250 qpps normal, then 750 qpps once turbo (LB) engages — no ramp.
+        self.assertEqual(motion.commands[:3], [(250, 250), (750, 750), (750, 750)])
 
     def test_deadman_release_sends_zero_speed(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)

@@ -23,7 +23,7 @@ from typing import Any
 
 from aiohttp import web
 
-from config.teleop import (
+from config.drive_tuning import (
     DEFAULT_CONFIG_PATH,
     TUNING_FIELDS,
     DriveTuning,
@@ -302,7 +302,7 @@ class WebDashboardState:
         loop: asyncio.AbstractEventLoop,
         snapshot_store: SnapshotStore,
         static_dir: Path,
-        teleop_config_path: str,
+        drive_tuning_config_path: str,
         vision_config_path: str,
         voice_config_path: str,
         voice_command_socket: str,
@@ -312,7 +312,7 @@ class WebDashboardState:
         self.loop = loop
         self.snapshot_store = snapshot_store
         self.static_dir = static_dir
-        self.teleop_config_path = teleop_config_path
+        self.drive_tuning_config_path = drive_tuning_config_path
         self.vision_config_path = vision_config_path
         self.voice_config_path = voice_config_path
         self.voice_command_socket = voice_command_socket
@@ -645,7 +645,7 @@ def merge_sensors_form_patch(current: dict[str, Any], patch: dict[str, Any]) -> 
 
 CONFIGS: dict[str, dict[str, Any]] = {
     "drive": {
-        "path_attr": "teleop_config_path",
+        "path_attr": "drive_tuning_config_path",
         "load": load_drive_tuning,
         "save": save_drive_tuning,
         "from_dict": DriveTuning.from_dict,
@@ -752,23 +752,30 @@ async def config_apply(request: web.Request) -> web.Response:
             return web.json_response({"error": "Drive tuning apply already running."}, status=409)
 
         state.set_tuning_apply_running(True)
-        state.log_hub.publish("Saving drive tuning and restarting gamepad-teleop...")
+        # robot-motion now reads the slew limit from this config at startup, so it
+        # must restart alongside gamepad-teleop for a change to take effect.
+        state.log_hub.publish("Saving drive tuning and restarting gamepad-teleop and robot-motion...")
         try:
             await asyncio.to_thread(spec["save"], config, path)
-            result = await asyncio.to_thread(restart_gamepad_teleop)
+            teleop_result = await asyncio.to_thread(restart_gamepad_teleop)
+            motion_result = await asyncio.to_thread(restart_robot_motion)
         except Exception as exc:
             state.log_hub.publish(f"Drive tuning apply failed: {exc}")
             return web.json_response({"error": str(exc)}, status=500)
         finally:
             state.set_tuning_apply_running(False)
 
-        if result.returncode == 0:
-            state.log_hub.publish("Drive tuning saved. gamepad-teleop restarted.")
-            return web.json_response({"ok": True, **spec["payload"](config)})
+        if teleop_result.returncode != 0:
+            output = (teleop_result.stderr or teleop_result.stdout).strip()
+            state.log_hub.publish(f"Drive tuning saved, but gamepad-teleop restart failed: {output}")
+            return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+        if motion_result.returncode != 0:
+            output = (motion_result.stderr or motion_result.stdout).strip()
+            state.log_hub.publish(f"Drive tuning saved, but robot-motion restart failed: {output}")
+            return web.json_response({"error": output, **spec["payload"](config)}, status=500)
 
-        output = (result.stderr or result.stdout).strip()
-        state.log_hub.publish(f"Drive tuning saved, but restart failed: {output}")
-        return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+        state.log_hub.publish("Drive tuning saved. gamepad-teleop and robot-motion restarted.")
+        return web.json_response({"ok": True, **spec["payload"](config)})
 
     if name == "sensors":
         state.log_hub.publish("Saving sensors config and restarting robot-sensors and robot-motion...")
@@ -859,7 +866,7 @@ async def run_service(args: argparse.Namespace) -> None:
         loop,
         snapshot_store,
         Path(args.static_dir),
-        args.teleop_config,
+        args.drive_tuning_config,
         args.vision_config,
         args.voice_config,
         args.voice_command_socket,
@@ -892,7 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_WEB_DASHBOARD_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_WEB_DASHBOARD_PORT)
     parser.add_argument("--telemetry-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
-    parser.add_argument("--teleop-config", default=DEFAULT_CONFIG_PATH)
+    parser.add_argument("--drive-tuning-config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
     parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
     parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 ROBOT_DASHBOARD_IMPORT_ERROR = None
 try:
-    from config.teleop import DriveTuning
+    from config.drive_tuning import DriveTuning
     from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
 except ModuleNotFoundError as exc:
     if exc.name not in {"rich", "textual"}:
@@ -61,7 +61,7 @@ class RobotDashboardTest(unittest.TestCase):
 
     def test_invalid_drive_tuning_config_uses_defaults_with_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = os.path.join(tmpdir, "teleop.json")
+            path = os.path.join(tmpdir, "drive_tuning.json")
             with open(path, "w") as file_obj:
                 file_obj.write("{not json")
 

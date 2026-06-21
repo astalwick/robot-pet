@@ -14,7 +14,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from config.teleop import DEFAULT_QPPS, DriveTuning
+from config.drive_tuning import (
+    DEFAULT_CONFIG_PATH as DRIVE_TUNING_CONFIG_PATH,
+    DEFAULT_QPPS,
+    DriveTuning,
+    DriveTuningConfigError,
+    load_drive_tuning,
+)
 from config.sensors import (
     DEFAULT_CONFIG_PATH,
     SensorsConfig,
@@ -78,6 +84,7 @@ class MotionConfig:
     address: int = 0x80
     baud: int = 38400
     qpps: int = DEFAULT_QPPS
+    qpps_slew_limit: float = 5000.0
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     intent_wait_timeout: float = 8.0
@@ -303,13 +310,26 @@ class MotionRunner:
             cycle_started = self.clock()
             now = cycle_started
             self.loop_samples.append(now)
-            self._service_stop_requests()
+            stop_serviced = self._service_stop_requests()
             self._service_intent_requests(now)
 
             drive = self._get_drive_command()
             if drive is None:
                 intent_command = self._tick_intent(now, gamepad_active=False)
                 if intent_command is None:
+                    # No motion source this tick. Ease any residual wheel speed down
+                    # to zero (an explicit stop snaps instead) before idling, so a
+                    # finished move or turn coasts to a halt rather than slamming off.
+                    ramped = self._apply_slew(0, 0, now, no_slew=stop_serviced)
+                    if ramped.left_qpps != 0 or ramped.right_qpps != 0:
+                        if not self._set_wheel_speeds(motor, ramped.left_qpps, ramped.right_qpps, now=now):
+                            stop_reason = "RoboClaw speed command was not acknowledged"
+                            log.error("%s", stop_reason)
+                            break
+                        closed_loop_active = True
+                        idle_released = False
+                        self.sleep(self.config.loop_interval)
+                        continue
                     if closed_loop_active:
                         if not self._set_wheel_speeds(motor, 0, 0, now=now):
                             stop_reason = "RoboClaw zero-speed command was not acknowledged"
@@ -343,9 +363,21 @@ class MotionRunner:
             self._last_safety_blocked = safety.blocked
             self._last_safety_reason = safety.reason
 
+            move_stop = None
             if self.intent_executor.active_move_distance_meters() is not None:
-                if self._encoder_move_should_stop(motor, now, commanding_forward, safety):
+                move_stop = self._encoder_move_should_stop(motor, now, commanding_forward, safety)
+                if move_stop is not None:
                     left_qpps, right_qpps = 0, 0
+
+            # Shape acceleration centrally so both gamepad and intent motion ease in
+            # and out. A safety-blocked forward command and a faulted encoder move
+            # (lost feedback or a stall) must stop now, not coast, so they bypass the
+            # ramp; an explicit stop does the same via stop_serviced. A completed move
+            # ramps down normally.
+            encoder_fault = move_stop in ("encoder_read_failed", "encoder_no_progress")
+            no_slew = stop_serviced or encoder_fault or (safety.blocked and commanding_forward)
+            ramped = self._apply_slew(left_qpps, right_qpps, now, no_slew=no_slew)
+            left_qpps, right_qpps = ramped.left_qpps, ramped.right_qpps
 
             target = WheelSpeedCommand(left_qpps=left_qpps, right_qpps=right_qpps)
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
@@ -586,14 +618,16 @@ class MotionRunner:
             return
         self.pending_intent_complete = complete
 
-    def _service_stop_requests(self) -> None:
+    def _service_stop_requests(self) -> bool:
         # A stop arrives out-of-band: it must cancel an intent that is mid-drive, so
-        # it runs every loop, even while pending_intent_complete is set.
+        # it runs every loop, even while pending_intent_complete is set. Returns True
+        # when a stop fired this tick so the loop can halt the wheels without slewing.
         if self.intent_bridge is None or not self.intent_bridge.take_stop():
-            return
+            return False
         self.intent_executor.cancel()
         self._fail_pending_intent("stopped")
         self.intent_bridge.discard_pending()
+        return True
 
     def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
         if not self.intent_executor.is_active():
@@ -615,26 +649,27 @@ class MotionRunner:
         now: float,
         commanding_forward: bool,
         safety: Any,
-    ) -> bool:
+    ) -> str | None:
         """Drive completion/failure for the active encoder-distance move.
 
-        Returns True when the move has ended this loop, so the caller commands
-        zero speed. Reads encoder positions, snapshots the start on the first
-        loop, completes at the target travel, and fails on read error, a safety
-        block of forward progress, or a no-progress stall.
+        Returns the stop reason when the move has ended this loop (so the caller
+        commands zero speed), or None to keep going. Reads encoder positions,
+        snapshots the start on the first loop, completes at the target travel,
+        and fails on read error, a safety block of forward progress, or a
+        no-progress stall.
         """
         distance = self.intent_executor.active_move_distance_meters()
 
         # A forward move that safety blocks is no longer making progress.
         if distance > 0 and commanding_forward and safety.blocked:
             self._end_encoder_move("safety_blocked")
-            return True
+            return "safety_blocked"
 
         if self.encoder_move is None:
             left_start, right_start = motor.read_wheel_positions()
             if left_start is None or right_start is None:
                 self._end_encoder_move("encoder_read_failed")
-                return True
+                return "encoder_read_failed"
             self.encoder_move = EncoderMove(
                 target_counts=abs(distance) * ENCODER_COUNTS_PER_METER,
                 left_start=left_start,
@@ -642,12 +677,12 @@ class MotionRunner:
                 last_travel=0.0,
                 last_progress_at=now,
             )
-            return False
+            return None
 
         left_now, right_now = motor.read_wheel_positions()
         if left_now is None or right_now is None:
             self._end_encoder_move("encoder_read_failed")
-            return True
+            return "encoder_read_failed"
 
         travel = (
             abs(left_now - self.encoder_move.left_start)
@@ -655,16 +690,16 @@ class MotionRunner:
         ) / 2
         if travel >= self.encoder_move.target_counts:
             self._complete_encoder_move()
-            return True
+            return "completed"
 
         if travel > self.encoder_move.last_travel:
             self.encoder_move.last_travel = travel
             self.encoder_move.last_progress_at = now
         elif now - self.encoder_move.last_progress_at >= ENCODER_MOVE_NO_PROGRESS_TIMEOUT_SECONDS:
             self._end_encoder_move("encoder_no_progress")
-            return True
+            return "encoder_no_progress"
 
-        return False
+        return None
 
     def _complete_encoder_move(self) -> None:
         self.intent_executor.cancel()
@@ -728,6 +763,43 @@ class MotionRunner:
         self.last_target_at = None
         self.target_active = False
 
+    def _apply_slew(
+        self, left_qpps: int, right_qpps: int, now: float, no_slew: bool = False
+    ) -> WheelSpeedCommand:
+        """Ramp the wheel target toward (left, right), bounded by qpps_slew_limit.
+
+        This is the single place every motion source — gamepad and voice/agent
+        intents alike — has its acceleration shaped, so motion eases in and out
+        instead of snapping to a target in one tick. Pass no_slew=True for stops
+        that must be instant: an explicit stop command or a safety block.
+        """
+        # Clamp to the deliverable range before shaping so the stored slew state
+        # never decays from a value the motor was never actually sent.
+        limit = self.config.qpps
+        left_qpps = max(-limit, min(limit, int(left_qpps)))
+        right_qpps = max(-limit, min(limit, int(right_qpps)))
+        target = WheelSpeedCommand(left_qpps=left_qpps, right_qpps=right_qpps)
+        if no_slew:
+            self.last_target = target
+            self.last_target_at = now
+            self.target_active = True
+            return target
+        # Seed from a standstill on the first ramping tick, crediting one loop of
+        # elapsed time so motion can actually begin moving toward the target.
+        if not self.target_active:
+            self.target_active = True
+            self.last_target = WheelSpeedCommand(0, 0)
+            self.last_target_at = now - self.config.loop_interval
+        elapsed = max(0.0, now - self.last_target_at)
+        max_delta = self.config.qpps_slew_limit * elapsed
+        ramped = WheelSpeedCommand(
+            left_qpps=int(_move_toward(self.last_target.left_qpps, target.left_qpps, max_delta)),
+            right_qpps=int(_move_toward(self.last_target.right_qpps, target.right_qpps, max_delta)),
+        )
+        self.last_target = ramped
+        self.last_target_at = now
+        return ramped
+
     def _read_motor_max_qpps(self, motor: Any) -> tuple[int | None, int | None]:
         try:
             return motor.read_max_qpps()
@@ -775,12 +847,23 @@ class MotionRunner:
         )
 
 
+def _move_toward(current: float, target: float, max_delta: float) -> float:
+    if abs(target - current) <= max_delta:
+        return target
+    return current + max_delta if target > current else current - max_delta
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot motion service.")
     parser.add_argument("--port", default="/dev/serial0")
     parser.add_argument("--address", type=lambda value: int(value, 0), default=0x80)
     parser.add_argument("--baud", type=int, default=38400)
     parser.add_argument("--qpps", type=int, default=DEFAULT_QPPS)
+    parser.add_argument(
+        "--drive-tuning-config",
+        default=DRIVE_TUNING_CONFIG_PATH,
+        help="Drive tuning JSON config path; supplies the wheel slew limit",
+    )
     parser.add_argument("--loop-interval", type=float, default=0.05)
     parser.add_argument("--retry-interval", type=float, default=1.0)
     parser.add_argument("--intent-wait-timeout", type=float, default=8.0)
@@ -797,12 +880,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    try:
+        drive_tuning = load_drive_tuning(args.drive_tuning_config)
+    except DriveTuningConfigError as exc:
+        log.error("%s", exc)
+        raise SystemExit(1) from exc
     runner = MotionRunner(
         MotionConfig(
             port=args.port,
             address=args.address,
             baud=args.baud,
             qpps=args.qpps,
+            qpps_slew_limit=drive_tuning.qpps_slew_limit,
             loop_interval=args.loop_interval,
             retry_interval=args.retry_interval,
             intent_wait_timeout=args.intent_wait_timeout,

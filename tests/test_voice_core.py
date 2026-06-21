@@ -1245,6 +1245,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     return stream()
 
             fake_responses = FakeResponses()
+            timeline_events = []
 
             chunks = [
                 chunk
@@ -1253,10 +1254,17 @@ class AssistantStreamingTest(unittest.TestCase):
                     SimpleNamespace(responses=fake_responses),
                     VoiceState("test-voice"),
                     camera_snapshot_caller=lambda: b"jpeg-bytes",
+                    on_event=timeline_events.append,
                 )
             ]
 
             self.assertEqual(chunks, ["I see you."])
+            self.assertEqual(
+                [(event["type"], event["name"], event.get("ok")) for event in timeline_events],
+                [("tool_start", LOOK_TOOL_NAME, None), ("tool_done", LOOK_TOOL_NAME, True)],
+            )
+            self.assertEqual(timeline_events[1]["started_at"], timeline_events[0]["t"])
+            self.assertGreaterEqual(timeline_events[1]["duration_ms"], 0)
             next_input = fake_responses.calls[1]["input"]
             tool_output = json.loads(next_input[0]["output"])
             self.assertEqual(tool_output, {"ok": True, "image_attached": True})

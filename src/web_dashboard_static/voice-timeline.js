@@ -15,6 +15,8 @@ const COLORS = {
   gateOpen: '#4ade80',
   gateClosed: '#163040',
   border: '#0a4f6a',
+  tool: '#38bdf8',
+  toolError: '#f87171',
 };
 
 const PHASE_ROWS = [
@@ -447,6 +449,7 @@ function drawGateLane(ref, rect) {
 function drawEventsLane(ref, rect) {
   drawLaneBackground(rect, 'EVENTS');
   const cutoff = ref - horizon;
+  const spans = toolSpans(ref, cutoff);
   const visible = events.filter((e) => (
     e.t >= cutoff
     && EVENT_STYLES[e.type]
@@ -459,6 +462,32 @@ function drawEventsLane(ref, rect) {
   ctx.font = '10px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
+
+  for (const span of spans) {
+    const color = span.ok === false ? COLORS.toolError : COLORS.tool;
+    const x1 = Math.max(0, timeToX(span.start, ref));
+    const x2 = Math.min(viewW, timeToX(span.end, ref));
+    const label = `tool ${span.name}`;
+    const labelWidth = ctx.measureText(label).width + 12;
+    const width = Math.max(16, x2 - x1, labelWidth);
+    let laneIdx = 0;
+    while (laneIdx < lanes.length && lanes[laneIdx] > x1) laneIdx++;
+    lanes[laneIdx] = x1 + width + 4;
+    const laneCount = Math.max(3, lanes.length);
+    const laneH = (rect.h - 8) / laneCount;
+    const y = rect.y + 4 + laneIdx * laneH + laneH / 2;
+    const boxY = y - 8;
+
+    ctx.fillStyle = withAlpha(color, span.open ? 0.12 : 0.18);
+    ctx.fillRect(x1, boxY, width, 16);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    if (span.open) ctx.setLineDash([3, 3]);
+    ctx.strokeRect(x1 + 0.5, boxY + 0.5, width - 1, 15);
+    if (span.open) ctx.setLineDash([]);
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(label, x1 + 4, y);
+  }
 
   for (const event of visible) {
     const style = EVENT_STYLES[event.type] || { color: COLORS.textDim, glyph: '●', label: event.type };
@@ -481,6 +510,55 @@ function drawEventsLane(ref, rect) {
     ctx.fillStyle = style.color;
     ctx.fillText(style.glyph + ' ' + style.label, x + 3, y);
   }
+}
+
+function toolSpans(ref, cutoff) {
+  const starts = new Map();
+  const spans = [];
+  const toolEvents = events
+    .filter((event) => event.type === 'tool_start' || event.type === 'tool_done')
+    .sort((a, b) => a.t - b.t);
+
+  for (const event of toolEvents) {
+    const key = toolKey(event);
+    if (event.type === 'tool_start') {
+      starts.set(key, event);
+      continue;
+    }
+    const start = starts.get(key);
+    const startedAt = start ? start.t : Number(event.started_at) || event.t;
+    if (event.t >= cutoff || startedAt >= cutoff) {
+      spans.push({
+        start: startedAt,
+        end: event.t,
+        name: event.name || (start && start.name) || 'tool',
+        args: event.args || (start && start.args) || {},
+        ok: event.ok,
+        error: event.error,
+        duration_ms: event.duration_ms,
+        source: event.source || (start && start.source),
+      });
+    }
+    starts.delete(key);
+  }
+
+  for (const start of starts.values()) {
+    if (start.t >= cutoff) {
+      spans.push({
+        start: start.t,
+        end: ref,
+        name: start.name || 'tool',
+        args: start.args || {},
+        source: start.source,
+        open: true,
+      });
+    }
+  }
+  return spans;
+}
+
+function toolKey(event) {
+  return `${event.source || ''}:${event.tool_id || event.call_id || ''}:${event.name || ''}`;
 }
 
 function drawTranscriptLane(ref, rect) {
@@ -599,6 +677,7 @@ function onHover(event) {
 
   const sample = nearestSample(t);
   const nearbyEvents = events.filter((e) => Math.abs(e.t - t) < 0.4);
+  const nearbyTools = toolSpans(ref, ref - horizon).filter((span) => t >= span.start - 0.1 && t <= span.end + 0.1);
   const lines = [];
   lines.push(`t  -${(ref - t).toFixed(1)}s`);
   if (sample) {
@@ -610,15 +689,37 @@ function onHover(event) {
   }
   for (const ev of nearbyEvents.slice(-4)) {
     const extra = ev.reason
+      || (ev.type === 'tool_start' ? `${ev.name} start ${formatArgs(ev.args)}` : '')
+      || (ev.type === 'tool_done' ? `${ev.name} ${ev.ok ? 'ok' : 'fail'} ${ev.duration_ms || 0}ms` : '')
       || (ev.type === 'phase' ? `${ev.name} ${ev.on ? 'on' : 'off'}` : '')
       || (ev.text ? String(ev.text).slice(0, 40) : '');
     lines.push(`> ${ev.type}${extra ? ' ' + extra : ''}`);
+  }
+  for (const tool of nearbyTools.slice(-3)) {
+    const status = tool.open ? 'running' : (tool.ok === false ? `fail ${tool.error || ''}`.trim() : 'ok');
+    const duration = tool.open ? `${Math.max(0, Math.round((t - tool.start) * 1000))}ms+` : `${tool.duration_ms || Math.round((tool.end - tool.start) * 1000)}ms`;
+    lines.push(`tool ${tool.name} ${status} ${duration} ${formatArgs(tool.args)}`.trim());
   }
   hoverEl.textContent = lines.join('\n');
   hoverEl.classList.remove('hidden');
   const wrapRect = wrap.getBoundingClientRect();
   const left = Math.min(wrapRect.width - 200, Math.max(8, x + 12));
   hoverEl.style.left = `${left}px`;
+}
+
+function formatArgs(args) {
+  if (!args || typeof args !== 'object') return '';
+  const parts = Object.entries(args)
+    .slice(0, 3)
+    .map(([key, value]) => `${key}=${formatArgValue(value)}`);
+  return parts.length ? `{${parts.join(', ')}}` : '{}';
+}
+
+function formatArgValue(value) {
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value == null) return 'null';
+  const text = String(value);
+  return text.length > 18 ? `${text.slice(0, 17)}…` : text;
 }
 
 function nearestSample(t) {

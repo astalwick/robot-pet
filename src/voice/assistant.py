@@ -811,6 +811,7 @@ async def stream_openai_words(
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     playback_event: asyncio.Event | None = None,
     openai_model: str = OPENAI_MODEL,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch | AgentGoalRequest]:
     from voice.tools import ASSISTANT_TOOLS, RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
 
@@ -935,7 +936,35 @@ async def stream_openai_words(
                 if playback_event is not None:
                     await playback_event.wait()
 
+            started_at = time.monotonic()
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_start",
+                        "t": started_at,
+                        "source": "assistant",
+                        "tool_id": call.call_id,
+                        "name": call.name,
+                        "args": call.arguments,
+                    }
+                )
             result = await dispatch_tool(call, tool_context)
+            finished_at = time.monotonic()
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_done",
+                        "t": finished_at,
+                        "source": "assistant",
+                        "tool_id": call.call_id,
+                        "name": call.name,
+                        "args": call.arguments,
+                        "started_at": started_at,
+                        "ok": result.ok,
+                        "error": result.output.get("error"),
+                        "duration_ms": round((finished_at - started_at) * 1000),
+                    }
+                )
 
             tool_outputs.append(
                 {
@@ -985,6 +1014,7 @@ async def run_assistant_turn(
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     openai_model: str = OPENAI_MODEL,
+    on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> str | AgentGoalRequest:
     from voice.elevenlabs_io import speak_with_eleven_flash
 
@@ -1005,6 +1035,7 @@ async def run_assistant_turn(
         speaker_direction_caller,
         playback_event,
         openai_model,
+        on_event,
     )
 
     # Peek the first chunk before opening the speaker. When the model's first move
@@ -1438,6 +1469,7 @@ async def handle_scribe_events(
                 speaker_direction_caller=speaker_direction_caller,
                 speak_progress=speak_progress,
                 is_speaking=lambda: current_playback() is not None,
+                on_event=on_event,
                 character_prose=current_character_prose(),
                 preamble=goal_request.preamble,
             )
@@ -1513,6 +1545,7 @@ async def handle_scribe_events(
                     face_me_caller=face_me_caller,
                     speaker_direction_caller=speaker_direction_caller,
                     openai_model=openai_model,
+                    on_event=on_event,
                 ),
                 timeout=ASSISTANT_TURN_TIMEOUT_SECS,
             )

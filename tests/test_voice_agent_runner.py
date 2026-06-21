@@ -101,6 +101,7 @@ class NativeToolMechanicsTest(unittest.TestCase):
 
     def test_move_runs_with_arguments_parsed_from_json_string(self):
         captured: dict = {}
+        timeline_events = []
         steps = {"n": 0}
 
         def responder(_input_items):
@@ -122,10 +123,18 @@ class NativeToolMechanicsTest(unittest.TestCase):
                 openai_model="test-model",
                 voice_state=VoiceState("voice"),
                 motion_intent_caller=move,
+                on_event=timeline_events.append,
             )
         )
 
         self.assertEqual(captured["distance_meters"], 0.5)
+        self.assertEqual(
+            [(event["type"], event["source"], event["name"], event.get("ok")) for event in timeline_events],
+            [("tool_start", "goal", "move", None), ("tool_done", "goal", "move", True)],
+        )
+        self.assertEqual(timeline_events[0]["args"], {"distance_meters": 0.5})
+        self.assertEqual(timeline_events[1]["started_at"], timeline_events[0]["t"])
+        self.assertGreaterEqual(timeline_events[1]["duration_ms"], 0)
 
     def test_tool_output_goes_back_with_matching_call_id(self):
         steps = {"n": 0}

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
@@ -138,6 +139,7 @@ async def run_agent_goal(
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
     speak_progress: Callable[[str], Awaitable[None]] | None = None,
     is_speaking: Callable[[], bool] | None = None,
+    on_event: Callable[[dict[str, object]], None] | None = None,
     character_prose: str = "",
     preamble: str = "",
     max_steps: int = MAX_STEPS,
@@ -261,7 +263,35 @@ async def run_agent_goal(
             if loop.time() >= deadline:
                 log.info("goal timed out before tool at step %d: %r", step, goal)
                 return await speak_final(TIMEOUT_FINAL)
+            started_at = time.monotonic()
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_start",
+                        "t": started_at,
+                        "source": "goal",
+                        "tool_id": call.call_id,
+                        "name": call.name,
+                        "args": call.arguments,
+                    }
+                )
             result = await dispatch_tool(call, context)
+            finished_at = time.monotonic()
+            if on_event:
+                on_event(
+                    {
+                        "type": "tool_done",
+                        "t": finished_at,
+                        "source": "goal",
+                        "tool_id": call.call_id,
+                        "name": call.name,
+                        "args": call.arguments,
+                        "started_at": started_at,
+                        "ok": result.ok,
+                        "error": result.output.get("error"),
+                        "duration_ms": round((finished_at - started_at) * 1000),
+                    }
+                )
             if stop_event.is_set():
                 return ""
             log.info("tool call %s args=%s ok=%s", call.name, call.arguments, result.ok)

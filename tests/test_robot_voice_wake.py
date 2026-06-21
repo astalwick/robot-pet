@@ -56,6 +56,22 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         with suppress(asyncio.CancelledError):
             await idle_task
 
+    async def test_wait_for_idle_ignored_while_assistant_working(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service.active_config = VoiceConfig(wake_word_enabled=True, session_idle_secs=0.05)
+        service._mode = "active"
+        service._idle_started_at = time.monotonic() - 1.0
+        service.status["status"] = "thinking"
+        service.status["assistant_speaking"] = False
+        service.status["assistant_working"] = True
+
+        idle_task = asyncio.create_task(service._wait_for_idle())
+        await asyncio.sleep(0.15)
+        self.assertFalse(idle_task.done())
+        service.status["status"] = "listening"
+        service.status["assistant_working"] = False
+        await asyncio.wait_for(idle_task, timeout=1.0)
+
     async def test_publish_listening_updates_idle_clock(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service._mode = "active"

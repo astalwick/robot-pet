@@ -2935,6 +2935,55 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_silent_failed_turn_clears_assistant_working(self):
+        async def run():
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                raise RuntimeError("model failed")
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me something"})
+            for _ in range(20):
+                if statuses and statuses[-1].get("status") == "error":
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertEqual(statuses[-1].get("status"), "error")
+            self.assertFalse(statuses[-1].get("assistant_working"))
+            self.assertEqual(statuses[-1].get("last_error"), "model failed")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_substantial_commit_starting_with_interrupt_word_does_not_start_new_turn(self):
         # Phase 1: a commit that starts with an explicit interrupt word but is
         # long enough to pass commit_decision (e.g. "wait, tell me about the

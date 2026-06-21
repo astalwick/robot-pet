@@ -1124,11 +1124,18 @@ async def handle_scribe_events(
 
     def status(**values: object) -> None:
         nonlocal hearing_on, thinking_on
+        new_status = values.get("status")
+        if (
+            "assistant_working" not in values
+            and state.active_turn is None
+            and state.active_goal is None
+            and state.progress is None
+        ):
+            values["assistant_working"] = False
         if on_status:
             on_status(values)
         if not on_event or "status" not in values:
             return
-        new_status = values["status"]
         if new_status not in {"hearing", "thinking", "listening"}:
             return
         new_hearing = new_status == "hearing"
@@ -1279,7 +1286,7 @@ async def handle_scribe_events(
             return
         except Exception as exc:
             log.exception("assistant turn failed: %s", exc)
-            status(status="error", last_error=str(exc))
+            status(status="error", assistant_working=False, last_error=str(exc))
             return
         if isinstance(assistant_text, AgentGoalRequest):
             # A goal handoff is recorded only when the goal finishes, not here.
@@ -1291,7 +1298,7 @@ async def handle_scribe_events(
         turn.history_committed = True
         if assistant_text:
             emit("assistant", turn_id=turn.turn_id, text=assistant_text)
-        status(status="listening", assistant_speaking=False, last_assistant_text=assistant_text)
+        status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=assistant_text)
 
     def completed_goal_request(turn: ActiveTurn) -> AgentGoalRequest | None:
         if not turn.task.done():
@@ -1312,14 +1319,21 @@ async def handle_scribe_events(
             return
         try:
             assistant_text = turn.task.result()
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            state.active_turn = None
+            await cancel_task(turn.playback_release_task)
+            turn.playback_release_task = None
+            log.exception("assistant turn failed: %s", exc)
+            status(status="error", assistant_working=False, last_error=str(exc))
             return
         if isinstance(assistant_text, AgentGoalRequest) or assistant_text.strip():
             return
         state.active_turn = None
         await cancel_task(turn.playback_release_task)
         turn.playback_release_task = None
-        status(status="listening", assistant_speaking=False)
+        status(status="listening", assistant_speaking=False, assistant_working=False)
 
     async def cancel_active_goal(reason: str) -> None:
         goal = state.active_goal
@@ -1355,7 +1369,7 @@ async def handle_scribe_events(
         progress.speaking_event.set()
         state.progress = progress
         emit("goal_speech", text=text)
-        status(status="speaking", assistant_speaking=True)
+        status(status="speaking", assistant_speaking=True, assistant_working=True)
 
         async def text_stream() -> AsyncIterator[str]:
             yield text
@@ -1388,7 +1402,7 @@ async def handle_scribe_events(
         # status back to listening when speech stops, so restore thinking here or the
         # idle timer would treat an active goal as an idle session.
         if state.active_goal is not None:
-            status(status="thinking", assistant_speaking=False)
+            status(status="thinking", assistant_speaking=False, assistant_working=True)
 
     async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
         # The normal turn is finished and is handing off to an iterative goal. Drop
@@ -1400,6 +1414,7 @@ async def handle_scribe_events(
         emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)
         log.info("goal handoff received: %s", goal_request.goal)
         if goal_runner is None:
+            status(status="listening", assistant_speaking=False, assistant_working=False)
             return
         await cancel_active_goal("superseded")
         goal = ActiveGoal(
@@ -1433,7 +1448,7 @@ async def handle_scribe_events(
         )
         state.active_goal = goal
         emit("goal_start", goal=goal.goal)
-        status(status="thinking")
+        status(status="thinking", assistant_working=True)
 
     async def finish_goal(goal: ActiveGoal) -> None:
         nonlocal recent_assistant_text, recent_assistant_echo_until
@@ -1446,7 +1461,7 @@ async def handle_scribe_events(
             return
         except Exception as exc:
             log.exception("goal task failed: %s", exc)
-            status(status="error", last_error=str(exc))
+            status(status="error", assistant_working=False, last_error=str(exc))
             return
         final_text = (final_text or "").strip()
         goal.final_text = final_text
@@ -1457,7 +1472,7 @@ async def handle_scribe_events(
             recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
             emit("assistant", text=final_text)
         emit("goal_done", goal=goal.goal, text=final_text)
-        status(status="listening", assistant_speaking=False, last_assistant_text=final_text)
+        status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=final_text)
 
     async def start_turn(prompt: str, speculative: bool) -> None:
         await cancel_active_turn("new_turn")
@@ -1518,7 +1533,7 @@ async def handle_scribe_events(
         emit("turn_start", turn_id=new_turn_id, speculative=speculative, prompt=prompt)
         if not speculative:
             emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
-        status(status="thinking", assistant_speaking=False)
+        status(status="thinking", assistant_speaking=False, assistant_working=True)
         if speculative:
             if policy.speculative_playback_enabled:
                 turn.playback_release_task = asyncio.create_task(release_speculative_playback(turn))

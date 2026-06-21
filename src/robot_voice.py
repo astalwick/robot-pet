@@ -224,6 +224,7 @@ class RobotVoiceService:
         self.status: dict[str, object] = {
             "status": "disabled",
             "assistant_speaking": False,
+            "assistant_working": False,
             "partial_transcript": None,
             "last_committed_transcript": None,
             "last_assistant_text": None,
@@ -631,6 +632,8 @@ class RobotVoiceService:
             await asyncio.sleep(0.5)
             if bool(self.status.get("assistant_speaking")):
                 continue
+            if bool(self.status.get("assistant_working")):
+                continue
             if self._idle_started_at is None:
                 self._idle_started_at = time.monotonic()
                 continue
@@ -670,6 +673,7 @@ class RobotVoiceService:
                 config,
                 status="waiting",
                 assistant_speaking=False,
+                assistant_working=False,
                 partial_transcript=None,
                 force_timeline=True,
             )

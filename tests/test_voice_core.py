@@ -2301,6 +2301,56 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_quiet_audio_clears_uncommitted_user_speech_phase(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            events: list[dict[str, object]] = []
+            statuses: list[dict[str, object]] = []
+            policy = TurnPolicy(local_speech_window_secs=0.02, speculative_partial_delay_secs=10.0)
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    on_event=events.append,
+                    on_status=statuses.append,
+                    assistant_runner=idle_forever,
+                )
+            )
+
+            await scribe_events.put({"type": "audio_activity", "rms": 200})
+            await scribe_events.put({"type": "partial", "text": "hello"})
+            await asyncio.sleep(0.04)
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await asyncio.sleep(0.01)
+
+            user_phases = [
+                event
+                for event in events
+                if event.get("type") == "phase" and event.get("name") == "user_speech"
+            ]
+            hearing_phases = [
+                event
+                for event in events
+                if event.get("type") == "phase" and event.get("name") == "hearing"
+            ]
+            self.assertEqual([(event.get("on"),) for event in user_phases], [(True,), (False,)])
+            self.assertEqual([(event.get("on"),) for event in hearing_phases], [(True,), (False,)])
+            self.assertTrue(any(status.get("status") == "listening" for status in statuses))
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_silent_completed_turn_returns_to_listening(self):
         async def run():
             scribe_events = asyncio.Queue()

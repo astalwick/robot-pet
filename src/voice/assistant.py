@@ -1770,6 +1770,18 @@ async def handle_scribe_events(
                 elif levels.scribe_gate_open:
                     note_user_speech()
                     heard_local_audio = True
+                elif (
+                    user_speech_on
+                    and now - state.last_local_speech_at > policy.local_speech_window_secs
+                ):
+                    end_user_speech()
+                    if (
+                        hearing_on
+                        and state.active_turn is None
+                        and state.active_goal is None
+                        and state.progress is None
+                    ):
+                        status(status="listening", partial_transcript=None)
                 if heard_local_audio:
                     state.local_audio_seq += 1
                 levels.mic_rms = state.last_local_speech_rms

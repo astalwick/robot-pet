@@ -88,6 +88,19 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
             service.publish(config, status="listening", assistant_speaking=False)
         self.assertGreater(service._idle_started_at, first)
 
+    async def test_stale_hearing_status_does_not_clear_idle_clock(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "active"
+        service.status["status"] = "hearing"
+        service.status["assistant_speaking"] = False
+        service.status["assistant_working"] = False
+        service._idle_started_at = time.monotonic() - 1.0
+
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            service.publish(VoiceConfig(), barge_in_mic_rms=0)
+
+        self.assertLess(service._idle_started_at, time.monotonic() - 0.5)
+
     async def test_deactivate_clears_history(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=False)

@@ -877,19 +877,17 @@ class RobotVoiceService:
 
     def publish(self, config: VoiceConfig, *, force_timeline: bool = False, **updates: object) -> None:
         started = time.perf_counter()
-        was_idle = (
-            self._mode == VOICE_ACTIVE
-            and self.status.get("status") == "listening"
-            and not bool(self.status.get("assistant_speaking"))
-        )
         next_status = updates.get("status", self.status.get("status"))
         next_assistant_speaking = updates.get("assistant_speaking", self.status.get("assistant_speaking"))
+        next_assistant_working = updates.get("assistant_working", self.status.get("assistant_working"))
+        user_activity = updates.get("status") == "hearing" or bool(updates.get("partial_transcript"))
         self.status.update(updates)
-        is_idle = self._mode == VOICE_ACTIVE and next_status == "listening" and not bool(next_assistant_speaking)
-        if is_idle and not was_idle:
-            self._idle_started_at = time.monotonic()
-        elif not is_idle:
+        if self._mode != VOICE_ACTIVE:
             self._idle_started_at = None
+        elif bool(next_assistant_speaking) or bool(next_assistant_working) or user_activity:
+            self._idle_started_at = None
+        elif self._idle_started_at is None:
+            self._idle_started_at = time.monotonic()
         last_error = optional_text(self.status["last_error"])
         if last_error and last_error != self.last_logged_error:
             log.error("voice error: %s", last_error)

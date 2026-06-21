@@ -18,8 +18,8 @@ const COLORS = {
 };
 
 const PHASE_ROWS = [
-  { name: 'user_speech', color: '#4ade80', label: 'user' },
-  { name: 'hearing',     color: '#facc15', label: 'hearing' },
+  { name: 'user_speech', color: '#4ade80', label: 'user speech' },
+  { name: 'hearing',     color: '#facc15', label: 'transcript' },
   { name: 'thinking',    color: '#7dd3fc', label: 'thinking' },
   { name: 'speaking',    color: '#c084fc', label: 'speaking' },
 ];
@@ -301,7 +301,7 @@ function drawMicAudioLane(ref, rect) {
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
   ctx.fillStyle = COLORS.scribeGate;
-  ctx.fillText(`scribe ${MIC_SCRIBE_SEND_RMS_MIN}`, viewW - 4, gateY - 2);
+  ctx.fillText(`stt ${MIC_SCRIBE_SEND_RMS_MIN}`, viewW - 4, gateY - 2);
 }
 
 function drawOutAudioLane(ref, rect) {
@@ -419,7 +419,7 @@ function drawGateLane(ref, rect) {
   const innerH = rect.h - 6;
   const rowH = innerH / 2;
   const rows = [
-    { label: 'scribe', idx: IDX_SCRIBE_GATE, open: COLORS.scribeGate, closed: '#2a1810' },
+    { label: 'stt', idx: IDX_SCRIBE_GATE, open: COLORS.scribeGate, closed: '#2a1810' },
     { label: 'barge', idx: IDX_BARGE_GATE, open: COLORS.gateOpen, closed: COLORS.gateClosed },
   ];
 
@@ -603,7 +603,7 @@ function onHover(event) {
   lines.push(`t  -${(ref - t).toFixed(1)}s`);
   if (sample) {
     lines.push(`mic peak  ${sample[IDX_MIC]}`);
-    lines.push(`scribe    ${sample[IDX_SCRIBE_GATE] ? 'sending' : 'silence'}`);
+    lines.push(`stt       ${sample[IDX_SCRIBE_GATE] ? 'sending' : 'silence'}`);
     lines.push(`playback  ${sample[IDX_PLAYBACK]}`);
     lines.push(`threshold ${sample[IDX_THRESHOLD]}`);
     lines.push(`barge     ${sample[IDX_BARGE_GATE] ? 'open' : 'closed'}`);

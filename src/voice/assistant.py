@@ -1777,7 +1777,7 @@ async def handle_scribe_events(
                     end_user_speech()
                     if (
                         hearing_on
-                        and state.active_turn is None
+                        and (state.active_turn is None or not state.active_turn.is_active())
                         and state.active_goal is None
                         and state.progress is None
                     ):

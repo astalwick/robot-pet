@@ -2351,6 +2351,66 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_quiet_audio_clears_hearing_after_completed_turn(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            events: list[dict[str, object]] = []
+            policy = TurnPolicy(
+                commit_playback_delay_secs=0.01,
+                local_speech_window_secs=0.02,
+                speculative_partial_delay_secs=10.0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                return "Done."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    on_event=events.append,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Move backward half a meter."})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 200})
+            await scribe_events.put({"type": "partial", "text": "stop"})
+            await asyncio.sleep(0.04)
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await asyncio.sleep(0.01)
+
+            hearing_phases = [
+                event
+                for event in events
+                if event.get("type") == "phase" and event.get("name") == "hearing"
+            ]
+            self.assertEqual([(event.get("on"),) for event in hearing_phases[-2:]], [(True,), (False,)])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_silent_completed_turn_returns_to_listening(self):
         async def run():
             scribe_events = asyncio.Queue()

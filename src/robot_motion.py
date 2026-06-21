@@ -62,6 +62,7 @@ DRIVE_COMMAND_STALE_SECONDS = 0.5
 WHEEL_DIAMETER_METERS = 0.096
 ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7
 ENCODER_COUNTS_PER_METER = ENCODER_COUNTS_PER_WHEEL_REVOLUTION / (math.pi * WHEEL_DIAMETER_METERS)
+ENCODER_COUNT_BITS = 32
 # A move commanding motion must keep gaining encoder travel; if it stalls this
 # long the no-progress watchdog stops and fails it.
 ENCODER_MOVE_NO_PROGRESS_TIMEOUT_SECONDS = 1.0
@@ -685,8 +686,8 @@ class MotionRunner:
             return "encoder_read_failed"
 
         travel = (
-            abs(left_now - self.encoder_move.left_start)
-            + abs(right_now - self.encoder_move.right_start)
+            abs(_encoder_delta(left_now, self.encoder_move.left_start))
+            + abs(_encoder_delta(right_now, self.encoder_move.right_start))
         ) / 2
         if travel >= self.encoder_move.target_counts:
             self._complete_encoder_move()
@@ -851,6 +852,18 @@ def _move_toward(current: float, target: float, max_delta: float) -> float:
     if abs(target - current) <= max_delta:
         return target
     return current + max_delta if target > current else current - max_delta
+
+
+def _encoder_delta(current: float, start: float) -> float:
+    delta = current - start
+    span = 1 << ENCODER_COUNT_BITS
+    max_signed = (1 << (ENCODER_COUNT_BITS - 1)) - 1
+    min_signed = -(1 << (ENCODER_COUNT_BITS - 1))
+    if delta > max_signed:
+        return delta - span
+    if delta < min_signed:
+        return delta + span
+    return delta
 
 
 def build_parser() -> argparse.ArgumentParser:

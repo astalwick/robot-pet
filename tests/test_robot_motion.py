@@ -527,6 +527,23 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertEqual(completed, [{"ok": True, "result": "completed"}])
 
+    def test_encoder_move_reverse_handles_unsigned_wraparound(self):
+        motor = FakeMotor()
+        target = 0.1 * ENCODER_COUNTS_PER_METER
+        motor.positions = deque([
+            (0, 0),
+            ((1 << 32) - 10, (1 << 32) - 10),
+            ((1 << 32) - target, (1 << 32) - target),
+        ])
+        completed = []
+        runner = self._move_runner(motor, -0.1, completed)
+
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, False, SafetyState(blocked=False)))
+        self.assertFalse(runner._encoder_move_should_stop(motor, 0.1, False, SafetyState(blocked=False)))
+        self.assertTrue(runner._encoder_move_should_stop(motor, 0.2, False, SafetyState(blocked=False)))
+
+        self.assertEqual(completed, [{"ok": True, "result": "completed"}])
+
     def test_encoder_move_fails_when_start_read_fails(self):
         motor = FakeMotor()
         motor.positions = deque([(None, None)])

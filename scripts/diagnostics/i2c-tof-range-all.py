@@ -51,17 +51,24 @@ def read_reg16(bus, tof_address, register):
 
 def probe_channel(bus, tof_address):
     try:
-        model_id = bus.read_byte_data(tof_address, VL53L0X_MODEL_ID_REG)
+        bus.read_byte(tof_address)
     except OSError:
         return None
-    if model_id == VL53L0X_MODEL_ID:
-        return "vl53l0x"
+
+    try:
+        model_id = bus.read_byte_data(tof_address, VL53L0X_MODEL_ID_REG)
+        if model_id == VL53L0X_MODEL_ID:
+            return "vl53l0x"
+    except OSError:
+        pass
+
     try:
         who_am_i = read_reg16(bus, tof_address, VL53L1X_WHO_AM_I_REG)
+        if who_am_i == VL53L1X_WHO_AM_I:
+            return "vl53l1x"
     except OSError:
-        return None
-    if who_am_i == VL53L1X_WHO_AM_I:
-        return "vl53l1x"
+        pass
+
     return None
 
 

@@ -21,7 +21,7 @@ if not sys.platform.startswith("linux"):
     print("This script must run on the Pi (Linux + I2C).")
     sys.exit(1)
 
-from smbus2 import SMBus
+from smbus2 import SMBus, i2c_msg
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -45,8 +45,10 @@ def select_mux_channel(bus, mux_address, channel):
 
 
 def read_chip_bytes(bus, tof_address, register, length):
-    bus.write_i2c_block_data(tof_address, register >> 8, [register & 0xFF])
-    return bus.read_i2c_block_data(tof_address, 0, length)
+    write = i2c_msg.write(tof_address, [register >> 8, register & 0xFF])
+    read = i2c_msg.read(tof_address, length)
+    bus.i2c_rdwr(write, read)
+    return list(read)
 
 
 def probe_channel(bus, tof_address):

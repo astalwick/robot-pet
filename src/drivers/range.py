@@ -149,7 +149,14 @@ class RangeDriver:
             if config.kind == "vl53l1x":
                 distance_cm = sensor.distance
                 if distance_cm is None:
-                    raise OSError("no valid VL53L1X range")
+                    # Valid measurement: nothing in range (treat as infinity).
+                    return RangeReading(
+                        name=config.name,
+                        kind=config.kind,
+                        channel=config.channel,
+                        distance_mm=None,
+                        ok=True,
+                    )
                 distance_mm = max(0, int(distance_cm * 10) - config.offset_mm)
             else:
                 distance_mm = max(0, int(sensor.range) - config.offset_mm)

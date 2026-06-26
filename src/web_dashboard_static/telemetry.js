@@ -334,7 +334,9 @@ function renderSensors(snapshot, sources) {
   panel.classList.remove('hidden');
   const rows = readings.map((reading) => {
     const label = reading.name || '--';
-    const value = reading.ok ? `${reading.distance_mm} mm` : 'FAIL';
+    const value = reading.ok
+      ? (reading.distance_mm != null ? `${reading.distance_mm} mm` : '∞')
+      : 'FAIL';
     const cls = reading.ok ? 'ok' : 'err';
     return row(label, '', value, cls);
   });

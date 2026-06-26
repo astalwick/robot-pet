@@ -42,9 +42,10 @@ class FakeRangeSensor:
 
 
 class FakeL1XSensor:
-    def __init__(self, distance_mm: int, fail: bool = False):
+    def __init__(self, distance_mm: int, fail: bool = False, no_reading: bool = False):
         self.distance_mm = distance_mm
         self.fail = fail
+        self.no_reading = no_reading
         self.ranging = False
 
     def start_ranging(self) -> None:
@@ -54,10 +55,10 @@ class FakeL1XSensor:
         self.ranging = False
 
     @property
-    def distance(self) -> float:
+    def distance(self) -> float | None:
         if self.fail:
             raise OSError("sensor read failed")
-        return self.distance_mm / 10
+        return None if self.no_reading else self.distance_mm / 10
 
 
 class RangeDriverTest(unittest.TestCase):
@@ -193,6 +194,24 @@ class RangeDriverTest(unittest.TestCase):
         driver.cleanup()
 
         self.assertFalse(sensor.ranging)
+
+    def test_vl53l1x_out_of_range_is_ok_with_no_distance(self):
+        channels = {6: FakeChannelBus()}
+        mux = FakeMux(channels)
+        sensor = FakeL1XSensor(420)
+
+        driver = RangeDriver(
+            [RangeSensorConfig("forward", "vl53l1x", 6)],
+            i2c_factory=lambda: object(),
+            mux_factory=lambda i2c, address: mux,
+            vl53l1x_factory=lambda bus, address: sensor,
+        )
+
+        sensor.no_reading = True
+        reading = driver.read("forward")
+
+        self.assertTrue(reading.ok)
+        self.assertIsNone(reading.distance_mm)
 
     def test_unknown_kind_raises_at_init(self):
         configs = [RangeSensorConfig("bad", "vl53l99", 0)]

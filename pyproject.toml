@@ -22,6 +22,7 @@ dependencies = [
     "adafruit-circuitpython-tca9548a; sys_platform == 'linux'",
     "adafruit-circuitpython-vl53l0x; sys_platform == 'linux'",
     "adafruit-circuitpython-vl53l1x; sys_platform == 'linux'",
+    "adafruit-circuitpython-bno08x; sys_platform == 'linux'",
     "certifi",
     "sounddevice",
     "textual",

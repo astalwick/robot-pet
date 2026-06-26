@@ -110,10 +110,11 @@ class RangeDriver:
                 sensor.start_continuous()
             elif config.kind == "vl53l1x":
                 sensor = vl53l1x_factory(channel_bus, range_address)
-                # Narrow vertical FOV: full width, thin horizontal strip.
+                # Narrow vertical FOV: full width, thin horizontal strip,
+                # nudged one SPAD upward from center.
                 sensor.stop_ranging()
                 sensor.roi_xy = (16, 2)
-                sensor.roi_center = 199
+                sensor.roi_center = 198
                 sensor.start_ranging()
             else:
                 raise ValueError(f"unknown range sensor kind: {config.kind!r}")

@@ -190,6 +190,8 @@ class RangeDriverTest(unittest.TestCase):
         self.assertTrue(reading.ok)
         self.assertEqual(reading.distance_mm, 420)
         self.assertTrue(sensor.ranging)
+        self.assertEqual(sensor.roi_xy, (16, 2))
+        self.assertEqual(sensor.roi_center, 198)
 
         driver.cleanup()
 

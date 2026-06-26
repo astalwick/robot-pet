@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 
 log = logging.getLogger(__name__)
+
+VL53L1X_READY_RECHECK_SECONDS = 0.005
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,8 @@ class RangeDriver:
                 # Narrow vertical FOV: full width, thin horizontal strip,
                 # nudged one SPAD upward from center.
                 sensor.stop_ranging()
+                sensor.distance_mode = 1
+                sensor.timing_budget = 50
                 sensor.roi_xy = (16, 2)
                 sensor.roi_center = 198
                 sensor.start_ranging()
@@ -148,7 +153,18 @@ class RangeDriver:
     def _read_locked(self, config: RangeSensorConfig, sensor: Any) -> RangeReading:
         try:
             if config.kind == "vl53l1x":
+                if not sensor.data_ready:
+                    time.sleep(VL53L1X_READY_RECHECK_SECONDS)
+                if not sensor.data_ready:
+                    return RangeReading(
+                        name=config.name,
+                        kind=config.kind,
+                        channel=config.channel,
+                        distance_mm=None,
+                        ok=False,
+                    )
                 distance_cm = sensor.distance
+                sensor.clear_interrupt()
                 if distance_cm is None:
                     # Valid measurement: nothing in range (treat as infinity).
                     return RangeReading(

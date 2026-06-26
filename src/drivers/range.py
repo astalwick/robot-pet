@@ -90,6 +90,7 @@ class RangeDriver:
         self.range_address = range_address
         self._lock = threading.Lock()
         self._entries: list[tuple[RangeSensorConfig, Any]] = []
+        self._last_good: dict[str, RangeReading] = {}
 
         if i2c_factory is None:
             i2c_factory = _default_i2c_factory
@@ -156,6 +157,9 @@ class RangeDriver:
                 if not sensor.data_ready:
                     time.sleep(VL53L1X_READY_RECHECK_SECONDS)
                 if not sensor.data_ready:
+                    previous = self._last_good.get(config.name)
+                    if previous is not None:
+                        return previous
                     return RangeReading(
                         name=config.name,
                         kind=config.kind,
@@ -167,23 +171,27 @@ class RangeDriver:
                 sensor.clear_interrupt()
                 if distance_cm is None:
                     # Valid measurement: nothing in range (treat as infinity).
-                    return RangeReading(
+                    reading = RangeReading(
                         name=config.name,
                         kind=config.kind,
                         channel=config.channel,
                         distance_mm=None,
                         ok=True,
                     )
+                    self._last_good[config.name] = reading
+                    return reading
                 distance_mm = max(0, int(distance_cm * 10) - config.offset_mm)
             else:
                 distance_mm = max(0, int(sensor.range) - config.offset_mm)
-            return RangeReading(
+            reading = RangeReading(
                 name=config.name,
                 kind=config.kind,
                 channel=config.channel,
                 distance_mm=distance_mm,
                 ok=True,
             )
+            self._last_good[config.name] = reading
+            return reading
         except Exception as exc:
             log.warning(
                 "range read failed for %s (channel %s): %s",

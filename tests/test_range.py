@@ -237,7 +237,7 @@ class RangeDriverTest(unittest.TestCase):
         self.assertIsNone(reading.distance_mm)
         self.assertTrue(sensor.interrupt_cleared)
 
-    def test_vl53l1x_waits_for_ready_data(self):
+    def test_vl53l1x_not_ready_without_previous_reading_fails(self):
         channels = {6: FakeChannelBus()}
         mux = FakeMux(channels)
         sensor = FakeL1XSensor(420)
@@ -255,6 +255,31 @@ class RangeDriverTest(unittest.TestCase):
 
         self.assertFalse(reading.ok)
         self.assertIsNone(reading.distance_mm)
+        self.assertFalse(sensor.interrupt_cleared)
+        sleep.assert_called_once_with(0.005)
+
+    def test_vl53l1x_not_ready_returns_previous_reading(self):
+        channels = {6: FakeChannelBus()}
+        mux = FakeMux(channels)
+        sensor = FakeL1XSensor(420)
+
+        driver = RangeDriver(
+            [RangeSensorConfig("forward", "vl53l1x", 6)],
+            i2c_factory=lambda: object(),
+            mux_factory=lambda i2c, address: mux,
+            vl53l1x_factory=lambda bus, address: sensor,
+        )
+
+        self.assertEqual(driver.read("forward").distance_mm, 420)
+
+        sensor.distance_mm = 500
+        sensor.interrupt_cleared = False
+        sensor.data_ready = False
+        with patch("drivers.range.time.sleep") as sleep:
+            reading = driver.read("forward")
+
+        self.assertTrue(reading.ok)
+        self.assertEqual(reading.distance_mm, 420)
         self.assertFalse(sensor.interrupt_cleared)
         sleep.assert_called_once_with(0.005)
 

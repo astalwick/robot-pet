@@ -110,7 +110,10 @@ class RangeDriver:
                 sensor.start_continuous()
             elif config.kind == "vl53l1x":
                 sensor = vl53l1x_factory(channel_bus, range_address)
-                # Adafruit init runs one measurement then stops; keep ranging on.
+                # Narrow vertical FOV: full width, thin horizontal strip.
+                sensor.stop_ranging()
+                sensor.roi_xy = (16, 2)
+                sensor.roi_center = 199
                 sensor.start_ranging()
             else:
                 raise ValueError(f"unknown range sensor kind: {config.kind!r}")

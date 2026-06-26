@@ -35,18 +35,18 @@ NUM_MUX_CHANNELS = 8
 VL53L0X_MODEL_ID = 0xEE
 VL53L0X_MODEL_ID_REG = 0xC0
 
-VL53L1X_WHO_AM_I = 0xEACC
-VL53L1X_WHO_AM_I_REG = 0x010F
+VL53L1X_MODEL_ID = 0xEA
+VL53L1X_MODULE_TYPE = 0xCC
+VL53L1X_ID_REG = 0x010F
 
 
 def select_mux_channel(bus, mux_address, channel):
     bus.write_byte(mux_address, 1 << channel)
 
 
-def read_reg16(bus, tof_address, register):
+def read_chip_bytes(bus, tof_address, register, length):
     bus.write_i2c_block_data(tof_address, register >> 8, [register & 0xFF])
-    data = bus.read_i2c_block_data(tof_address, 0, 2)
-    return (data[0] << 8) | data[1]
+    return bus.read_i2c_block_data(tof_address, 0, length)
 
 
 def probe_channel(bus, tof_address):
@@ -55,17 +55,18 @@ def probe_channel(bus, tof_address):
     except OSError:
         return None
 
+    # L1X first: an 8-bit read at the L0X model-ID register can false-match on L1X.
     try:
-        model_id = bus.read_byte_data(tof_address, VL53L0X_MODEL_ID_REG)
-        if model_id == VL53L0X_MODEL_ID:
-            return "vl53l0x"
+        chip_id = read_chip_bytes(bus, tof_address, VL53L1X_ID_REG, 2)
+        if chip_id[0] == VL53L1X_MODEL_ID and chip_id[1] == VL53L1X_MODULE_TYPE:
+            return "vl53l1x"
     except OSError:
         pass
 
     try:
-        who_am_i = read_reg16(bus, tof_address, VL53L1X_WHO_AM_I_REG)
-        if who_am_i == VL53L1X_WHO_AM_I:
-            return "vl53l1x"
+        model_id = bus.read_byte_data(tof_address, VL53L0X_MODEL_ID_REG)
+        if model_id == VL53L0X_MODEL_ID:
+            return "vl53l0x"
     except OSError:
         pass
 

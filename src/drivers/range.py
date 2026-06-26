@@ -110,6 +110,8 @@ class RangeDriver:
                 sensor.start_continuous()
             elif config.kind == "vl53l1x":
                 sensor = vl53l1x_factory(channel_bus, range_address)
+                # Adafruit init runs one measurement then stops; keep ranging on.
+                sensor.start_ranging()
             else:
                 raise ValueError(f"unknown range sensor kind: {config.kind!r}")
             self._entries.append((config, sensor))
@@ -131,16 +133,23 @@ class RangeDriver:
     def cleanup(self) -> None:
         with self._lock:
             for config, sensor in self._entries:
-                if config.kind != "vl53l0x":
-                    continue
                 try:
-                    sensor.stop_continuous()
+                    if config.kind == "vl53l0x":
+                        sensor.stop_continuous()
+                    elif config.kind == "vl53l1x":
+                        sensor.stop_ranging()
                 except Exception as exc:
-                    log.warning("stop_continuous failed for %s: %s", config.name, exc)
+                    log.warning("sensor cleanup failed for %s: %s", config.name, exc)
 
     def _read_locked(self, config: RangeSensorConfig, sensor: Any) -> RangeReading:
         try:
-            distance_mm = max(0, int(sensor.range) - config.offset_mm)
+            if config.kind == "vl53l1x":
+                distance_cm = sensor.distance
+                if distance_cm is None:
+                    raise OSError("no valid VL53L1X range")
+                distance_mm = max(0, int(distance_cm * 10) - config.offset_mm)
+            else:
+                distance_mm = max(0, int(sensor.range) - config.offset_mm)
             return RangeReading(
                 name=config.name,
                 kind=config.kind,

@@ -2,14 +2,14 @@
 """
 Check for a BNO085 IMU on the TCA9548A mux.
 
-Default: channel 3 (Grove port 4). Stop robot-sensors first so nothing else
+Default: channel 5 (Grove port 6). Stop robot-sensors first so nothing else
 owns the I2C bus.
 
 Usage:
     cd ~/robot-pet
     source .venv/bin/activate
     python scripts/diagnostics/i2c-imu-scan.py
-    python scripts/diagnostics/i2c-imu-scan.py --channel 3
+    python scripts/diagnostics/i2c-imu-scan.py --channel 5
     python scripts/diagnostics/i2c-imu-scan.py --scan-all
     python scripts/diagnostics/i2c-imu-scan.py --no-read
 """
@@ -53,6 +53,7 @@ def read_acceleration(channel, address, mux_address):
     try:
         import board
         import adafruit_tca9548a
+        from adafruit_bno08x import BNO_REPORT_ACCELEROMETER
         from adafruit_bno08x.i2c import BNO08X_I2C
     except ImportError as error:
         raise RuntimeError(
@@ -63,8 +64,9 @@ def read_acceleration(channel, address, mux_address):
     i2c = board.I2C()
     mux = adafruit_tca9548a.TCA9548A(i2c, address=mux_address)
     imu = BNO08X_I2C(mux[channel], address=address)
+    imu.enable_feature(BNO_REPORT_ACCELEROMETER)
 
-    deadline = time.monotonic() + 2.0
+    deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
         accel = imu.acceleration
         if accel is not None:
@@ -88,8 +90,8 @@ def main():
     parser.add_argument(
         "--channel",
         type=int,
-        default=3,
-        help="Mux channel to check (default 3 = Grove port 4)",
+        default=5,
+        help="Mux channel to check (default 5 = Grove port 6)",
     )
     parser.add_argument(
         "--scan-all",

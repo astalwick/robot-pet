@@ -7,8 +7,40 @@
     "forward_stop_below_mm": 150
   },
   "sensors": [
-    { "name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "role": "cliff", "offset_mm": 0 },
-    { "name": "cliff_center", "kind": "vl53l0x", "mux_channel": 1, "role": "cliff", "offset_mm": 0 },
-    { "name": "cliff_right", "kind": "vl53l0x", "mux_channel": 2, "role": "cliff", "offset_mm": 0 }
+    {
+      "name": "cliff_left",
+      "kind": "vl53l0x",
+      "mux_channel": 0,
+      "role": "cliff",
+      "offset_mm": 0
+    },
+    {
+      "name": "forward_left",
+      "kind": "vl53l1x",
+      "mux_channel": 1,
+      "role": "forward",
+      "offset_mm": 0
+    },
+    {
+      "name": "forward_center",
+      "kind": "vl53l1x",
+      "mux_channel": 2,
+      "role": "forward",
+      "offset_mm": 0
+    },
+    {
+      "name": "forward_right",
+      "kind": "vl53l1x",
+      "mux_channel": 6,
+      "role": "forward",
+      "offset_mm": 0
+    },
+    {
+      "name": "cliff_right",
+      "kind": "vl53l0x",
+      "mux_channel": 7,
+      "role": "cliff",
+      "offset_mm": 0
+    }
   ]
 }

@@ -123,6 +123,7 @@ class MotionRunner:
         self._sensor_readings: list[dict[str, Any]] = []
         self._sensors_live = False
         self._imu_yaw: float | None = None
+        self._imu_yaw_time: float | None = None
         self._sensors_lock = threading.Lock()
 
         self._drive_lock = threading.Lock()
@@ -134,6 +135,7 @@ class MotionRunner:
         self.intent_bridge: MotionIntentBridge | None = None
         self.pending_intent_complete: Callable[[dict[str, Any]], None] | None = None
         self._intent_wait_started_at: float | None = None
+        self._intent_snap_stop = False
         self.encoder_move: EncoderMove | None = None
 
         self.mixer = DifferentialDriveMixer(qpps=config.qpps, speed_scale=1.0, turbo_scale=1.0)
@@ -231,10 +233,12 @@ class MotionRunner:
             readings = list(sensors.get("readings", [])) if isinstance(sensors, dict) else []
             imu = sensors.get("imu") if isinstance(sensors, dict) else None
             yaw = imu.get("yaw_degrees") if isinstance(imu, dict) and imu.get("ok") else None
+            yaw_time = sensors.get("time") if yaw is not None else None
             with self._sensors_lock:
                 self._sensor_readings = readings
                 self._sensors_live = sensors_live
                 self._imu_yaw = yaw
+                self._imu_yaw_time = yaw_time
 
     def _reload_sensors_config_if_changed(self) -> None:
         try:
@@ -334,10 +338,16 @@ class MotionRunner:
             if drive is None:
                 intent_command = self._tick_intent(now, gamepad_active=False)
                 if intent_command is None:
-                    # No motion source this tick. Ease any residual wheel speed down
-                    # to zero (an explicit stop snaps instead) before idling, so a
-                    # finished move or turn coasts to a halt rather than slamming off.
-                    ramped = self._apply_slew(0, 0, now, no_slew=stop_serviced)
+                    # No motion source this tick. Ease ordinary residual wheel speed
+                    # down before idling; explicit stops and turn target crossings
+                    # set no_slew so the wheels halt immediately.
+                    ramped = self._apply_slew(
+                        0,
+                        0,
+                        now,
+                        no_slew=stop_serviced or self._intent_snap_stop,
+                    )
+                    self._intent_snap_stop = False
                     if ramped.left_qpps != 0 or ramped.right_qpps != 0:
                         if not self._set_wheel_speeds(motor, ramped.left_qpps, ramped.right_qpps, now=now):
                             stop_reason = "RoboClaw speed command was not acknowledged"
@@ -392,7 +402,13 @@ class MotionRunner:
             # ramp; an explicit stop does the same via stop_serviced. A completed move
             # ramps down normally.
             encoder_fault = move_stop in ("encoder_read_failed", "encoder_no_progress")
-            no_slew = stop_serviced or encoder_fault or (safety.blocked and commanding_forward)
+            no_slew = (
+                stop_serviced
+                or self._intent_snap_stop
+                or encoder_fault
+                or (safety.blocked and commanding_forward)
+            )
+            self._intent_snap_stop = False
             ramped = self._apply_slew(left_qpps, right_qpps, now, no_slew=no_slew)
             left_qpps, right_qpps = ramped.left_qpps, ramped.right_qpps
 
@@ -689,7 +705,14 @@ class MotionRunner:
             return None
         with self._sensors_lock:
             yaw = self._imu_yaw if self._sensors_live else None
-        tick = self.intent_executor.tick(now, gamepad_active, yaw_degrees=yaw)
+            yaw_time = self._imu_yaw_time if self._sensors_live else None
+        tick = self.intent_executor.tick(
+            now,
+            gamepad_active,
+            yaw_degrees=yaw,
+            yaw_sample_time=yaw_time,
+        )
+        self._intent_snap_stop = tick.snap_stop
         if tick.finished and self.pending_intent_complete is not None:
             complete = self.pending_intent_complete
             self.pending_intent_complete = None

@@ -585,7 +585,8 @@ class RobotMotionTest(unittest.TestCase):
             nonlocal current_time
             current_time += 0.1
             # Yaw advances with time so the turn closes its loop on real rotation.
-            runner._imu_yaw = current_time * 40.0
+            runner._imu_yaw = min(current_time * 40.0, 32.0)
+            runner._imu_yaw_time = current_time
             if current_time > 2.0:
                 runner.request_stop()
 
@@ -600,6 +601,7 @@ class RobotMotionTest(unittest.TestCase):
         runner.pending_intent_complete = completed.append
         runner._sensors_live = True
         runner._imu_yaw = 0.0
+        runner._imu_yaw_time = 0.0
 
         runner._run_motor_loop(motor)
 

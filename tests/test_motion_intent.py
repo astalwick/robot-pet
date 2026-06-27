@@ -20,6 +20,7 @@ from control.motion_intent import (
     FACE_ME_ANGULAR_Z,
     MOVE_LINEAR_X,
     MOVE_MAX_DISTANCE_METERS,
+    TURN_APPROACH_ANGULAR_Z,
     TURN_ANGULAR_Z,
     TURN_MAX_DEGREES,
     TURN_MIN_DEGREES,
@@ -207,8 +208,13 @@ class MotionIntentExecutorTest(unittest.TestCase):
         running = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=45.0)
         self.assertFalse(running.finished)
 
-        # Done once the IMU shows a full 90 degrees turned.
-        done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=90.0)
+        # The target crossing snaps the wheels to zero, then a fresh yaw confirms.
+        stopping = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=90.0)
+        self.assertFalse(stopping.finished)
+        self.assertEqual(stopping.command, MotionCommand(0.0, 0.0))
+        self.assertTrue(stopping.snap_stop)
+
+        done = executor.tick(now=2.0, gamepad_active=False, yaw_degrees=90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -220,7 +226,11 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(running.command, MotionCommand(0.0, FACE_ME_ANGULAR_Z))
 
         # Rotating the other way also counts toward the target magnitude.
-        done = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-90.0)
+        stopping = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-90.0)
+        self.assertFalse(stopping.finished)
+        self.assertTrue(stopping.snap_stop)
+
+        done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=-90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -252,7 +262,11 @@ class MotionIntentExecutorTest(unittest.TestCase):
         # Yaw wraps past +180 to -160; that is +30 degrees, not -330.
         running = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-160.0)
         self.assertFalse(running.finished)
-        done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=-100.0)
+        stopping = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=-100.0)
+        self.assertFalse(stopping.finished)
+        self.assertTrue(stopping.snap_stop)
+
+        done = executor.tick(now=2.0, gamepad_active=False, yaw_degrees=-100.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -266,9 +280,86 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertFalse(running.finished)
         self.assertFalse(executor.tick(now=2.0, gamepad_active=False, yaw_degrees=80.0).finished)
 
-        done = executor.tick(now=3.0, gamepad_active=False, yaw_degrees=92.0)
+        stopping = executor.tick(now=3.0, gamepad_active=False, yaw_degrees=92.0)
+        self.assertFalse(stopping.finished)
+        self.assertEqual(stopping.command, MotionCommand(0.0, 0.0))
+        self.assertTrue(stopping.snap_stop)
+
+        done = executor.tick(now=3.5, gamepad_active=False, yaw_degrees=92.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
+
+    def test_turn_uses_half_speed_inside_final_five_degrees(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
+        full_speed = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=84.9)
+        slow_speed = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=85.1)
+
+        self.assertEqual(full_speed.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
+        self.assertEqual(slow_speed.command, MotionCommand(0.0, -TURN_APPROACH_ANGULAR_Z))
+
+    def test_turn_waits_for_fresh_yaw_before_correction_decision(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0, yaw_sample_time=10.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.5)
+        self.assertTrue(stopping.snap_stop)
+
+        waiting = executor.tick(now=0.55, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.5)
+        self.assertFalse(waiting.finished)
+        self.assertEqual(waiting.command, MotionCommand(0.0, 0.0))
+
+        done = executor.tick(now=0.6, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.6)
+        self.assertTrue(done.finished)
+
+    def test_turn_corrects_overshoot_after_stop_confirmation(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0, yaw_sample_time=10.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=94.0, yaw_sample_time=10.5)
+        self.assertTrue(stopping.snap_stop)
+
+        correcting = executor.tick(now=0.6, gamepad_active=False, yaw_degrees=96.0, yaw_sample_time=10.6)
+        self.assertEqual(correcting.command, MotionCommand(0.0, TURN_APPROACH_ANGULAR_Z))
+
+        stopping = executor.tick(now=0.7, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.7)
+        self.assertTrue(stopping.snap_stop)
+        done = executor.tick(now=0.8, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.8)
+        self.assertTrue(done.finished)
+
+    def test_turn_corrects_undershoot_after_stop_confirmation(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0, yaw_sample_time=10.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=90.0, yaw_sample_time=10.5)
+        self.assertTrue(stopping.snap_stop)
+
+        correcting = executor.tick(now=0.6, gamepad_active=False, yaw_degrees=86.0, yaw_sample_time=10.6)
+        self.assertEqual(correcting.command, MotionCommand(0.0, -TURN_APPROACH_ANGULAR_Z))
+
+        stopping = executor.tick(now=0.7, gamepad_active=False, yaw_degrees=89.0, yaw_sample_time=10.7)
+        self.assertTrue(stopping.snap_stop)
+        done = executor.tick(now=0.8, gamepad_active=False, yaw_degrees=89.0, yaw_sample_time=10.8)
+        self.assertTrue(done.finished)
+
+    def test_turn_correction_progress_keeps_watchdog_alive(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0, yaw_sample_time=10.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=94.0, yaw_sample_time=10.5)
+        self.assertTrue(stopping.snap_stop)
+
+        correcting = executor.tick(now=0.6, gamepad_active=False, yaw_degrees=96.0, yaw_sample_time=10.6)
+        self.assertEqual(correcting.command, MotionCommand(0.0, TURN_APPROACH_ANGULAR_Z))
+        correcting = executor.tick(now=1.8, gamepad_active=False, yaw_degrees=94.0, yaw_sample_time=11.8)
+        self.assertFalse(correcting.finished)
+        self.assertEqual(correcting.command, MotionCommand(0.0, TURN_APPROACH_ANGULAR_Z))
 
     def test_turn_negative_degrees_turns_right(self):
         executor = MotionIntentExecutor()
@@ -311,7 +402,11 @@ class MotionIntentExecutorTest(unittest.TestCase):
 
         running = executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
         self.assertEqual(running.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
-        done = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=-90.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=-90.0)
+        self.assertFalse(stopping.finished)
+        self.assertTrue(stopping.snap_stop)
+
+        done = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -327,8 +422,11 @@ class MotionIntentExecutorTest(unittest.TestCase):
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("turn", now=0.0, degrees=0))
         executor.tick(now=0.1, gamepad_active=False, yaw_degrees=0.0)
-        self.assertTrue(
+        self.assertFalse(
             executor.tick(now=0.2, gamepad_active=False, yaw_degrees=TURN_MIN_DEGREES).finished
+        )
+        self.assertTrue(
+            executor.tick(now=0.3, gamepad_active=False, yaw_degrees=TURN_MIN_DEGREES).finished
         )
 
         # An over-large magnitude clamps down to a single full turn (360 degrees).
@@ -340,8 +438,11 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertFalse(
             executor.tick(now=0.3, gamepad_active=False, yaw_degrees=-120.0).finished  # turned 240
         )
-        self.assertTrue(
+        self.assertFalse(
             executor.tick(now=0.4, gamepad_active=False, yaw_degrees=0.0).finished  # turned 360
+        )
+        self.assertTrue(
+            executor.tick(now=0.5, gamepad_active=False, yaw_degrees=0.0).finished
         )
 
     def test_face_me_gamepad_activity_preempts(self):

@@ -113,9 +113,7 @@ class SensorsService:
         readings = self._driver.read_all()
         imu = None
         if self._imu_driver is not None:
-            imu = imu_reading_to_dict(
-                self._imu_driver.read(timeout=min(self._poll_period(), MAX_IMU_READ_SECONDS))
-            )
+            imu = imu_reading_to_dict(self._imu_driver.read(timeout=min(self._poll_period(), MAX_IMU_READ_SECONDS)))
         elif self.config.imu.enabled:
             imu = {"ok": False, "reason": "uncalibrated"}
         self.publish(
@@ -125,6 +123,7 @@ class SensorsService:
                 readings=[reading_to_dict(reading) for reading in readings],
                 poll_rate_hz=self.config.poll_rate_hz,
                 imu=imu,
+                now=now,
             )
         )
         return self._next_sleep(now)

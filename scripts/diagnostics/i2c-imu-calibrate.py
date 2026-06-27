@@ -112,8 +112,8 @@ def main():
     parser.add_argument(
         "--mode",
         choices=("game", "rotation"),
-        default="rotation",
-        help="Use north-referenced rotation vector or relative game vector (default rotation)",
+        default="game",
+        help="Use relative game vector or north-referenced rotation vector (default game)",
     )
     args = parser.parse_args()
 

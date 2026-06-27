@@ -70,6 +70,20 @@ def quaternion_to_euler_degrees(quaternion: Quaternion) -> tuple[float, float, f
     return (math.degrees(roll), math.degrees(pitch), math.degrees(yaw))
 
 
+def quaternion_to_rotation_vector_degrees(quaternion: Quaternion) -> tuple[float, float, float]:
+    x, y, z, w = normalize_quaternion(quaternion)
+    if w < 0:
+        x, y, z, w = -x, -y, -z, -w
+
+    vector_length = math.sqrt(x * x + y * y + z * z)
+    if vector_length < 0.000001:
+        return (0.0, 0.0, 0.0)
+
+    angle = 2 * math.atan2(vector_length, w)
+    scale = math.degrees(angle) / vector_length
+    return (x * scale, y * scale, z * scale)
+
+
 def read_bno085_quaternion(sensor: Any, mode: str, timeout: float = 5.0) -> Quaternion:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

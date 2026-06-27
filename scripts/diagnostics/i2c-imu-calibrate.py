@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from drivers.imu import (  # noqa: E402
     average_quaternions,
-    quaternion_to_euler_degrees,
+    quaternion_to_rotation_vector_degrees,
     read_bno085_quaternion,
     relative_quaternion,
 )
@@ -164,12 +164,12 @@ def main():
     try:
         while True:
             current_quaternion = read_bno085_quaternion(sensor, args.mode)
-            sensor_roll, sensor_pitch, sensor_yaw = quaternion_to_euler_degrees(
+            sensor_x, sensor_y, sensor_z = quaternion_to_rotation_vector_degrees(
                 relative_quaternion(zero_quaternion, current_quaternion)
             )
-            turn = -sensor_pitch
-            nose = sensor_roll
-            side = sensor_yaw
+            turn = -sensor_y
+            nose = sensor_x
+            side = sensor_z
             print(
                 f"turn={abs(turn):6.2f} deg "
                 f"{direction(turn, 'left ', 'right', 'still')}  "

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from drivers.imu import (
     average_quaternions,
     quaternion_to_euler_degrees,
+    quaternion_to_rotation_vector_degrees,
     read_bno085_quaternion,
     relative_quaternion,
 )
@@ -17,6 +18,11 @@ from drivers.imu import (
 def z_rotation(degrees):
     radians = math.radians(degrees)
     return (0.0, 0.0, math.sin(radians / 2), math.cos(radians / 2))
+
+
+def y_rotation(degrees):
+    radians = math.radians(degrees)
+    return (0.0, math.sin(radians / 2), 0.0, math.cos(radians / 2))
 
 
 class ImuMathTest(unittest.TestCase):
@@ -43,6 +49,15 @@ class ImuMathTest(unittest.TestCase):
         _roll, _pitch, yaw = quaternion_to_euler_degrees(averaged)
 
         self.assertAlmostEqual(yaw, 10.0)
+
+    def test_rotation_vector_keeps_pure_axis_rotation_separate(self):
+        sensor_x, sensor_y, sensor_z = quaternion_to_rotation_vector_degrees(
+            y_rotation(-90)
+        )
+
+        self.assertAlmostEqual(sensor_x, 0.0)
+        self.assertAlmostEqual(sensor_y, -90.0)
+        self.assertAlmostEqual(sensor_z, 0.0)
 
     def test_read_bno085_quaternion_waits_for_first_report(self):
         class FakeSensor:

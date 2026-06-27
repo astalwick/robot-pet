@@ -317,31 +317,47 @@ function renderLink(linkLoop, driveStatusPayload) {
 
 function renderSensors(snapshot, sources) {
   const panel = document.getElementById('sensors-panel');
-  if (!panel) return;
+  const imuPanel = document.getElementById('imu-panel');
+  if (!panel || !imuPanel) return;
 
   const sensors = snapshot.sensors;
   const source = sources.sensors || {};
   const readings = sensors?.readings || [];
+  const imu = sensors?.imu;
   const hasLiveReadings = source.stale === false
     && sensors?.status === 'polling'
     && readings.some((reading) => reading.ok);
+  const hasLiveImu = source.stale === false
+    && sensors?.status === 'polling'
+    && imu?.ok;
 
   if (!hasLiveReadings) {
     panel.classList.add('hidden');
+  } else {
+    panel.classList.remove('hidden');
+    const rows = readings.map((reading) => {
+      const label = reading.name || '--';
+      const value = reading.ok
+        ? (reading.distance_mm != null ? `${reading.distance_mm} mm` : '∞')
+        : 'FAIL';
+      const cls = reading.ok ? 'ok' : 'err';
+      return row(label, '', value, cls);
+    });
+    rows.unshift(row('status', '', sensors.status || '--', 'ok'));
+    setRows('sensors-rows', rows);
+  }
+
+  if (!hasLiveImu) {
+    imuPanel.classList.add('hidden');
     return;
   }
 
-  panel.classList.remove('hidden');
-  const rows = readings.map((reading) => {
-    const label = reading.name || '--';
-    const value = reading.ok
-      ? (reading.distance_mm != null ? `${reading.distance_mm} mm` : '∞')
-      : 'FAIL';
-    const cls = reading.ok ? 'ok' : 'err';
-    return row(label, '', value, cls);
-  });
-  rows.unshift(row('status', '', sensors.status || '--', 'ok'));
-  setRows('sensors-rows', rows);
+  imuPanel.classList.remove('hidden');
+  setRows('imu-rows', [
+    row('yaw', '', fmt(imu.yaw_degrees, '\u00B0', 1), 'ok'),
+    row('pitch', '', fmt(imu.pitch_degrees, '\u00B0', 1), 'ok'),
+    row('roll', '', fmt(imu.roll_degrees, '\u00B0', 1), 'ok'),
+  ]);
 }
 
 function formatMinutes(minutes) {

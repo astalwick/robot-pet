@@ -121,6 +121,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Robo-Pet Dashboard", body)
         self.assertIn("/static/dashboard.css", body)
         self.assertIn("/static/main.js", body)
+        self.assertIn("IMU Orientation", body)
 
     async def test_static_main_js_is_served(self):
         async with self.client.get("/static/main.js") as resp:
@@ -136,6 +137,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             body = await resp.text()
 
         self.assertIn("EventSource", body)
+        self.assertIn("imu.yaw_degrees", body)
 
     async def test_events_uses_sse_content_type(self):
         async with self.client.get("/events") as resp:

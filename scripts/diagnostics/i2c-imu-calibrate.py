@@ -9,6 +9,7 @@ Usage:
     source .venv/bin/activate
     python scripts/diagnostics/i2c-imu-calibrate.py
     python scripts/diagnostics/i2c-imu-calibrate.py --samples 100 --rate 20
+    python scripts/diagnostics/i2c-imu-calibrate.py --mode game
 """
 
 import argparse
@@ -66,6 +67,14 @@ def collect_zero_quaternion(sensor, mode, samples, rate):
     return average_quaternions(quaternions)
 
 
+def direction(value, positive_label, negative_label, neutral_label):
+    if abs(value) < 1.0:
+        return neutral_label
+    if value > 0:
+        return positive_label
+    return negative_label
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Capture BNO085 zero orientation and stream calibrated pitch/roll/yaw."
@@ -94,12 +103,17 @@ def main():
         default=50,
         help="Zero samples to average (default 50)",
     )
-    parser.add_argument("--rate", type=float, default=20.0, help="Sample rate in Hz (default 20)")
+    parser.add_argument(
+        "--rate",
+        type=float,
+        default=20.0,
+        help="Sample rate in Hz (default 20)",
+    )
     parser.add_argument(
         "--mode",
         choices=("game", "rotation"),
-        default="game",
-        help="Use game rotation vector or magnetometer-corrected rotation vector (default game)",
+        default="rotation",
+        help="Use north-referenced rotation vector or relative game vector (default rotation)",
     )
     args = parser.parse_args()
 
@@ -132,6 +146,11 @@ def main():
                     "address": f"0x{args.address:02x}",
                     "mode": args.mode,
                     "zero_quaternion": [round(value, 8) for value in zero_quaternion],
+                    "axis_map": {
+                        "yaw_degrees": "+pitch_degrees",
+                        "pitch_degrees": "+roll_degrees",
+                        "roll_degrees": "+yaw_degrees",
+                    },
                 }
             },
             indent=2,
@@ -139,17 +158,25 @@ def main():
     )
     print("")
     print("Live calibrated orientation. Press Ctrl-C to stop.")
-    print("Tilt nose down/up for pitch, lift sides for roll, rotate body for yaw.")
+    print("Guessed signs: positive turn=left, nose=front up, side=left up.")
     print("")
 
     try:
         while True:
             current_quaternion = read_bno085_quaternion(sensor, args.mode)
-            roll, pitch, yaw = quaternion_to_euler_degrees(
+            sensor_roll, sensor_pitch, sensor_yaw = quaternion_to_euler_degrees(
                 relative_quaternion(zero_quaternion, current_quaternion)
             )
+            turn = sensor_pitch
+            nose = sensor_roll
+            side = sensor_yaw
             print(
-                f"roll={roll:7.2f} deg  pitch={pitch:7.2f} deg  yaw={yaw:7.2f} deg",
+                f"turn={abs(turn):6.2f} deg "
+                f"{direction(turn, 'left ', 'right', 'still')}  "
+                f"nose={abs(nose):6.2f} deg "
+                f"{direction(nose, 'up  ', 'down', 'level')}  "
+                f"side={abs(side):6.2f} deg "
+                f"{direction(side, 'left up ', 'right up', 'level   ')}",
                 end="\r",
                 flush=True,
             )

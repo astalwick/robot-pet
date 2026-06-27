@@ -8,6 +8,7 @@ from typing import Any
 
 
 Quaternion = tuple[float, float, float, float]
+Vector = tuple[float, float, float]
 
 
 def normalize_quaternion(quaternion: Quaternion) -> Quaternion:
@@ -16,6 +17,25 @@ def normalize_quaternion(quaternion: Quaternion) -> Quaternion:
     if length == 0:
         raise ValueError("quaternion cannot be zero")
     return (x / length, y / length, z / length, w / length)
+
+
+def normalize_vector(vector: Vector) -> Vector:
+    x, y, z = vector
+    length = math.sqrt(x * x + y * y + z * z)
+    if length == 0:
+        raise ValueError("vector cannot be zero")
+    return (x / length, y / length, z / length)
+
+
+def average_vectors(vectors: list[Vector]) -> Vector:
+    if not vectors:
+        raise ValueError("need at least one vector")
+    x_total = y_total = z_total = 0.0
+    for x, y, z in vectors:
+        x_total += x
+        y_total += y
+        z_total += z
+    return normalize_vector((x_total, y_total, z_total))
 
 
 def multiply_quaternion(left: Quaternion, right: Quaternion) -> Quaternion:
@@ -82,6 +102,35 @@ def quaternion_to_rotation_vector_degrees(quaternion: Quaternion) -> tuple[float
     angle = 2 * math.atan2(vector_length, w)
     scale = math.degrees(angle) / vector_length
     return (x * scale, y * scale, z * scale)
+
+
+def vector_rotation_degrees(start: Vector, current: Vector) -> Vector:
+    start_x, start_y, start_z = normalize_vector(start)
+    current_x, current_y, current_z = normalize_vector(current)
+    axis_x = start_y * current_z - start_z * current_y
+    axis_y = start_z * current_x - start_x * current_z
+    axis_z = start_x * current_y - start_y * current_x
+    axis_length = math.sqrt(axis_x * axis_x + axis_y * axis_y + axis_z * axis_z)
+    if axis_length < 0.000001:
+        return (0.0, 0.0, 0.0)
+
+    dot = start_x * current_x + start_y * current_y + start_z * current_z
+    angle = math.degrees(math.atan2(axis_length, max(-1.0, min(1.0, dot))))
+    scale = angle / axis_length
+    return (axis_x * scale, axis_y * scale, axis_z * scale)
+
+
+def read_bno085_gravity(sensor: Any, timeout: float = 5.0) -> Vector:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            gravity = sensor.gravity
+        except RuntimeError:
+            gravity = None
+        if gravity is not None and any(gravity):
+            return gravity
+        time.sleep(0.05)
+    raise RuntimeError("BNO085 did not publish a gravity report")
 
 
 def read_bno085_quaternion(sensor: Any, mode: str, timeout: float = 5.0) -> Quaternion:

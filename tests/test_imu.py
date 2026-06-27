@@ -7,11 +7,13 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from drivers.imu import (
+    average_vectors,
     average_quaternions,
     quaternion_to_euler_degrees,
     quaternion_to_rotation_vector_degrees,
     read_bno085_quaternion,
     relative_quaternion,
+    vector_rotation_degrees,
 )
 
 
@@ -58,6 +60,28 @@ class ImuMathTest(unittest.TestCase):
         self.assertAlmostEqual(sensor_x, 0.0)
         self.assertAlmostEqual(sensor_y, -90.0)
         self.assertAlmostEqual(sensor_z, 0.0)
+
+    def test_vector_rotation_degrees_reports_gravity_tilt_axis(self):
+        zero_gravity = (0.0, -1.0, 0.0)
+        current_gravity = (
+            0.0,
+            -math.cos(math.radians(10)),
+            -math.sin(math.radians(10)),
+        )
+
+        sensor_x, sensor_y, sensor_z = vector_rotation_degrees(
+            zero_gravity, current_gravity
+        )
+
+        self.assertAlmostEqual(sensor_x, 10.0)
+        self.assertAlmostEqual(sensor_y, 0.0)
+        self.assertAlmostEqual(sensor_z, 0.0)
+
+    def test_average_vectors_normalizes_result(self):
+        self.assertEqual(
+            average_vectors([(0.0, -9.0, 0.0), (0.0, -10.0, 0.0)]),
+            (0.0, -1.0, 0.0),
+        )
 
     def test_read_bno085_quaternion_waits_for_first_report(self):
         class FakeSensor:

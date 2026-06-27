@@ -26,10 +26,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from drivers.imu import (  # noqa: E402
+    average_vectors,
     average_quaternions,
     quaternion_to_rotation_vector_degrees,
+    read_bno085_gravity,
     read_bno085_quaternion,
     relative_quaternion,
+    vector_rotation_degrees,
 )
 
 
@@ -38,6 +41,7 @@ def open_bno085(channel, address, mux_address, mode):
         import board
         import adafruit_tca9548a
         from adafruit_bno08x import (
+            BNO_REPORT_GRAVITY,
             BNO_REPORT_GAME_ROTATION_VECTOR,
             BNO_REPORT_ROTATION_VECTOR,
         )
@@ -55,16 +59,19 @@ def open_bno085(channel, address, mux_address, mode):
         sensor.enable_feature(BNO_REPORT_GAME_ROTATION_VECTOR)
     else:
         sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
+    sensor.enable_feature(BNO_REPORT_GRAVITY)
     return sensor
 
 
-def collect_zero_quaternion(sensor, mode, samples, rate):
+def collect_zero(sensor, mode, samples, rate):
     interval = 1.0 / rate
     quaternions = []
+    gravities = []
     for _ in range(samples):
         quaternions.append(read_bno085_quaternion(sensor, mode))
+        gravities.append(read_bno085_gravity(sensor))
         time.sleep(interval)
-    return average_quaternions(quaternions)
+    return average_quaternions(quaternions), average_vectors(gravities)
 
 
 def direction(value, positive_label, negative_label, neutral_label):
@@ -129,7 +136,9 @@ def main():
     try:
         sensor = open_bno085(args.channel, args.address, args.mux_address, args.mode)
         print(f"Sampling {args.samples} orientation readings...")
-        zero_quaternion = collect_zero_quaternion(sensor, args.mode, args.samples, args.rate)
+        zero_quaternion, zero_gravity = collect_zero(
+            sensor, args.mode, args.samples, args.rate
+        )
     except RuntimeError as error:
         print(f"ERROR: {error}")
         sys.exit(1)
@@ -146,6 +155,7 @@ def main():
                     "address": f"0x{args.address:02x}",
                     "mode": args.mode,
                     "zero_quaternion": [round(value, 8) for value in zero_quaternion],
+                    "zero_gravity": [round(value, 8) for value in zero_gravity],
                     "axis_map": {
                         "yaw_degrees": "-pitch_degrees",
                         "pitch_degrees": "+roll_degrees",
@@ -164,12 +174,15 @@ def main():
     try:
         while True:
             current_quaternion = read_bno085_quaternion(sensor, args.mode)
-            sensor_x, sensor_y, sensor_z = quaternion_to_rotation_vector_degrees(
+            _sensor_x, sensor_y, _sensor_z = quaternion_to_rotation_vector_degrees(
                 relative_quaternion(zero_quaternion, current_quaternion)
             )
+            gravity_x, _gravity_y, gravity_z = vector_rotation_degrees(
+                zero_gravity, read_bno085_gravity(sensor)
+            )
             turn = -sensor_y
-            nose = sensor_x
-            side = sensor_z
+            nose = gravity_x
+            side = gravity_z
             print(
                 f"turn={abs(turn):6.2f} deg "
                 f"{direction(turn, 'left ', 'right', 'still')}  "

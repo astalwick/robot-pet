@@ -156,11 +156,6 @@ def main():
                     "mode": args.mode,
                     "zero_quaternion": [round(value, 8) for value in zero_quaternion],
                     "zero_gravity": [round(value, 8) for value in zero_gravity],
-                    "axis_map": {
-                        "yaw_degrees": "-pitch_degrees",
-                        "pitch_degrees": "+roll_degrees",
-                        "roll_degrees": "+yaw_degrees",
-                    },
                 }
             },
             indent=2,

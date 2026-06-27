@@ -7,6 +7,8 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from drivers.imu import (
+    BNO085Config,
+    ImuDriver,
     average_vectors,
     average_quaternions,
     quaternion_to_euler_degrees,
@@ -99,6 +101,37 @@ class ImuMathTest(unittest.TestCase):
 
         _roll, _pitch, yaw = quaternion_to_euler_degrees(quaternion)
         self.assertAlmostEqual(yaw, 5.0)
+
+
+class ImuDriverReadTest(unittest.TestCase):
+    def _make_driver(self, sensor):
+        # Bypass __init__ so the test never needs the adafruit BNO stack; read()
+        # only touches self.config and self.sensor.
+        driver = ImuDriver.__new__(ImuDriver)
+        driver.config = BNO085Config(
+            channel=5,
+            address=0x4A,
+            mode="game",
+            zero_quaternion=z_rotation(0),
+            zero_gravity=(0.0, -1.0, 0.0),
+        )
+        driver.sensor = sensor
+        return driver
+
+    def test_read_returns_not_ok_on_bus_error(self):
+        class FakeSensor:
+            @property
+            def game_quaternion(self):
+                raise OSError("i2c bus error")
+
+            @property
+            def gravity(self):
+                return (0.0, -1.0, 0.0)
+
+        reading = self._make_driver(FakeSensor()).read(timeout=0.0)
+
+        self.assertFalse(reading.ok)
+        self.assertIsNone(reading.yaw_degrees)
 
 
 if __name__ == "__main__":

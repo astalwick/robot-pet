@@ -20,11 +20,6 @@ MAX_POLL_RATE_HZ = 20.0
 
 SUPPORTED_KINDS = frozenset({"vl53l0x", "vl53l1x"})
 SENSOR_ROLES = frozenset({"cliff", "forward"})
-IMU_AXIS_MAP = {
-    "yaw_degrees": "-pitch_degrees",
-    "pitch_degrees": "+roll_degrees",
-    "roll_degrees": "+yaw_degrees",
-}
 
 
 class SensorsConfigError(ValueError):
@@ -64,7 +59,6 @@ class ImuEntry:
     mode: str = "game"
     zero_quaternion: tuple[float, float, float, float] | None = None
     zero_gravity: tuple[float, float, float] | None = None
-    axis_map: dict[str, str] | None = None
 
 
 def _default_sensor_entries() -> tuple[SensorEntry, ...]:
@@ -196,8 +190,6 @@ def _imu_entry_to_dict(entry: ImuEntry) -> dict[str, Any]:
         data["zero_quaternion"] = list(entry.zero_quaternion)
     if entry.zero_gravity is not None:
         data["zero_gravity"] = list(entry.zero_gravity)
-    if entry.axis_map is not None:
-        data["axis_map"] = entry.axis_map
     return data
 
 
@@ -215,9 +207,6 @@ def _parse_imu(raw: Any) -> ImuEntry:
     mode = raw.get("mode", "game")
     if mode not in ("game", "rotation"):
         raise TypeError("imu.mode must be game or rotation")
-    axis_map = raw.get("axis_map", IMU_AXIS_MAP)
-    if axis_map != IMU_AXIS_MAP:
-        raise TypeError("imu.axis_map must match the calibrated BNO085 robot-frame map")
     return ImuEntry(
         enabled=bool(raw.get("enabled", False)),
         kind=kind,
@@ -228,7 +217,6 @@ def _parse_imu(raw: Any) -> ImuEntry:
             raw.get("zero_quaternion"), 4, "imu.zero_quaternion"
         ),
         zero_gravity=_parse_float_tuple(raw.get("zero_gravity"), 3, "imu.zero_gravity"),
-        axis_map=axis_map,
     )
 
 

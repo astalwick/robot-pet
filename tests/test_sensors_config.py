@@ -7,7 +7,6 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import (
-    IMU_AXIS_MAP,
     SafetyConfig,
     SensorEntry,
     SensorsConfig,
@@ -184,7 +183,6 @@ class SensorsConfigTest(unittest.TestCase):
                         0.51159707,
                     ],
                     "zero_gravity": [0.0479263, -0.99885052, -0.00083945],
-                    "axis_map": IMU_AXIS_MAP,
                 }
             }
         )

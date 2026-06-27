@@ -119,7 +119,7 @@ class RangeDriverTest(unittest.TestCase):
         configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0)]
         driver, _mux = self._make_driver(configs, {0: 123})
 
-        reading = driver.read("cliff_left")
+        reading = driver.read_all()[0]
 
         self.assertTrue(reading.ok)
         self.assertEqual(reading.distance_mm, 123)
@@ -169,7 +169,7 @@ class RangeDriverTest(unittest.TestCase):
         configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0, offset_mm=20)]
         driver, _mux = self._make_driver(configs, {0: 120})
 
-        reading = driver.read("cliff_left")
+        reading = driver.read_all()[0]
 
         self.assertEqual(reading.distance_mm, 100)
 
@@ -177,7 +177,7 @@ class RangeDriverTest(unittest.TestCase):
         configs = [RangeSensorConfig("cliff_left", "vl53l0x", 0, offset_mm=50)]
         driver, _mux = self._make_driver(configs, {0: 10})
 
-        reading = driver.read("cliff_left")
+        reading = driver.read_all()[0]
 
         self.assertEqual(reading.distance_mm, 0)
 
@@ -203,7 +203,7 @@ class RangeDriverTest(unittest.TestCase):
             vl53l1x_factory=lambda bus, address: sensor,
         )
 
-        reading = driver.read("forward")
+        reading = driver.read_all()[0]
 
         self.assertTrue(reading.ok)
         self.assertEqual(reading.distance_mm, 420)
@@ -231,7 +231,7 @@ class RangeDriverTest(unittest.TestCase):
         )
 
         sensor.no_reading = True
-        reading = driver.read("forward")
+        reading = driver.read_all()[0]
 
         self.assertTrue(reading.ok)
         self.assertIsNone(reading.distance_mm)
@@ -251,7 +251,7 @@ class RangeDriverTest(unittest.TestCase):
 
         sensor.data_ready = False
         with patch("drivers.range.time.sleep") as sleep:
-            reading = driver.read("forward")
+            reading = driver.read_all()[0]
 
         self.assertFalse(reading.ok)
         self.assertIsNone(reading.distance_mm)
@@ -270,13 +270,13 @@ class RangeDriverTest(unittest.TestCase):
             vl53l1x_factory=lambda bus, address: sensor,
         )
 
-        self.assertEqual(driver.read("forward").distance_mm, 420)
+        self.assertEqual(driver.read_all()[0].distance_mm, 420)
 
         sensor.distance_mm = 500
         sensor.interrupt_cleared = False
         sensor.data_ready = False
         with patch("drivers.range.time.sleep") as sleep:
-            reading = driver.read("forward")
+            reading = driver.read_all()[0]
 
         self.assertTrue(reading.ok)
         self.assertEqual(reading.distance_mm, 420)
@@ -297,7 +297,7 @@ class RangeDriverTest(unittest.TestCase):
 
         sensor.data_ready_values = [False, True]
         with patch("drivers.range.time.sleep") as sleep:
-            reading = driver.read("forward")
+            reading = driver.read_all()[0]
 
         self.assertTrue(reading.ok)
         self.assertEqual(reading.distance_mm, 420)

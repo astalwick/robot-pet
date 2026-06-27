@@ -126,13 +126,6 @@ class RangeDriver:
                 raise ValueError(f"unknown range sensor kind: {config.kind!r}")
             self._entries.append((config, sensor))
 
-        self._by_name = {config.name: (config, sensor) for config, sensor in self._entries}
-
-    def read(self, name: str) -> RangeReading:
-        config, sensor = self._by_name[name]
-        with self._lock:
-            return self._read_locked(config, sensor)
-
     def read_all(self) -> list[RangeReading]:
         readings = []
         with self._lock:

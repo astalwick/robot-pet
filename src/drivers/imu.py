@@ -140,28 +140,32 @@ def vector_rotation_degrees(start: Vector, current: Vector) -> Vector:
 
 def read_bno085_gravity(sensor: Any, timeout: float = 5.0) -> Vector:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         try:
             gravity = sensor.gravity
         except RuntimeError:
             gravity = None
         if gravity is not None and any(gravity):
             return gravity
-        time.sleep(0.05)
-    raise RuntimeError("BNO085 did not publish a gravity report")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("BNO085 did not publish a gravity report")
+        time.sleep(min(0.05, remaining))
 
 
 def read_bno085_quaternion(sensor: Any, mode: str, timeout: float = 5.0) -> Quaternion:
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         try:
             quaternion = sensor.game_quaternion if mode == "game" else sensor.quaternion
         except RuntimeError:
             quaternion = None
         if quaternion is not None and any(quaternion):
             return normalize_quaternion(quaternion)
-        time.sleep(0.05)
-    raise RuntimeError("BNO085 did not publish an orientation report")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("BNO085 did not publish an orientation report")
+        time.sleep(min(0.05, remaining))
 
 
 def _default_i2c_factory() -> Any:
@@ -220,25 +224,36 @@ class ImuDriver:
             self.sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
         self.sensor.enable_feature(BNO_REPORT_GRAVITY)
 
-    def read(self) -> ImuReading:
+    def read(self, timeout: float = 5.0) -> ImuReading:
+        # The quaternion and gravity reads share one budget so the whole read
+        # stays within `timeout` -- otherwise each could block for the full
+        # timeout and a single tick would take twice as long.
+        deadline = time.monotonic() + timeout
         try:
             _sensor_x, sensor_y, _sensor_z = quaternion_to_rotation_vector_degrees(
                 relative_quaternion(
                     self.config.zero_quaternion,
-                    read_bno085_quaternion(self.sensor, self.config.mode),
+                    read_bno085_quaternion(self.sensor, self.config.mode, timeout),
                 )
             )
             gravity_x, _gravity_y, gravity_z = vector_rotation_degrees(
                 self.config.zero_gravity,
-                read_bno085_gravity(self.sensor),
+                read_bno085_gravity(self.sensor, max(0.0, deadline - time.monotonic())),
             )
+            # Yaw comes from the drift-free game rotation vector; pitch/roll come
+            # from the gravity vector. This axis wiring is specific to how the
+            # BNO085 is currently mounted -- a different mounting means changing
+            # which components map to yaw/pitch/roll here (and recalibrating the
+            # zero_* references).
             return ImuReading(
                 yaw_degrees=-sensor_y,
                 pitch_degrees=gravity_x,
                 roll_degrees=gravity_z,
                 ok=True,
             )
-        except RuntimeError:
+        except (RuntimeError, ValueError, OSError):
+            # OSError covers I2C/bus failures from the BNO stack -- a failed IMU
+            # read must not take down the tick before range readings publish.
             return ImuReading(
                 yaw_degrees=None,
                 pitch_degrees=None,

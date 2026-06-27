@@ -28,6 +28,13 @@ from telemetry.socket_client import publish_message
 
 CONFIG_POLL_INTERVAL = 1.0
 DISABLED_PUBLISH_INTERVAL = 1.0
+# Cap the IMU's contribution to publish latency: a slow or absent IMU can add at
+# most this much delay, so it can't push an otherwise-fresh range+cliff publish
+# past the telemetry stale threshold (1.0s). This bounds the IMU only -- it does
+# not guarantee freshness, since at low poll rates the period itself can exceed
+# the threshold (which the motion safety gate already fails safe on by blocking
+# forward motion while sensors read stale).
+MAX_IMU_READ_SECONDS = 0.25
 
 log = setup_logging("robot-sensors")
 
@@ -106,7 +113,11 @@ class SensorsService:
         readings = self._driver.read_all()
         imu = None
         if self._imu_driver is not None:
-            imu = imu_reading_to_dict(self._imu_driver.read())
+            imu = imu_reading_to_dict(
+                self._imu_driver.read(timeout=min(self._poll_period(), MAX_IMU_READ_SECONDS))
+            )
+        elif self.config.imu.enabled:
+            imu = {"ok": False, "reason": "uncalibrated"}
         self.publish(
             sensors_update(
                 enabled=True,
@@ -190,24 +201,15 @@ class SensorsService:
             self.config = SensorsConfig()
             self._config_error = None
             self._next_poll_time = None
-            self._driver_signature = None
-            self._imu_driver_signature = None
             return
 
         try:
-            new_config = load_sensors_config(self.config_path)
-            new_signature = _sensor_signature(new_config)
-            new_imu_signature = _imu_signature(new_config.imu)
-            if (
-                new_signature != _sensor_signature(self.config)
-                or new_imu_signature != _imu_signature(self.config.imu)
-            ):
-                self._release_drivers()
-            self.config = new_config
+            # _ensure_driver() owns the driver lifecycle: it compares signatures
+            # and rebuilds only when the sensor/IMU hardware config actually
+            # changes, so a poll-rate-only edit here won't churn the drivers.
+            self.config = load_sensors_config(self.config_path)
             self._config_error = None
             self._next_poll_time = None
-            self._driver_signature = None
-            self._imu_driver_signature = None
             log.info(
                 "sensors config loaded: enabled=%s rate_hz=%.2f sensors=%d",
                 self.config.enabled,

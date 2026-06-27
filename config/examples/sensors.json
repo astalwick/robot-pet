@@ -22,12 +22,7 @@
       0.0479263,
       -0.99885052,
       -0.00083945
-    ],
-    "axis_map": {
-      "yaw_degrees": "-pitch_degrees",
-      "pitch_degrees": "+roll_degrees",
-      "roll_degrees": "+yaw_degrees"
-    }
+    ]
   },
   "sensors": [
     {

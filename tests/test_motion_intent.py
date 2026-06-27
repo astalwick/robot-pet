@@ -289,13 +289,13 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
-    def test_turn_uses_half_speed_inside_final_five_degrees(self):
+    def test_turn_uses_half_speed_inside_final_ten_degrees(self):
         executor = MotionIntentExecutor()
         executor.start("turn", now=0.0, degrees=90)
 
         executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
-        full_speed = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=84.9)
-        slow_speed = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=85.1)
+        full_speed = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=79.9)
+        slow_speed = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=80.1)
 
         self.assertEqual(full_speed.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
         self.assertEqual(slow_speed.command, MotionCommand(0.0, -TURN_APPROACH_ANGULAR_Z))

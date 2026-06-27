@@ -83,6 +83,19 @@ def stop_scan(lidar):
     time.sleep(0.1)
 
 
+def open_lidar(port, args):
+    lidar = serial.Serial()
+    lidar.port = port
+    lidar.baudrate = args.baud
+    lidar.timeout = args.timeout
+    if args.motor_dtr != "unchanged":
+        lidar.dtr = args.motor_dtr == "high"
+    lidar.open()
+    if args.motor_dtr != "unchanged":
+        lidar.setDTR(args.motor_dtr == "high")
+    return lidar
+
+
 def read_device_info(lidar):
     send_command(lidar, CMD_GET_INFO)
     response_len, _send_mode, response_type = read_descriptor(lidar)
@@ -141,12 +154,9 @@ def read_scan_points(lidar, samples, scan_seconds):
 
 def run_probe(port, args):
     print(f"Connecting to RPLIDAR at {port} ({args.baud} baud)...")
-    lidar = serial.Serial(port, args.baud, timeout=args.timeout)
+    lidar = open_lidar(port, args)
 
     try:
-        if not args.no_motor_control:
-            lidar.setDTR(False)
-
         stop_scan(lidar)
         lidar.reset_input_buffer()
 
@@ -180,7 +190,7 @@ def run_probe(port, args):
     finally:
         try:
             stop_scan(lidar)
-            if not args.no_motor_control:
+            if args.motor_dtr != "unchanged":
                 lidar.setDTR(True)
         finally:
             lidar.close()
@@ -229,9 +239,18 @@ def main():
     parser.add_argument(
         "--no-motor-control",
         action="store_true",
-        help="Do not toggle DTR for the USB adapter motor control",
+        help="Deprecated alias for --motor-dtr unchanged",
+    )
+    parser.add_argument(
+        "--motor-dtr",
+        choices=("low", "high", "unchanged"),
+        default="low",
+        help="DTR state while scanning: low is typical for A1 adapters",
     )
     args = parser.parse_args()
+
+    if args.no_motor_control:
+        args.motor_dtr = "unchanged"
 
     if serial is None:
         print("ERROR: pyserial not installed.")

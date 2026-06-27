@@ -122,6 +122,7 @@ class MotionRunner:
         self._sensors_config_error: str | None = None
         self._sensor_readings: list[dict[str, Any]] = []
         self._sensors_live = False
+        self._imu_yaw: float | None = None
         self._sensors_lock = threading.Lock()
 
         self._drive_lock = threading.Lock()
@@ -228,9 +229,12 @@ class MotionRunner:
             sensors_source = sources.get("sensors") or {}
             sensors_live = sensors_source.get("stale") is False
             readings = list(sensors.get("readings", [])) if isinstance(sensors, dict) else []
+            imu = sensors.get("imu") if isinstance(sensors, dict) else None
+            yaw = imu.get("yaw_degrees") if isinstance(imu, dict) and imu.get("ok") else None
             with self._sensors_lock:
                 self._sensor_readings = readings
                 self._sensors_live = sensors_live
+                self._imu_yaw = yaw
 
     def _reload_sensors_config_if_changed(self) -> None:
         try:
@@ -681,7 +685,9 @@ class MotionRunner:
     def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
         if not self.intent_executor.is_active():
             return None
-        tick = self.intent_executor.tick(now, gamepad_active)
+        with self._sensors_lock:
+            yaw = self._imu_yaw if self._sensors_live else None
+        tick = self.intent_executor.tick(now, gamepad_active, yaw_degrees=yaw)
         if tick.finished and self.pending_intent_complete is not None:
             complete = self.pending_intent_complete
             self.pending_intent_complete = None

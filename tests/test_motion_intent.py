@@ -18,11 +18,9 @@ from control.motion_intent import (
     DIAGNOSTIC_TURN_MAX_DURATION,
     DIAGNOSTIC_TURN_MIN_DURATION,
     FACE_ME_ANGULAR_Z,
-    FACE_ME_DEGREES_PER_SECOND,
     MOVE_LINEAR_X,
     MOVE_MAX_DISTANCE_METERS,
     TURN_ANGULAR_Z,
-    TURN_DEGREES_PER_SECOND,
     TURN_MAX_DEGREES,
     TURN_MIN_DEGREES,
     WIGGLE_ANGULAR_Z,
@@ -200,12 +198,17 @@ class MotionIntentExecutorTest(unittest.TestCase):
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("face_me", now=0.0, relative_degrees=90))
 
-        running = executor.tick(now=0.5, gamepad_active=False)
+        # First tick baselines yaw and starts turning toward the left wheel.
+        running = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=0.0)
         self.assertEqual(running.command, MotionCommand(0.0, -FACE_ME_ANGULAR_Z))
         self.assertFalse(running.finished)
 
-        # Done after one full turn at the configured degrees-per-second rate.
-        done = executor.tick(now=90 / FACE_ME_DEGREES_PER_SECOND + 0.05, gamepad_active=False)
+        # Still short of 90 degrees of measured rotation.
+        running = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=45.0)
+        self.assertFalse(running.finished)
+
+        # Done once the IMU shows a full 90 degrees turned.
+        done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -213,28 +216,57 @@ class MotionIntentExecutorTest(unittest.TestCase):
         executor = MotionIntentExecutor()
         executor.start("face_me", now=0.0, relative_degrees=-90)
 
-        running = executor.tick(now=0.5, gamepad_active=False)
+        running = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=0.0)
         self.assertEqual(running.command, MotionCommand(0.0, FACE_ME_ANGULAR_Z))
+
+        # Rotating the other way also counts toward the target magnitude.
+        done = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-90.0)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
 
     def test_face_me_within_fifteen_degrees_completes_without_moving(self):
         executor = MotionIntentExecutor()
         executor.start("face_me", now=0.0, relative_degrees=15)
 
+        # No yaw needed: already facing close enough to complete immediately.
         tick = executor.tick(now=0.0, gamepad_active=False)
         self.assertTrue(tick.finished)
         self.assertEqual(tick.result, "completed")
         self.assertIsNone(tick.command)
 
+    def test_face_me_without_yaw_fails(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=90)
+
+        tick = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=None)
+        self.assertTrue(tick.finished)
+        self.assertEqual(tick.result, "imu_unavailable")
+        self.assertIsNone(tick.command)
+        self.assertFalse(executor.is_active())
+
+    def test_face_me_yaw_wraps_across_seam(self):
+        executor = MotionIntentExecutor()
+        executor.start("face_me", now=0.0, relative_degrees=90)
+
+        executor.tick(now=0.5, gamepad_active=False, yaw_degrees=170.0)
+        # Yaw wraps past +180 to -160; that is +30 degrees, not -330.
+        running = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-160.0)
+        self.assertFalse(running.finished)
+        done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=-100.0)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+
     def test_turn_positive_degrees_turns_left_then_completes(self):
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("turn", now=0.0, degrees=90))
 
-        # Still turning just before the configured duration, done just after.
-        running = executor.tick(now=1.0, gamepad_active=False)
+        # Baseline, then still turning short of the target.
+        running = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=0.0)
         self.assertEqual(running.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
         self.assertFalse(running.finished)
+        self.assertFalse(executor.tick(now=2.0, gamepad_active=False, yaw_degrees=80.0).finished)
 
-        done = executor.tick(now=90 / TURN_DEGREES_PER_SECOND + 0.05, gamepad_active=False)
+        done = executor.tick(now=3.0, gamepad_active=False, yaw_degrees=92.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
 
@@ -242,8 +274,46 @@ class MotionIntentExecutorTest(unittest.TestCase):
         executor = MotionIntentExecutor()
         executor.start("turn", now=0.0, degrees=-45)
 
-        running = executor.tick(now=0.1, gamepad_active=False)
+        running = executor.tick(now=0.1, gamepad_active=False, yaw_degrees=0.0)
         self.assertEqual(running.command, MotionCommand(0.0, TURN_ANGULAR_Z))
+
+    def test_turn_without_yaw_fails(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        tick = executor.tick(now=0.1, gamepad_active=False, yaw_degrees=None)
+        self.assertTrue(tick.finished)
+        self.assertEqual(tick.result, "imu_unavailable")
+        self.assertFalse(executor.is_active())
+
+    def test_turn_stalls_when_yaw_stops_advancing(self):
+        # Live but frozen yaw must not turn forever: the no-progress watchdog
+        # aborts once rotation stops advancing past the timeout.
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
+        self.assertFalse(executor.tick(now=0.1, gamepad_active=False, yaw_degrees=10.0).finished)
+        # Yaw held flat; still within the timeout window.
+        self.assertFalse(executor.tick(now=0.5, gamepad_active=False, yaw_degrees=10.0).finished)
+        stalled = executor.tick(now=1.2, gamepad_active=False, yaw_degrees=10.0)
+        self.assertTrue(stalled.finished)
+        self.assertEqual(stalled.result, "turn_stalled")
+        self.assertFalse(executor.is_active())
+
+    def test_turn_completes_on_magnitude_regardless_of_yaw_sign(self):
+        # Deliberate tradeoff: completion compares the magnitude turned, not the
+        # sign, so a left-commanded turn still completes when the IMU reports the
+        # rotation as negative. The wheel command direction is trusted from the
+        # verified hardware signs, not from the IMU yaw sign convention.
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        running = executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
+        self.assertEqual(running.command, MotionCommand(0.0, -TURN_ANGULAR_Z))
+        done = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=-90.0)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
 
     def test_turn_rejects_non_numeric_degrees(self):
         executor = MotionIntentExecutor()
@@ -256,15 +326,23 @@ class MotionIntentExecutorTest(unittest.TestCase):
         # Zero degrees clamps up to the minimum so a turn still happens.
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("turn", now=0.0, degrees=0))
-        duration = TURN_MIN_DEGREES / TURN_DEGREES_PER_SECOND
-        self.assertTrue(executor.tick(now=duration + 0.05, gamepad_active=False).finished)
+        executor.tick(now=0.1, gamepad_active=False, yaw_degrees=0.0)
+        self.assertTrue(
+            executor.tick(now=0.2, gamepad_active=False, yaw_degrees=TURN_MIN_DEGREES).finished
+        )
 
-        # An over-large magnitude clamps down to a single full turn.
+        # An over-large magnitude clamps down to a single full turn (360 degrees).
+        # Yaw wraps at +/-180, so a full turn is fed as wrapping increments.
         executor = MotionIntentExecutor()
         self.assertIsNone(executor.start("turn", now=0.0, degrees=TURN_MAX_DEGREES + 1))
-        duration = TURN_MAX_DEGREES / TURN_DEGREES_PER_SECOND
-        self.assertFalse(executor.tick(now=duration - 0.05, gamepad_active=False).finished)
-        self.assertTrue(executor.tick(now=duration + 0.05, gamepad_active=False).finished)
+        executor.tick(now=0.1, gamepad_active=False, yaw_degrees=0.0)
+        executor.tick(now=0.2, gamepad_active=False, yaw_degrees=120.0)  # turned 120
+        self.assertFalse(
+            executor.tick(now=0.3, gamepad_active=False, yaw_degrees=-120.0).finished  # turned 240
+        )
+        self.assertTrue(
+            executor.tick(now=0.4, gamepad_active=False, yaw_degrees=0.0).finished  # turned 360
+        )
 
     def test_face_me_gamepad_activity_preempts(self):
         executor = MotionIntentExecutor()

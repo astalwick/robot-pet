@@ -50,19 +50,28 @@ DIAGNOSTIC_TURN_MIN_DURATION = 0.1
 DIAGNOSTIC_TURN_MAX_DURATION = 4.0
 
 # face_me reuses the verified turn command and direction signs from
-# diagnostic_turn. robot-voice supplies a signed angle; robot-motion derives the
-# direction and duration. Positive degrees turn toward the left drive wheel.
+# diagnostic_turn. robot-voice supplies a signed angle; the turn closes the loop
+# on measured IMU yaw and stops once the robot has actually rotated that far,
+# instead of estimating from elapsed time. Positive degrees turn toward the left
+# drive wheel.
 FACE_ME_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
-FACE_ME_DEGREES_PER_SECOND = 36.7
 FACE_ME_ALREADY_FACING_DEGREES = 15
 FACE_ME_MAX_RELATIVE_DEGREES = 180
 
-# `turn` reuses the verified turn speed and degrees-per-second calibration from
-# diagnostic_turn / face_me. Positive degrees turn the robot to its left.
+# `turn` reuses the verified turn speed and direction signs from diagnostic_turn /
+# face_me, and likewise stops on measured IMU yaw. Positive degrees turn the robot
+# to its left.
 TURN_ANGULAR_Z = DIAGNOSTIC_TURN_ANGULAR_Z
-TURN_DEGREES_PER_SECOND = FACE_ME_DEGREES_PER_SECOND
 TURN_MIN_DEGREES = 1
 TURN_MAX_DEGREES = 360
+
+# Watchdog for yaw-closed-loop turns: if measured rotation does not advance by at
+# least TURN_PROGRESS_DEGREES within TURN_NO_PROGRESS_TIMEOUT_SECONDS, give up
+# instead of commanding the wheels forever. Mirrors the encoder-move no-progress
+# stall in robot_motion. A healthy turn rotates ~36 deg/sec, so a stuck robot is
+# obvious well inside the window.
+TURN_PROGRESS_DEGREES = 1.0
+TURN_NO_PROGRESS_TIMEOUT_SECONDS = 1.0
 
 KNOWN_TOOLS = ("express", "move", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
@@ -90,6 +99,14 @@ def valid_relative_degrees(value: Any) -> bool:
     )
 
 
+def _yaw_delta(current: float, previous: float) -> float:
+    """Signed degrees from previous to current yaw, unwrapped across the ±180 seam."""
+    delta = (current - previous) % 360.0
+    if delta > 180.0:
+        delta -= 360.0
+    return delta
+
+
 @dataclass(frozen=True)
 class IntentTick:
     """One control-loop tick of an active intent."""
@@ -109,6 +126,13 @@ class _ActiveIntent:
     relative_degrees: float | None = None
     degrees: float | None = None
     kind: str | None = None
+    # Yaw-closed-loop turn state: the last yaw we saw and the signed degrees
+    # rotated since the turn began, plus the no-progress watchdog's high-water
+    # mark and the time we last saw real progress.
+    last_yaw: float | None = None
+    turned_degrees: float = 0.0
+    turn_best_degrees: float = 0.0
+    turn_progress_at: float | None = None
 
 
 class MotionIntentExecutor:
@@ -126,6 +150,10 @@ class MotionIntentExecutor:
     def reset_active_start(self, now: float) -> None:
         if self._active is not None:
             self._active.started_at = now
+            self._active.last_yaw = None
+            self._active.turned_degrees = 0.0
+            self._active.turn_best_degrees = 0.0
+            self._active.turn_progress_at = None
 
     def active_tool(self) -> str | None:
         return self._active.tool if self._active else None
@@ -193,7 +221,9 @@ class MotionIntentExecutor:
             return None
         return self._active.distance_meters
 
-    def tick(self, now: float, gamepad_active: bool) -> IntentTick:
+    def tick(
+        self, now: float, gamepad_active: bool, yaw_degrees: float | None = None
+    ) -> IntentTick:
         if self._active is None:
             return IntentTick(command=None, finished=False, result=None)
 
@@ -237,22 +267,24 @@ class MotionIntentExecutor:
 
         if self._active.tool == "face_me":
             relative = self._active.relative_degrees
-            if abs(relative) > FACE_ME_ALREADY_FACING_DEGREES:
-                duration = abs(relative) / FACE_ME_DEGREES_PER_SECOND
-                if elapsed < duration:
-                    angular_z = -FACE_ME_ANGULAR_Z if relative > 0 else FACE_ME_ANGULAR_Z
-                    return IntentTick(
-                        command=MotionCommand(linear_x=0.0, angular_z=angular_z),
-                        finished=False,
-                        result=None,
-                    )
+            if abs(relative) <= FACE_ME_ALREADY_FACING_DEGREES:
+                self._active = None
+                return IntentTick(command=None, finished=True, result="completed")
+            status = self._turn_status(yaw_degrees, abs(relative), now)
+            if status == "turning":
+                angular_z = -FACE_ME_ANGULAR_Z if relative > 0 else FACE_ME_ANGULAR_Z
+                return IntentTick(
+                    command=MotionCommand(linear_x=0.0, angular_z=angular_z),
+                    finished=False,
+                    result=None,
+                )
             self._active = None
-            return IntentTick(command=None, finished=True, result="completed")
+            return IntentTick(command=None, finished=True, result=status)
 
         if self._active.tool == "turn":
             degrees = self._active.degrees
-            duration = abs(degrees) / TURN_DEGREES_PER_SECOND
-            if elapsed < duration:
+            status = self._turn_status(yaw_degrees, abs(degrees), now)
+            if status == "turning":
                 angular_z = -TURN_ANGULAR_Z if degrees > 0 else TURN_ANGULAR_Z
                 return IntentTick(
                     command=MotionCommand(linear_x=0.0, angular_z=angular_z),
@@ -260,10 +292,49 @@ class MotionIntentExecutor:
                     result=None,
                 )
             self._active = None
-            return IntentTick(command=None, finished=True, result="completed")
+            return IntentTick(command=None, finished=True, result=status)
 
         self._active = None
         return IntentTick(command=None, finished=True, result="completed")
+
+    def _turn_status(
+        self, yaw_degrees: float | None, target_degrees: float, now: float
+    ) -> str:
+        """Advance the active turn's yaw accumulator and say where it stands.
+
+        Returns "imu_unavailable" when there is no yaw to close the loop on,
+        "completed" once the robot has rotated through the requested magnitude,
+        "turn_stalled" when measured rotation stops advancing (the no-progress
+        watchdog), or "turning" while it still has farther to go.
+
+        Per-tick deltas are summed signed, so sensor noise cancels instead of
+        creeping toward the target. Completion compares the *magnitude* turned
+        against the target and ignores which way the yaw moved: the wheel command
+        direction comes from the verified hardware signs (see FACE_ME_ANGULAR_Z /
+        TURN_ANGULAR_Z), which we trust more than the IMU's yaw sign convention.
+        The watchdog below still bounds the turn if the robot rotates the wrong
+        way or not at all.
+        """
+        if yaw_degrees is None:
+            return "imu_unavailable"
+        if self._active.last_yaw is None:
+            # First tick: baseline yaw and start the no-progress clock.
+            self._active.last_yaw = yaw_degrees
+            self._active.turn_progress_at = now
+            return "turning"
+
+        self._active.turned_degrees += _yaw_delta(yaw_degrees, self._active.last_yaw)
+        self._active.last_yaw = yaw_degrees
+        magnitude = abs(self._active.turned_degrees)
+        if magnitude >= target_degrees:
+            return "completed"
+
+        if magnitude > self._active.turn_best_degrees + TURN_PROGRESS_DEGREES:
+            self._active.turn_best_degrees = magnitude
+            self._active.turn_progress_at = now
+        elif now - self._active.turn_progress_at >= TURN_NO_PROGRESS_TIMEOUT_SECONDS:
+            return "turn_stalled"
+        return "turning"
 
     def _express_command(self, elapsed: float) -> MotionCommand | None:
         """The wheel command for an in-progress express, or None when it has finished."""

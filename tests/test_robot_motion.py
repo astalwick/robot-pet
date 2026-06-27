@@ -364,6 +364,8 @@ class RobotMotionTest(unittest.TestCase):
                 return ({"tool": "face_me", "relative_degrees": 90}, completed.append)
 
         runner.intent_bridge = FakeIntentBridge()
+        runner._sensors_live = True
+        runner._imu_yaw = 0.0
 
         runner._service_intent_requests(now=1.0)
         command = runner._tick_intent(now=1.1, gamepad_active=False)
@@ -552,6 +554,8 @@ class RobotMotionTest(unittest.TestCase):
         def sleep(_seconds):
             nonlocal current_time
             current_time += 0.1
+            # Yaw advances with time so the turn closes its loop on real rotation.
+            runner._imu_yaw = current_time * 40.0
             if current_time > 2.0:
                 runner.request_stop()
 
@@ -564,6 +568,8 @@ class RobotMotionTest(unittest.TestCase):
         )
         runner.intent_executor.start("face_me", now=0.0, relative_degrees=30)
         runner.pending_intent_complete = completed.append
+        runner._sensors_live = True
+        runner._imu_yaw = 0.0
 
         runner._run_motor_loop(motor)
 

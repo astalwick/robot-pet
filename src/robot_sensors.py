@@ -13,13 +13,15 @@ from typing import Any
 
 from config.sensors import (
     DEFAULT_CONFIG_PATH,
+    ImuEntry,
     SensorsConfig,
     SensorsConfigError,
     load_sensors_config,
 )
+from drivers.imu import ImuDriver
 from drivers.range import RangeDriver
 from lib.log import setup_logging
-from telemetry.messages import reading_to_dict, sensors_update
+from telemetry.messages import imu_reading_to_dict, reading_to_dict, sensors_update
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
@@ -34,6 +36,18 @@ def _sensor_signature(config: SensorsConfig) -> tuple[tuple[str, str, int], ...]
     return tuple((entry.name, entry.kind, entry.mux_channel) for entry in config.sensors)
 
 
+def _imu_signature(imu: ImuEntry) -> tuple[Any, ...]:
+    return (
+        imu.enabled,
+        imu.kind,
+        imu.mux_channel,
+        imu.address,
+        imu.mode,
+        imu.zero_quaternion,
+        imu.zero_gravity,
+    )
+
+
 class SensorsService:
     """Poll range sensors and publish readings through telemetry."""
 
@@ -43,18 +57,22 @@ class SensorsService:
         config_path: str,
         publish: Callable[[dict[str, Any]], Any],
         driver_factory: Callable[[SensorsConfig], RangeDriver],
+        imu_driver_factory: Callable[[SensorsConfig], ImuDriver | None] | None = None,
         time_fn: Callable[[], float] = time.time,
     ):
         self.config_path = config_path
         self.publish = publish
         self.driver_factory = driver_factory
+        self.imu_driver_factory = imu_driver_factory or default_imu_driver_factory
         self.time_fn = time_fn
 
         self.config = SensorsConfig()
         self._config_mtime: float | None = None
         self._config_error: str | None = None
         self._driver: RangeDriver | None = None
+        self._imu_driver: ImuDriver | None = None
         self._driver_signature: tuple[Any, ...] | None = None
+        self._imu_driver_signature: tuple[Any, ...] | None = None
         self._driver_error: str | None = None
         self._last_disabled_publish: float | None = None
         self._next_poll_time: float | None = None
@@ -67,7 +85,7 @@ class SensorsService:
             return CONFIG_POLL_INTERVAL
 
         if not self.config.enabled:
-            self._release_driver()
+            self._release_drivers()
             now = self.time_fn()
             if (
                 self._last_disabled_publish is None
@@ -86,18 +104,22 @@ class SensorsService:
 
         self._next_poll_time = now + self._poll_period()
         readings = self._driver.read_all()
+        imu = None
+        if self._imu_driver is not None:
+            imu = imu_reading_to_dict(self._imu_driver.read())
         self.publish(
             sensors_update(
                 enabled=True,
                 status="polling",
                 readings=[reading_to_dict(reading) for reading in readings],
                 poll_rate_hz=self.config.poll_rate_hz,
+                imu=imu,
             )
         )
         return self._next_sleep(now)
 
     def cleanup(self) -> None:
-        self._release_driver()
+        self._release_drivers()
 
     def _poll_period(self) -> float:
         return 1.0 / self.config.poll_rate_hz
@@ -108,30 +130,40 @@ class SensorsService:
         return min(max(self._next_poll_time - now, 0.0), CONFIG_POLL_INTERVAL)
 
     def _ensure_driver(self) -> bool:
-        signature = _sensor_signature(self.config)
-        if self._driver is not None and signature == self._driver_signature:
+        range_signature = _sensor_signature(self.config)
+        imu_signature = _imu_signature(self.config.imu)
+        if (
+            self._driver is not None
+            and range_signature == self._driver_signature
+            and imu_signature == self._imu_driver_signature
+        ):
             return True
 
-        self._release_driver()
+        self._release_drivers()
         try:
             self._driver = self.driver_factory(self.config)
-            self._driver_signature = signature
+            self._imu_driver = self.imu_driver_factory(self.config)
+            self._driver_signature = range_signature
+            self._imu_driver_signature = imu_signature
             self._driver_error = None
             log.info("range driver ready for %d sensor(s)", len(self.config.sensors))
             return True
         except Exception as exc:  # noqa: BLE001 -- hardware init can fail many ways
             self._driver_error = str(exc)
-            log.warning("range driver init failed: %s", exc)
+            log.warning("sensor driver init failed: %s", exc)
             self._publish_status("driver_unavailable", error=self._driver_error)
             self._next_poll_time = self.time_fn() + self._poll_period()
             return False
 
-    def _release_driver(self) -> None:
-        if self._driver is None:
-            return
-        self._driver.cleanup()
+    def _release_drivers(self) -> None:
+        if self._driver is not None:
+            self._driver.cleanup()
         self._driver = None
+        if self._imu_driver is not None:
+            self._imu_driver.cleanup()
+        self._imu_driver = None
         self._driver_signature = None
+        self._imu_driver_signature = None
 
     def _publish_status(self, status: str, error: str | None = None) -> None:
         self.publish(
@@ -159,17 +191,23 @@ class SensorsService:
             self._config_error = None
             self._next_poll_time = None
             self._driver_signature = None
+            self._imu_driver_signature = None
             return
 
         try:
             new_config = load_sensors_config(self.config_path)
             new_signature = _sensor_signature(new_config)
-            if new_signature != _sensor_signature(self.config):
-                self._release_driver()
+            new_imu_signature = _imu_signature(new_config.imu)
+            if (
+                new_signature != _sensor_signature(self.config)
+                or new_imu_signature != _imu_signature(self.config.imu)
+            ):
+                self._release_drivers()
             self.config = new_config
             self._config_error = None
             self._next_poll_time = None
             self._driver_signature = None
+            self._imu_driver_signature = None
             log.info(
                 "sensors config loaded: enabled=%s rate_hz=%.2f sensors=%d",
                 self.config.enabled,
@@ -183,6 +221,13 @@ class SensorsService:
 
 def default_driver_factory(config: SensorsConfig) -> RangeDriver:
     return RangeDriver(config.driver_sensors())
+
+
+def default_imu_driver_factory(config: SensorsConfig) -> ImuDriver | None:
+    imu_config = config.driver_imu()
+    if imu_config is None:
+        return None
+    return ImuDriver(imu_config)
 
 
 def run_loop(service: SensorsService, stop: threading.Event) -> None:

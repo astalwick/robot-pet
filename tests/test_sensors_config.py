@@ -7,6 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import (
+    IMU_AXIS_MAP,
     SafetyConfig,
     SensorEntry,
     SensorsConfig,
@@ -166,6 +167,50 @@ class SensorsConfigTest(unittest.TestCase):
         self.assertTrue(loaded.safety.enabled)
         self.assertEqual(loaded.safety.cliff_trip_above_mm, 175)
         self.assertEqual(loaded.sensors[0].role, "cliff")
+
+    def test_imu_config_round_trips_and_reaches_driver(self):
+        config = SensorsConfig.from_dict(
+            {
+                "imu": {
+                    "enabled": True,
+                    "kind": "bno085",
+                    "mux_channel": 5,
+                    "address": "0x4a",
+                    "mode": "game",
+                    "zero_quaternion": [
+                        -0.48814613,
+                        -0.51180947,
+                        0.48788612,
+                        0.51159707,
+                    ],
+                    "zero_gravity": [0.0479263, -0.99885052, -0.00083945],
+                    "axis_map": IMU_AXIS_MAP,
+                }
+            }
+        )
+
+        imu = config.driver_imu()
+
+        self.assertIsNotNone(imu)
+        self.assertEqual(imu.channel, 5)
+        self.assertEqual(imu.address, 0x4A)
+        self.assertEqual(imu.mode, "game")
+        self.assertEqual(imu.zero_gravity, (0.0479263, -0.99885052, -0.00083945))
+
+    def test_enabled_imu_without_calibration_does_not_create_driver_config(self):
+        config = SensorsConfig.from_dict(
+            {
+                "imu": {
+                    "enabled": True,
+                    "kind": "bno085",
+                    "mux_channel": 5,
+                    "address": "0x4a",
+                    "mode": "game",
+                }
+            }
+        )
+
+        self.assertIsNone(config.driver_imu())
 
 
 if __name__ == "__main__":

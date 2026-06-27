@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from drivers.imu import BNO085Config
 from drivers.range import DEFAULT_SENSORS, RangeSensorConfig
 
 
@@ -19,6 +20,11 @@ MAX_POLL_RATE_HZ = 20.0
 
 SUPPORTED_KINDS = frozenset({"vl53l0x", "vl53l1x"})
 SENSOR_ROLES = frozenset({"cliff", "forward"})
+IMU_AXIS_MAP = {
+    "yaw_degrees": "-pitch_degrees",
+    "pitch_degrees": "+roll_degrees",
+    "roll_degrees": "+yaw_degrees",
+}
 
 
 class SensorsConfigError(ValueError):
@@ -49,6 +55,18 @@ class SensorEntry:
     offset_mm: int = 0
 
 
+@dataclass(frozen=True)
+class ImuEntry:
+    enabled: bool = False
+    kind: str = "bno085"
+    mux_channel: int = 5
+    address: int = 0x4A
+    mode: str = "game"
+    zero_quaternion: tuple[float, float, float, float] | None = None
+    zero_gravity: tuple[float, float, float] | None = None
+    axis_map: dict[str, str] | None = None
+
+
 def _default_sensor_entries() -> tuple[SensorEntry, ...]:
     return tuple(
         SensorEntry(
@@ -69,6 +87,7 @@ class SensorsConfig:
     enabled: bool = True
     poll_rate_hz: float = 10.0
     safety: SafetyConfig = SafetyConfig()
+    imu: ImuEntry = ImuEntry()
     sensors: tuple[SensorEntry, ...] = DEFAULT_SENSOR_ENTRIES
 
     @classmethod
@@ -85,6 +104,7 @@ class SensorsConfig:
                 MAX_POLL_RATE_HZ,
             ),
             safety=_parse_safety(values.get("safety")),
+            imu=_parse_imu(values.get("imu")),
             sensors=sensors,
         )
 
@@ -93,6 +113,7 @@ class SensorsConfig:
             "enabled": self.enabled,
             "poll_rate_hz": self.poll_rate_hz,
             "safety": asdict(self.safety),
+            "imu": _imu_entry_to_dict(self.imu),
             "sensors": [_sensor_entry_to_dict(entry) for entry in self.sensors],
         }
 
@@ -106,6 +127,19 @@ class SensorsConfig:
             )
             for entry in self.sensors
         ]
+
+    def driver_imu(self) -> BNO085Config | None:
+        if not self.imu.enabled:
+            return None
+        if self.imu.zero_quaternion is None or self.imu.zero_gravity is None:
+            return None
+        return BNO085Config(
+            channel=self.imu.mux_channel,
+            address=self.imu.address,
+            mode=self.imu.mode,
+            zero_quaternion=self.imu.zero_quaternion,
+            zero_gravity=self.imu.zero_gravity,
+        )
 
 
 def _parse_safety(raw: Any) -> SafetyConfig:
@@ -148,6 +182,72 @@ def _sensor_entry_to_dict(entry: SensorEntry) -> dict[str, Any]:
     if entry.offset_mm:
         data["offset_mm"] = entry.offset_mm
     return data
+
+
+def _imu_entry_to_dict(entry: ImuEntry) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "enabled": entry.enabled,
+        "kind": entry.kind,
+        "mux_channel": entry.mux_channel,
+        "address": f"0x{entry.address:02x}",
+        "mode": entry.mode,
+    }
+    if entry.zero_quaternion is not None:
+        data["zero_quaternion"] = list(entry.zero_quaternion)
+    if entry.zero_gravity is not None:
+        data["zero_gravity"] = list(entry.zero_gravity)
+    if entry.axis_map is not None:
+        data["axis_map"] = entry.axis_map
+    return data
+
+
+def _parse_imu(raw: Any) -> ImuEntry:
+    if raw is None:
+        return ImuEntry()
+    if not isinstance(raw, dict):
+        raise TypeError("imu must be an object")
+    kind = raw.get("kind", "bno085")
+    if kind != "bno085":
+        raise TypeError("imu.kind must be bno085")
+    mux_channel = raw.get("mux_channel", 5)
+    if not isinstance(mux_channel, int) or mux_channel < 0 or mux_channel > 7:
+        raise TypeError("imu.mux_channel must be an integer from 0 to 7")
+    mode = raw.get("mode", "game")
+    if mode not in ("game", "rotation"):
+        raise TypeError("imu.mode must be game or rotation")
+    axis_map = raw.get("axis_map", IMU_AXIS_MAP)
+    if axis_map != IMU_AXIS_MAP:
+        raise TypeError("imu.axis_map must match the calibrated BNO085 robot-frame map")
+    return ImuEntry(
+        enabled=bool(raw.get("enabled", False)),
+        kind=kind,
+        mux_channel=mux_channel,
+        address=_parse_imu_address(raw.get("address", 0x4A)),
+        mode=mode,
+        zero_quaternion=_parse_float_tuple(
+            raw.get("zero_quaternion"), 4, "imu.zero_quaternion"
+        ),
+        zero_gravity=_parse_float_tuple(raw.get("zero_gravity"), 3, "imu.zero_gravity"),
+        axis_map=axis_map,
+    )
+
+
+def _parse_imu_address(value: Any) -> int:
+    if isinstance(value, str):
+        value = int(value, 0)
+    if not isinstance(value, int) or value not in (0x4A, 0x4B):
+        raise TypeError("imu.address must be 0x4a or 0x4b")
+    return value
+
+
+def _parse_float_tuple(raw: Any, length: int, field: str) -> tuple[float, ...] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) != length:
+        raise TypeError(f"{field} must be a list of {length} numbers")
+    if not all(isinstance(value, int | float) for value in raw):
+        raise TypeError(f"{field} must be a list of {length} numbers")
+    return tuple(float(value) for value in raw)
 
 
 def cliff_trip_mm(entry: SensorEntry, safety: SafetyConfig) -> int | None:

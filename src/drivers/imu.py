@@ -4,11 +4,29 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import dataclass
 from typing import Any
 
 
 Quaternion = tuple[float, float, float, float]
 Vector = tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class BNO085Config:
+    channel: int
+    address: int
+    mode: str
+    zero_quaternion: Quaternion
+    zero_gravity: Vector
+
+
+@dataclass(frozen=True)
+class ImuReading:
+    yaw_degrees: float | None
+    pitch_degrees: float | None
+    roll_degrees: float | None
+    ok: bool
 
 
 def normalize_quaternion(quaternion: Quaternion) -> Quaternion:
@@ -144,3 +162,89 @@ def read_bno085_quaternion(sensor: Any, mode: str, timeout: float = 5.0) -> Quat
             return normalize_quaternion(quaternion)
         time.sleep(0.05)
     raise RuntimeError("BNO085 did not publish an orientation report")
+
+
+def _default_i2c_factory() -> Any:
+    try:
+        import board
+    except ImportError as exc:
+        raise RuntimeError(
+            "adafruit-blinka not installed (run: pip install -e . from the repo venv on the Pi)"
+        ) from exc
+
+    return board.I2C()
+
+
+def _default_mux_factory(i2c: Any, address: int) -> Any:
+    import adafruit_tca9548a
+
+    return adafruit_tca9548a.TCA9548A(i2c, address=address)
+
+
+def _default_bno085_factory(channel_bus: Any, address: int) -> Any:
+    from adafruit_bno08x.i2c import BNO08X_I2C
+
+    return BNO08X_I2C(channel_bus, address=address)
+
+
+class ImuDriver:
+    """Read calibrated BNO085 orientation."""
+
+    def __init__(
+        self,
+        config: BNO085Config,
+        mux_address: int = 0x70,
+        i2c_factory: Any = None,
+        mux_factory: Any = None,
+        bno085_factory: Any = None,
+    ):
+        from adafruit_bno08x import (
+            BNO_REPORT_GAME_ROTATION_VECTOR,
+            BNO_REPORT_GRAVITY,
+            BNO_REPORT_ROTATION_VECTOR,
+        )
+
+        if i2c_factory is None:
+            i2c_factory = _default_i2c_factory
+        if mux_factory is None:
+            mux_factory = _default_mux_factory
+        if bno085_factory is None:
+            bno085_factory = _default_bno085_factory
+
+        self.config = config
+        mux = mux_factory(i2c_factory(), mux_address)
+        self.sensor = bno085_factory(mux[config.channel], config.address)
+        if config.mode == "game":
+            self.sensor.enable_feature(BNO_REPORT_GAME_ROTATION_VECTOR)
+        else:
+            self.sensor.enable_feature(BNO_REPORT_ROTATION_VECTOR)
+        self.sensor.enable_feature(BNO_REPORT_GRAVITY)
+
+    def read(self) -> ImuReading:
+        try:
+            _sensor_x, sensor_y, _sensor_z = quaternion_to_rotation_vector_degrees(
+                relative_quaternion(
+                    self.config.zero_quaternion,
+                    read_bno085_quaternion(self.sensor, self.config.mode),
+                )
+            )
+            gravity_x, _gravity_y, gravity_z = vector_rotation_degrees(
+                self.config.zero_gravity,
+                read_bno085_gravity(self.sensor),
+            )
+            return ImuReading(
+                yaw_degrees=-sensor_y,
+                pitch_degrees=gravity_x,
+                roll_degrees=gravity_z,
+                ok=True,
+            )
+        except RuntimeError:
+            return ImuReading(
+                yaw_degrees=None,
+                pitch_degrees=None,
+                roll_degrees=None,
+                ok=False,
+            )
+
+    def cleanup(self) -> None:
+        pass

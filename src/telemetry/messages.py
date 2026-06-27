@@ -333,10 +333,11 @@ def sensors_update(
     status: str,
     readings: list[dict[str, Any]],
     poll_rate_hz: float,
+    imu: dict[str, Any] | None = None,
     error: str | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "type": "source_update",
         "source": "sensors",
         "time": now if now is not None else time.time(),
@@ -346,6 +347,9 @@ def sensors_update(
         "poll_rate_hz": poll_rate_hz,
         "error": error,
     }
+    if imu is not None:
+        payload["imu"] = imu
+    return payload
 
 
 def reading_to_dict(reading: Any) -> dict[str, Any]:
@@ -355,6 +359,15 @@ def reading_to_dict(reading: Any) -> dict[str, Any]:
         "channel": reading.channel,
         "distance_mm": reading.distance_mm,
         "ok": reading.ok,
+    }
+
+
+def imu_reading_to_dict(reading: Any) -> dict[str, Any]:
+    return {
+        "ok": reading.ok,
+        "yaw_degrees": reading.yaw_degrees,
+        "pitch_degrees": reading.pitch_degrees,
+        "roll_degrees": reading.roll_degrees,
     }
 
 

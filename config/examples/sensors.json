@@ -6,6 +6,29 @@
     "cliff_trip_above_mm": 200,
     "forward_stop_below_mm": 150
   },
+  "imu": {
+    "enabled": true,
+    "kind": "bno085",
+    "mux_channel": 5,
+    "address": "0x4a",
+    "mode": "game",
+    "zero_quaternion": [
+      -0.48814613,
+      -0.51180947,
+      0.48788612,
+      0.51159707
+    ],
+    "zero_gravity": [
+      0.0479263,
+      -0.99885052,
+      -0.00083945
+    ],
+    "axis_map": {
+      "yaw_degrees": "-pitch_degrees",
+      "pitch_degrees": "+roll_degrees",
+      "roll_degrees": "+yaw_degrees"
+    }
+  },
   "sensors": [
     {
       "name": "cliff_left",

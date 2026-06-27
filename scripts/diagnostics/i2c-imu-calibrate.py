@@ -147,7 +147,7 @@ def main():
                     "mode": args.mode,
                     "zero_quaternion": [round(value, 8) for value in zero_quaternion],
                     "axis_map": {
-                        "yaw_degrees": "+pitch_degrees",
+                        "yaw_degrees": "-pitch_degrees",
                         "pitch_degrees": "+roll_degrees",
                         "roll_degrees": "+yaw_degrees",
                     },
@@ -158,7 +158,7 @@ def main():
     )
     print("")
     print("Live calibrated orientation. Press Ctrl-C to stop.")
-    print("Guessed signs: positive turn=left, nose=front up, side=left up.")
+    print("Signs: positive turn=left, nose=front up, side=left up.")
     print("")
 
     try:
@@ -167,7 +167,7 @@ def main():
             sensor_roll, sensor_pitch, sensor_yaw = quaternion_to_euler_degrees(
                 relative_quaternion(zero_quaternion, current_quaternion)
             )
-            turn = sensor_pitch
+            turn = -sensor_pitch
             nose = sensor_roll
             side = sensor_yaw
             print(

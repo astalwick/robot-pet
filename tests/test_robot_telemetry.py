@@ -289,7 +289,7 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             publish_message(
                 self.publish_socket,
-                motor_rail_update("on", 24, 11.8, "startup", 10.8, 11.1),
+                motor_rail_update("on", 24, 11.8, "startup", 10.5, 10.8),
             )
         )
         snapshot = await self._read_until(reader, lambda item: item.get("motor_rail") is not None)

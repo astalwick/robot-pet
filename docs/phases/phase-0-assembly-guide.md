@@ -133,7 +133,7 @@ You can configure the RoboClaw by sending serial commands from the Pi using Basi
 
 **1. Low-voltage cutoff — do this first, it has safety consequences.**
 
-Your 3S LiPo is permanently damaged if any cell drops below ~3.0V. Set the RoboClaw's minimum battery voltage to **9.6V** (3.2V/cell — conservative). If you skip this and get absorbed in testing, you'll drain the pack below safe voltage. A damaged LiPo puffs up and becomes a fire risk. This is the only part of Phase 0 where getting it wrong has a real physical consequence.
+Your 3S LiPo is permanently damaged if any cell drops below ~3.0V. Set the motor rail cutoff to **10.5V** and the warning threshold to **10.8V**. If you skip this and get absorbed in testing, you'll drain the pack below safe voltage. A damaged LiPo puffs up and becomes a fire risk. This is the only part of Phase 0 where getting it wrong has a real physical consequence.
 
 **2. Encoder CPR (counts per revolution).**
 
@@ -227,7 +227,7 @@ You SSH into the Pi, run your teleop script, and drive the robot around the room
 | Max speed (theoretical) | ~1.57 m/s |
 | Comfortable operating speed | 0.3–0.5 m/s |
 | Battery | 3S LiPo, 11.1V nominal |
-| Low-voltage cutoff | 9.6V (3.2V/cell) |
+| Low-voltage cutoff | 10.5V cutoff, 10.8V warning |
 | Motor current limit | 5A per motor |
 | Pi UART | GPIO 14 (TX), GPIO 15 (RX) |
 | RoboClaw serial | S1 header |

@@ -175,7 +175,7 @@ class RobotBatteryTest(unittest.TestCase):
     def test_cached_stale_motor_battery_does_not_trigger_cutoff(self):
         mosfet = FakeMosfet()
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8),
+            BatteryConfig(low_voltage_cutoff=10.5),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
             clock=lambda: 0.0,
@@ -202,7 +202,7 @@ class RobotBatteryTest(unittest.TestCase):
         mosfet = FakeMosfet()
         times = iter([0.0, 1.0, 3.1])
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8, low_voltage_seconds=2.0),
+            BatteryConfig(low_voltage_cutoff=10.5, low_voltage_seconds=2.0),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
             clock=lambda: next(times),
@@ -212,36 +212,110 @@ class RobotBatteryTest(unittest.TestCase):
 
         for _index in range(3):
             runner._handle_snapshot(
-                snapshot(10.7, motion_stale=True, gamepad_stale=False, controller_connected=True)
+                snapshot(10.4, motion_stale=True, gamepad_stale=False, controller_connected=True)
             )
 
         self.assertNotEqual(runner.state, "low_battery_cutoff")
         self.assertEqual(mosfet.off_count, 0)
 
-    def test_low_battery_cutoff_blocks_restart(self):
+    def test_cutoff_probes_rail_when_motion_requested(self):
         mosfet = FakeMosfet()
         runner = BatteryRunner(
             BatteryConfig(),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
+            clock=lambda: 100.0,
         )
         runner.mosfet = mosfet
         runner.state = "low_battery_cutoff"
 
         runner._handle_snapshot(snapshot(None, controller_connected=True, motion_power_requested=True))
 
-        self.assertEqual(mosfet.on_count, 0)
+        self.assertEqual(mosfet.on_count, 1)
+        self.assertEqual(runner.state, "recovering")
+
+    def test_recovery_restores_rail_when_voltage_healthy(self):
+        mosfet = FakeMosfet()
+        times = iter([100.0, 101.0])
+        runner = BatteryRunner(
+            BatteryConfig(low_voltage_cutoff=10.5, warning_voltage=10.8),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
+        )
+        runner.mosfet = mosfet
+        runner.state = "low_battery_cutoff"
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+        runner._handle_snapshot(snapshot(11.0, controller_connected=True))
+
+        self.assertEqual(runner.state, "on")
+        self.assertEqual(mosfet.off_count, 0)
+
+    def test_recovery_stays_cutoff_when_voltage_still_low(self):
+        mosfet = FakeMosfet()
+        times = iter([100.0, 101.0])
+        runner = BatteryRunner(
+            BatteryConfig(low_voltage_cutoff=10.5, warning_voltage=10.8),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
+        )
+        runner.mosfet = mosfet
+        runner.state = "low_battery_cutoff"
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.6, controller_connected=True))
+
         self.assertEqual(runner.state, "low_battery_cutoff")
+        self.assertEqual(mosfet.off_count, 1)
+
+    def test_recovery_probe_times_out_back_to_cutoff(self):
+        mosfet = FakeMosfet()
+        times = iter([100.0, 104.0])
+        runner = BatteryRunner(
+            BatteryConfig(recovery_probe_seconds=3.0),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
+        )
+        runner.mosfet = mosfet
+        runner.state = "low_battery_cutoff"
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
+        self.assertEqual(runner.state, "low_battery_cutoff")
+        self.assertEqual(mosfet.off_count, 1)
+
+    def test_recovery_probe_rate_limited_after_failure(self):
+        mosfet = FakeMosfet()
+        times = iter([100.0, 101.0, 102.0])
+        runner = BatteryRunner(
+            BatteryConfig(low_voltage_cutoff=10.5, warning_voltage=10.8, recovery_retry_seconds=30.0),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+            clock=lambda: next(times),
+        )
+        runner.mosfet = mosfet
+        runner.state = "low_battery_cutoff"
+
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.6, controller_connected=True))
+        runner._handle_snapshot(snapshot(None, controller_connected=True))
+
+        self.assertEqual(runner.state, "low_battery_cutoff")
+        self.assertEqual(mosfet.on_count, 1)
 
     def test_last_critical_voltage_blocks_start(self):
         mosfet = FakeMosfet()
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8),
+            BatteryConfig(low_voltage_cutoff=10.5),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
         )
         runner.mosfet = mosfet
-        runner.last_pack_voltage = 10.7
+        runner.last_pack_voltage = 10.4
 
         runner._handle_snapshot(snapshot(None, controller_connected=True))
 
@@ -252,7 +326,7 @@ class RobotBatteryTest(unittest.TestCase):
         mosfet = FakeMosfet()
         times = iter([0.0, 1.0, 3.1])
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8, low_voltage_seconds=2.0),
+            BatteryConfig(low_voltage_cutoff=10.5, low_voltage_seconds=2.0),
             mosfet_factory=lambda *_args, **_kwargs: mosfet,
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
@@ -261,13 +335,13 @@ class RobotBatteryTest(unittest.TestCase):
         runner.mosfet = mosfet
         runner._rail_on("test")
 
-        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, controller_connected=True))
         self.assertEqual(runner.state, "warning")
 
-        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, controller_connected=True))
         self.assertEqual(runner.state, "warning")
 
-        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, controller_connected=True))
         self.assertEqual(runner.state, "low_battery_cutoff")
         self.assertEqual(mosfet.off_count, 1)
 
@@ -292,7 +366,7 @@ class RobotBatteryTest(unittest.TestCase):
         mosfet = FakeMosfet()
         times = iter([0.0, 3.0, 3.1])
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8, low_voltage_seconds=2.0),
+            BatteryConfig(low_voltage_cutoff=10.5, low_voltage_seconds=2.0),
             mosfet_factory=lambda *_args, **_kwargs: mosfet,
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
@@ -301,9 +375,9 @@ class RobotBatteryTest(unittest.TestCase):
         runner.mosfet = mosfet
         runner._rail_on("test")
 
-        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
-        runner._handle_snapshot(snapshot(10.7, stale=True, gamepad_stale=False, controller_connected=True))
-        runner._handle_snapshot(snapshot(10.7, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, stale=True, gamepad_stale=False, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.4, controller_connected=True))
 
         self.assertEqual(runner.state, "warning")
         self.assertEqual(mosfet.off_count, 0)
@@ -372,7 +446,7 @@ class RobotBatteryTest(unittest.TestCase):
         mosfet = FakeMosfet()
         times = iter([0.0, 1.0, 1.1, 3.2])
         runner = BatteryRunner(
-            BatteryConfig(motion_power_hold_seconds=10.0, low_voltage_cutoff=10.8, low_voltage_seconds=2.0),
+            BatteryConfig(motion_power_hold_seconds=10.0, low_voltage_cutoff=10.5, low_voltage_seconds=2.0),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
             clock=lambda: next(times),
@@ -380,22 +454,22 @@ class RobotBatteryTest(unittest.TestCase):
         runner.mosfet = mosfet
 
         runner._handle_snapshot(snapshot(None, motion_power_requested=True))
-        runner._handle_snapshot(snapshot(10.7, motion_power_requested=True))
-        runner._handle_snapshot(snapshot(10.7, motion_power_requested=True))
-        runner._handle_snapshot(snapshot(10.7, motion_power_requested=True))
+        runner._handle_snapshot(snapshot(10.4, motion_power_requested=True))
+        runner._handle_snapshot(snapshot(10.4, motion_power_requested=True))
+        runner._handle_snapshot(snapshot(10.4, motion_power_requested=True))
 
         self.assertEqual(runner.state, "low_battery_cutoff")
         self.assertEqual(mosfet.off_count, 1)
 
     def test_warning_voltage_does_not_cut_motor_rail(self):
         runner = BatteryRunner(
-            BatteryConfig(low_voltage_cutoff=10.8, warning_voltage=11.1),
+            BatteryConfig(low_voltage_cutoff=10.5, warning_voltage=10.8),
             telemetry_subscriber=lambda _socket: [],
             telemetry_publisher=lambda *_args: True,
             clock=lambda: 0.0,
         )
 
-        runner._handle_snapshot(snapshot(10.9, controller_connected=True))
+        runner._handle_snapshot(snapshot(10.6, controller_connected=True))
 
         self.assertEqual(runner.state, "warning")
         self.assertEqual(runner.reason, "low_battery_warning")

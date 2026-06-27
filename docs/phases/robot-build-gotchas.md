@@ -14,7 +14,7 @@ The RoboClaw does not work out of the box with your motors. Before you send your
 
 1. **Low-voltage cutoff: SET THIS FIRST.**
    Your 3S LiPo is permanently damaged if any cell drops below ~3.0V (9.0V pack voltage). The RoboClaw ships with either no cutoff or a default that doesn't match your battery.
-   - Set the cutoff to **9.6V** (3.2V/cell, conservative).
+   - Set the cutoff to **10.5V** and the warning threshold to **10.8V**.
    - If you forget this and get absorbed in testing, you will drain the pack below safe voltage. A damaged LiPo puffs up and becomes a fire hazard.
    - This is the only part of the build with a real safety consequence if you get it wrong.
 

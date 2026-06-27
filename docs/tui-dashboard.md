@@ -45,12 +45,12 @@ The active values are also published by `gamepad-teleop.service` in telemetry, s
 
 Motor battery status uses simple 3S LiPo voltage bands:
 
-- `ok`: pack voltage is at or above 10.5 V.
-- `low`: pack voltage is below 10.5 V.
-- `critical`: pack voltage is at or below 9.6 V.
+- `ok`: pack voltage is at or above 10.8 V.
+- `low`: pack voltage is below 10.8 V and above 10.5 V.
+- `critical`: pack voltage is at or below 10.5 V.
 - `unknown`: RoboClaw voltage read failed.
 
-The RoboClaw cutoff is configured around 9.6 V, so the dashboard warns before the cutoff point.
+The motor rail cutoff is 10.5 V. The dashboard warns below 10.8 V.
 
 ## Pi Power Bank
 

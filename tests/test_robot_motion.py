@@ -185,6 +185,36 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(published[1]["motor_battery"]["pack_voltage"], 11.5)
         self.assertEqual(published[2]["wheels"]["left_current_amps"], 1.0)
 
+    def test_motor_reconnect_publishes_fresh_battery_before_retained_voltage(self):
+        motor = FakeMotor()
+        published = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.1
+            if current_time > 0.15:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, telemetry_interval=0.1),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        runner._last_pack_voltage = 10.4
+        runner._telemetry_read_slot = 0
+        runner._on_drive_command(drive_command(100, 100))
+
+        runner._run_motor_loop(motor)
+
+        self.assertEqual(motor.telemetry_reads[0], "battery")
+        self.assertEqual(published[0]["motor_battery"]["pack_voltage"], 11.5)
+
     def _odometry_runner(self, motor):
         return MotionRunner(
             MotionConfig(loop_interval=0.05),

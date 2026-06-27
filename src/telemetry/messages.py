@@ -26,6 +26,8 @@ PI_BATTERY_SHUTDOWN_VOLTAGE = 13.0
 MOTOR_BATTERY_CHEMISTRY = "lipo"
 MOTOR_BATTERY_CELL_COUNT = 3
 MOTOR_BATTERY_CAPACITY_MAH = 2200
+MOTOR_BATTERY_CUTOFF_VOLTAGE = 10.5
+MOTOR_BATTERY_WARNING_VOLTAGE = 10.8
 MOTOR_BATTERY_PERCENT_CURVE = (
     (4.20, 100),
     (4.10, 90),
@@ -52,9 +54,9 @@ def decode_json_line(line: bytes | str) -> dict[str, Any]:
 def motor_battery_status(pack_voltage: float | None) -> str:
     if pack_voltage is None:
         return "unknown"
-    if pack_voltage <= 10.8:
+    if pack_voltage <= MOTOR_BATTERY_CUTOFF_VOLTAGE:
         return "critical"
-    if pack_voltage < 11.1:
+    if pack_voltage < MOTOR_BATTERY_WARNING_VOLTAGE:
         return "low"
     return "ok"
 

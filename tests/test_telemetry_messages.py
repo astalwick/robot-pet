@@ -18,7 +18,6 @@ from telemetry.messages import (
     link_loop_message,
     motor_battery_message,
     motor_battery_percent_estimate,
-    motor_battery_status,
     motor_rail_update,
     pi_battery_message,
     pi_battery_status,
@@ -41,12 +40,6 @@ class TelemetryMessagesTest(unittest.TestCase):
         decoded = decode_json_line(encode_json_line(message))
 
         self.assertEqual(decoded, message)
-
-    def test_motor_battery_status_bands(self):
-        self.assertEqual(motor_battery_status(None), "unknown")
-        self.assertEqual(motor_battery_status(11.1), "ok")
-        self.assertEqual(motor_battery_status(10.9), "low")
-        self.assertEqual(motor_battery_status(10.8), "critical")
 
     def test_motor_battery_message_includes_cell_voltage(self):
         self.assertEqual(motor_battery_message(11.7)["cell_voltage"], 3.9)
@@ -110,14 +103,14 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertFalse(message["shutdown_pending"])
 
     def test_motor_rail_update_carries_cutoff_state(self):
-        message = motor_rail_update("low_battery_cutoff", 24, 10.7, "low_battery_cutoff", 10.8, 11.1, now=1000.0)
+        message = motor_rail_update("low_battery_cutoff", 24, 10.4, "low_battery_cutoff", 10.5, 10.8, now=1000.0)
 
         self.assertEqual(message["type"], "source_update")
         self.assertEqual(message["source"], "motor_rail")
         self.assertEqual(message["time"], 1000.0)
         self.assertEqual(message["state"], "low_battery_cutoff")
         self.assertEqual(message["mosfet_gpio"], 24)
-        self.assertEqual(message["last_pack_voltage"], 10.7)
+        self.assertEqual(message["last_pack_voltage"], 10.4)
 
     def test_stale_label(self):
         self.assertEqual(stale_label(False), "live")

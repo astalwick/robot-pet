@@ -330,12 +330,12 @@ Do not invent Pi battery percentage. Show `power_bank_charge: null`.
 
 Use simple 3S LiPo thresholds:
 
-- `ok`: at or above 10.5V pack, 3.5V/cell.
-- `low`: below 10.5V pack, 3.5V/cell.
-- `critical`: at or below 9.6V pack, 3.2V/cell.
+- `ok`: at or above 10.8V pack.
+- `low`: below 10.8V pack and above 10.5V pack.
+- `critical`: at or below 10.5V pack.
 - `unknown`: voltage read failed.
 
-The RoboClaw cutoff is configured to 9.6V. The dashboard should warn before that point, not only after cutoff.
+The motor rail cutoff is 10.5V. The dashboard should warn below 10.8V.
 
 ## Test Plan
 

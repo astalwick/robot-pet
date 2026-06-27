@@ -82,7 +82,7 @@ When the MOSFET is off, the RoboClaw is unpowered — there is no live pack volt
 
 ### Power-on / power-off sequence
 
-**Energize:** assert MOSFET ON → `robot-motion` polls RoboClaw quickly (e.g. 50–100ms, not the normal 1s retry) until `ReadVersion` / zero-speed succeeds → read fresh pack voltage from RoboClaw (via motion telemetry). If pack &lt; **11.0 V** (draft threshold): surface a **low battery** warning on the dashboard, stop, settle, MOSFET OFF — do not leave the rail up to drive. Above RoboClaw’s configured **9.6 V** hardware cutoff; 11.0 V is software headroom, not a substitute for the RoboClaw cutoff.
+**Energize:** assert MOSFET ON → `robot-motion` polls RoboClaw quickly (e.g. 50–100ms, not the normal 1s retry) until `ReadVersion` / zero-speed succeeds → read fresh pack voltage from RoboClaw (via motion telemetry). If pack is at or below **10.5 V**, stop, settle, MOSFET OFF — do not leave the rail up to drive. If pack is below **10.8 V**, surface a **low battery** warning on the dashboard.
 
 **De-energize:** command stop (or wait for zero speed) → short settle (~250ms) → MOSFET OFF.
 
@@ -96,7 +96,7 @@ Directional intent only: the robot should *feel* ready when you pick up the game
 
 | Idea (draft) | Sketch |
 | ------------ | ------ |
-| Pack &lt; **11.0 V** after energize + RoboClaw read | Dashboard warning; stop → settle → rail off (not “refuse forever” from stale telemetry). |
+| Pack at/below **10.5 V** after energize + RoboClaw read | Dashboard warning; stop → settle → rail off (not “refuse forever” from stale telemetry). |
 | Gamepad **disconnected → connected** | Energize rail; fast RoboClaw wake. |
 | Gamepad **connected → disconnected** | Maybe wait **~2 s**, then de-energize? |
 | Gamepad connected but **idle a long time** | Maybe de-energize after stop + settle? |
@@ -122,7 +122,7 @@ robot-voice ── session state ───► telemetry
 ### Exit criteria (additions)
 
 - `robot-battery` exists, owns MOSFET GPIO, publishes `motor_rail` state on telemetry (exact states TBD).
-- With manual switch on: energizing the rail and cutting it again works; fresh RoboClaw pack voltage is visible after energize; sub-11.0 V (or whatever threshold we pick) yields a dashboard warning and rail off without requiring a stale “last known” voltage.
+- With manual switch on: energizing the rail and cutting it again works; fresh RoboClaw pack voltage is visible after energize; at/below 10.5 V cuts the rail and below 10.8 V yields a dashboard warning without requiring a stale “last known” voltage.
 - Specific wake/sleep/overcurrent rules are **not** locked until the brainstorm table is revised and signed off.
 
 ## Notes

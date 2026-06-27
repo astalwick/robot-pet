@@ -316,6 +316,8 @@ class MotionRunner:
         motor_max_qpps = self._read_motor_max_qpps(motor)
         next_telemetry = self.clock() + self.config.telemetry_interval
         self._reset_slew()
+        self._last_pack_voltage = None
+        self._telemetry_read_slot = 1
         # A reconnect may hand back a RoboClaw that rebooted and reset its
         # encoder counters, so re-baseline odometry against the fresh counts.
         self._invalidate_odometry_baseline()

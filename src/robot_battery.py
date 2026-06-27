@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from lib.log import setup_logging
-from telemetry.messages import motor_rail_update
+from telemetry.messages import MOTOR_BATTERY_CUTOFF_VOLTAGE, MOTOR_BATTERY_WARNING_VOLTAGE, motor_rail_update
 from telemetry.paths import DEFAULT_MOTOR_BATTERY_CACHE, DEFAULT_PUBLISH_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
 from telemetry.socket_client import publish_message, subscribe
 
@@ -24,12 +24,14 @@ log = setup_logging("robot-battery")
 @dataclass(frozen=True)
 class BatteryConfig:
     mosfet_gpio: int = 24
-    low_voltage_cutoff: float = 10.8
-    warning_voltage: float = 11.1
+    low_voltage_cutoff: float = MOTOR_BATTERY_CUTOFF_VOLTAGE
+    warning_voltage: float = MOTOR_BATTERY_WARNING_VOLTAGE
     low_voltage_seconds: float = 2.0
     cutoff_log_interval: float = 30.0
     telemetry_interval: float = 1.0
     motion_power_hold_seconds: float = 5.0
+    recovery_probe_seconds: float = 3.0
+    recovery_retry_seconds: float = 30.0
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
     telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET
     motor_battery_cache_path: str = DEFAULT_MOTOR_BATTERY_CACHE
@@ -58,6 +60,8 @@ class BatteryRunner:
         self.next_cutoff_log_at = 0.0
         self.next_telemetry_at = 0.0
         self.motion_power_hold_until = 0.0
+        self.recovery_probe_until = 0.0
+        self.next_recovery_probe_at = 0.0
         self.mosfet = None
         self.last_motor_battery: dict[str, Any] | None = None
 
@@ -93,7 +97,7 @@ class BatteryRunner:
         self._sync_power(snapshot, now)
         if self.state == "low_battery_cutoff" and now >= self.next_cutoff_log_at:
             log.warning(
-                "motor LiPo discharged; motor rail is off until robot-battery restarts "
+                "motor LiPo discharged; motor rail off, will re-check on the next motion request "
                 "(last pack voltage: %s)",
                 f"{self.last_pack_voltage:.2f}V" if self.last_pack_voltage is not None else "unknown",
             )
@@ -104,6 +108,9 @@ class BatteryRunner:
 
     def _handle_voltage(self, voltage: float, now: float) -> None:
         self.last_pack_voltage = voltage
+        if self.state == "recovering":
+            self._decide_recovery(voltage, now)
+            return
         if self.state == "low_battery_cutoff":
             return
 
@@ -126,9 +133,27 @@ class BatteryRunner:
 
         if now - self.low_voltage_seen_at >= self.config.low_voltage_seconds:
             log.warning("motor LiPo %.2fV at/below %.2fV; cutting motor rail", voltage, self.config.low_voltage_cutoff)
+            self.next_recovery_probe_at = now + self.config.recovery_retry_seconds
             self._rail_off("low_battery_cutoff")
-            self.state = "low_battery_cutoff"
+
+    def _decide_recovery(self, voltage: float, now: float) -> None:
+        # We powered the rail just to read the pack under no load. Only return to
+        # normal once it sits above the warning line; recovering anywhere inside the
+        # warning band would let a sagging pack chatter the rail on and off.
+        if voltage > self.config.warning_voltage:
+            self.low_voltage_seen_at = None
+            self.state = "on"
+            self.reason = None
             self._publish_status()
+            log.info("motor LiPo recovered at %.2fV; motor rail restored", voltage)
+            return
+        log.warning(
+            "motor LiPo still low at %.2fV (need above %.2fV to recover); back to cutoff",
+            voltage,
+            self.config.warning_voltage,
+        )
+        self.next_recovery_probe_at = now + self.config.recovery_retry_seconds
+        self._rail_off("low_battery_cutoff")
 
     def _fresh_pack_voltage(self, snapshot: dict[str, Any]) -> float | None:
         source = (snapshot.get("sources") or {}).get("robot_motion") or {}
@@ -151,7 +176,21 @@ class BatteryRunner:
             self.last_motor_battery = dict(battery)
 
     def _sync_power(self, snapshot: dict[str, Any], now: float) -> None:
+        wants_motion = self._gamepad_connected(snapshot) or self._motion_power_requested(snapshot)
+
+        if self.state == "recovering":
+            # Hold the rail on until a fresh reading decides recover-or-cutoff; give up
+            # if the request went away or no reading arrived before the probe timed out.
+            if not wants_motion or now >= self.recovery_probe_until:
+                self.next_recovery_probe_at = now + self.config.recovery_retry_seconds
+                self._rail_off("low_battery_cutoff")
+            return
+
         if self.state == "low_battery_cutoff":
+            # A motion request powers the rail briefly to re-read the pack, rate-limited
+            # so a still-low battery can't power-cycle the RoboClaw on every snapshot.
+            if wants_motion and now >= self.next_recovery_probe_at:
+                self._start_recovery_probe(now)
             return
 
         if self._gamepad_connected(snapshot):
@@ -178,8 +217,18 @@ class BatteryRunner:
         drive_status = snapshot.get("drive_status")
         return isinstance(drive_status, dict) and drive_status.get("motion_power_requested") is True
 
+    def _start_recovery_probe(self, now: float) -> None:
+        self.low_voltage_seen_at = None
+        self.recovery_probe_until = now + self.config.recovery_probe_seconds
+        if self.mosfet is not None:
+            self.mosfet.on()
+        self.state = "recovering"
+        self.reason = "recovery_probe"
+        self._publish_status()
+        log.info("motor LiPo cutoff: powering rail to re-check battery")
+
     def _rail_on(self, reason: str) -> None:
-        if self.state == "low_battery_cutoff":
+        if self.state in ("low_battery_cutoff", "recovering"):
             return
         if self.state in ("on", "warning"):
             return
@@ -255,12 +304,14 @@ class BatteryRunner:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Motor rail MOSFET and LiPo protection service.")
     parser.add_argument("--mosfet-gpio", type=int, default=24)
-    parser.add_argument("--low-voltage-cutoff", type=float, default=10.8)
-    parser.add_argument("--warning-voltage", type=float, default=11.1)
+    parser.add_argument("--low-voltage-cutoff", type=float, default=MOTOR_BATTERY_CUTOFF_VOLTAGE)
+    parser.add_argument("--warning-voltage", type=float, default=MOTOR_BATTERY_WARNING_VOLTAGE)
     parser.add_argument("--low-voltage-seconds", type=float, default=2.0)
     parser.add_argument("--cutoff-log-interval", type=float, default=30.0)
     parser.add_argument("--telemetry-interval", type=float, default=1.0)
     parser.add_argument("--motion-power-hold-seconds", type=float, default=5.0)
+    parser.add_argument("--recovery-probe-seconds", type=float, default=3.0)
+    parser.add_argument("--recovery-retry-seconds", type=float, default=30.0)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--motor-battery-cache", default=DEFAULT_MOTOR_BATTERY_CACHE)
@@ -278,6 +329,8 @@ def main() -> None:
             cutoff_log_interval=args.cutoff_log_interval,
             telemetry_interval=args.telemetry_interval,
             motion_power_hold_seconds=args.motion_power_hold_seconds,
+            recovery_probe_seconds=args.recovery_probe_seconds,
+            recovery_retry_seconds=args.recovery_retry_seconds,
             telemetry_socket=args.telemetry_socket,
             telemetry_subscribe_socket=args.telemetry_subscribe_socket,
             motor_battery_cache_path=args.motor_battery_cache,

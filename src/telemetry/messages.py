@@ -277,6 +277,19 @@ def wheel_message(
     }
 
 
+def odometry_message(left_distance_m: float, right_distance_m: float) -> dict[str, Any]:
+    """Cumulative signed wheel travel in meters since the motion service started.
+
+    Positive means robot-forward for both wheels. The dashboard diffs consecutive
+    snapshots to dead-reckon a local path, so absolute counters are deliberate:
+    they survive missed telemetry frames where per-frame deltas would not.
+    """
+    return {
+        "left_distance_m": left_distance_m,
+        "right_distance_m": right_distance_m,
+    }
+
+
 def link_loop_message(
     read_success_rate: float | None,
     consecutive_read_failures: int,
@@ -530,6 +543,7 @@ def robot_motion_update(
     now: float | None = None,
     link_loop: dict[str, Any] | None = None,
     drive_status: dict[str, Any] | None = None,
+    odometry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "type": "source_update",
@@ -539,4 +553,5 @@ def robot_motion_update(
         "motor_battery": motor_battery,
         "link_loop": link_loop,
         "drive_status": drive_status,
+        "odometry": odometry,
     }

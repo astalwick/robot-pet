@@ -260,6 +260,7 @@ class TelemetryHub:
             "link_loop": _prefer_motion(motion_data, gamepad_data, "link_loop"),
             "drive_tuning": gamepad_data.get("drive_tuning"),
             "drive_status": _prefer_motion(motion_data, gamepad_data, "drive_status"),
+            "odometry": motion_data.get("odometry"),
             "vision": vision_data,
             "voice": voice_data,
             "sensors": sensors_data,

@@ -38,6 +38,7 @@ from telemetry.messages import (
     drive_status_message,
     link_loop_message,
     motor_battery_message,
+    odometry_message,
     robot_motion_update,
     wheel_message,
 )
@@ -159,6 +160,12 @@ class MotionRunner:
         self._last_left_current: float | None = None
         self._last_right_current: float | None = None
         self._last_pack_voltage: float | None = None
+        # Cumulative wrap-corrected wheel travel for dashboard dead reckoning.
+        self._left_distance_m = 0.0
+        self._right_distance_m = 0.0
+        self._last_left_position: int | None = None
+        self._last_right_position: int | None = None
+        self._odometry_available = False
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
@@ -305,6 +312,9 @@ class MotionRunner:
         motor_max_qpps = self._read_motor_max_qpps(motor)
         next_telemetry = self.clock() + self.config.telemetry_interval
         self._reset_slew()
+        # A reconnect may hand back a RoboClaw that rebooted and reset its
+        # encoder counters, so re-baseline odometry against the fresh counts.
+        self._invalidate_odometry_baseline()
         self._set_drive_state("driving")
 
         while not self.stop_requested:
@@ -542,6 +552,7 @@ class MotionRunner:
             motor_battery=motor_battery_message(self._last_pack_voltage),
             link_loop=link_loop,
             drive_status=drive_status,
+            odometry=self._odometry_payload(),
         )
         self._publish_message(message)
 
@@ -553,16 +564,53 @@ class MotionRunner:
             if self._telemetry_read_slot == 1:
                 self._last_pack_voltage = motor.get_battery_voltage()
                 return self._last_pack_voltage is not None
-            currents = motor.get_currents()
-            if currents is None:
-                return False
-            self._last_left_current, self._last_right_current = currents
-            return True
+            if self._telemetry_read_slot == 2:
+                currents = motor.get_currents()
+                if currents is None:
+                    return False
+                self._last_left_current, self._last_right_current = currents
+                return True
+            return self._accumulate_odometry(motor)
         except Exception as exc:
             log.warning("telemetry read failed: %s", exc)
             return False
         finally:
-            self._telemetry_read_slot = (self._telemetry_read_slot + 1) % 3
+            self._telemetry_read_slot = (self._telemetry_read_slot + 1) % 4
+
+    def _invalidate_odometry_baseline(self) -> None:
+        # Forget where the encoders were and stop publishing odometry until a
+        # fresh read re-baselines. Cumulative distance is kept so the published
+        # total stays continuous. Used both when a read fails and when a new
+        # RoboClaw connection starts (a reboot may have reset its counters).
+        self._last_left_position = None
+        self._last_right_position = None
+        self._odometry_available = False
+
+    def _accumulate_odometry(self, motor: Any) -> bool:
+        left, right = motor.read_wheel_positions()
+        if left is None or right is None:
+            # Otherwise the next good read would fold all the travel during the
+            # gap into a single delta, and the dashboard would dead-reckon that
+            # lump onto one yaw as a fake jump.
+            self._invalidate_odometry_baseline()
+            return False
+        # The first good read only sets the baseline; later reads add the
+        # wrap-corrected delta so the published distance stays continuous.
+        if self._last_left_position is not None:
+            self._left_distance_m += _encoder_delta(left, self._last_left_position) / ENCODER_COUNTS_PER_METER
+            self._right_distance_m += _encoder_delta(right, self._last_right_position) / ENCODER_COUNTS_PER_METER
+        self._last_left_position = left
+        self._last_right_position = right
+        self._odometry_available = True
+        return True
+
+    def _odometry_payload(self) -> dict[str, Any] | None:
+        if not self._odometry_available:
+            return None
+        return odometry_message(
+            left_distance_m=round(self._left_distance_m, 4),
+            right_distance_m=round(self._right_distance_m, 4),
+        )
 
     def _drive_status_payload(self, roboclaw_ready: bool | None = None) -> dict[str, Any]:
         return drive_status_message(

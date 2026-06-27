@@ -65,6 +65,18 @@
         </div>
       </section>
 
+      <section id="path-section" class="panel hidden">
+        <div id="path-toolbar">
+          <h2>Estimated Local Path</h2>
+          <span id="path-status" class="muted">awaiting odometry</span>
+          <button id="path-reset" type="button">Reset</button>
+          <button id="path-close" type="button">Close</button>
+        </div>
+        <div id="path-canvas-wrap">
+          <canvas id="path-canvas"></canvas>
+        </div>
+      </section>
+
       <section id="panels">
         <article class="panel">
           <h2>Core Systems</h2>
@@ -101,6 +113,7 @@
         <article id="imu-panel" class="panel hidden">
           <h2>IMU Orientation</h2>
           <div class="rows" id="imu-rows"></div>
+          <button id="path-maximize" type="button">Estimated Local Path</button>
         </article>
         <section id="logs-section" class="panel">
           <h2>Logs</h2>

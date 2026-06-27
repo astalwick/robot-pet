@@ -185,6 +185,93 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(published[1]["motor_battery"]["pack_voltage"], 11.5)
         self.assertEqual(published[2]["wheels"]["left_current_amps"], 1.0)
 
+    def _odometry_runner(self, motor):
+        return MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: None,
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda _socket, _message: True,
+        )
+
+    def test_odometry_first_read_sets_baseline_without_distance(self):
+        motor = FakeMotor()
+        motor.positions.extend([(1000, 1000)])
+        runner = self._odometry_runner(motor)
+
+        self.assertTrue(runner._accumulate_odometry(motor))
+        payload = runner._odometry_payload()
+        self.assertEqual(payload, {"left_distance_m": 0.0, "right_distance_m": 0.0})
+
+    def test_odometry_accumulates_signed_per_wheel_distance(self):
+        motor = FakeMotor()
+        # Baseline, then a spin in place: left forward, right backward.
+        motor.positions.extend([(0, 0), (500, -500)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)
+        runner._accumulate_odometry(motor)
+
+        payload = runner._odometry_payload()
+        self.assertAlmostEqual(payload["left_distance_m"], 500 / ENCODER_COUNTS_PER_METER, places=4)
+        self.assertAlmostEqual(payload["right_distance_m"], -500 / ENCODER_COUNTS_PER_METER, places=4)
+
+    def test_odometry_corrects_counter_wraparound(self):
+        motor = FakeMotor()
+        span = 1 << 32
+        # Cross the 32-bit boundary forward: 150 counts of real travel.
+        motor.positions.extend([(span - 100, span - 100), (50, 50)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)
+        runner._accumulate_odometry(motor)
+
+        payload = runner._odometry_payload()
+        self.assertAlmostEqual(payload["left_distance_m"], 150 / ENCODER_COUNTS_PER_METER, places=4)
+
+    def test_odometry_unavailable_until_first_successful_read(self):
+        motor = FakeMotor()
+        motor.positions.extend([(None, None)])
+        runner = self._odometry_runner(motor)
+
+        self.assertFalse(runner._accumulate_odometry(motor))
+        self.assertIsNone(runner._odometry_payload())
+
+    def test_odometry_read_failure_rebaselines_without_folding_the_gap(self):
+        motor = FakeMotor()
+        # Good baseline at 0, drive to 500, then a read fails, then a good read
+        # lands far away (1500) — the travel during the gap must be dropped,
+        # not folded into one delta that the dashboard would draw as a jump.
+        motor.positions.extend([(0, 0), (500, 500), (None, None), (1500, 1500)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)  # baseline
+        runner._accumulate_odometry(motor)  # +500
+        self.assertFalse(runner._accumulate_odometry(motor))  # failure
+        self.assertIsNone(runner._odometry_payload())  # freshness lost
+
+        runner._accumulate_odometry(motor)  # re-baseline at 1500, no delta
+        payload = runner._odometry_payload()
+        self.assertAlmostEqual(payload["left_distance_m"], 500 / ENCODER_COUNTS_PER_METER, places=4)
+
+    def test_odometry_rebaselines_after_reconnect_without_folding_the_gap(self):
+        motor = FakeMotor()
+        # Good baseline at 0, drive to 500. Then the RoboClaw reconnects and the
+        # next read reports a low count (a reboot reset the counter). The drop
+        # must not be diffed against the stale baseline as a huge reverse jump.
+        motor.positions.extend([(0, 0), (500, 500), (10, 10)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)  # baseline
+        runner._accumulate_odometry(motor)  # +500
+
+        runner._invalidate_odometry_baseline()  # what a reconnect does
+        self.assertIsNone(runner._odometry_payload())
+
+        runner._accumulate_odometry(motor)  # re-baseline at 10, no delta
+        payload = runner._odometry_payload()
+        self.assertAlmostEqual(payload["left_distance_m"], 500 / ENCODER_COUNTS_PER_METER, places=4)
+
     def test_stale_drive_command_stops_motor(self):
         motor = FakeMotor()
         current_time = 0.0

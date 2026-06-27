@@ -14,6 +14,7 @@ import { renderVoice } from './voice.js';
 import { renderCost } from './cost.js';
 import { updateVoiceTimeline } from './voice-timeline.js';
 import { updateVoiceTurnStats } from './voice-turn-stats.js';
+import { updatePathHistory } from './path-history.js';
 
 const HISTORY_LENGTH = 48;
 
@@ -77,6 +78,7 @@ function render(snapshot) {
   renderVoice(snapshot, sources);
   renderCost(snapshot);
   renderSensors(snapshot, sources);
+  updatePathHistory(snapshot);
   updateVoiceTimeline((snapshot.voice || {}).timeline);
   updateVoiceTurnStats((snapshot.voice || {}).timeline);
   renderFaceOverlay(snapshot, sources);

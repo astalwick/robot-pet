@@ -139,6 +139,14 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("EventSource", body)
         self.assertIn("imu.yaw_degrees", body)
 
+    async def test_static_path_history_js_is_served(self):
+        async with self.client.get("/static/path-history.js") as resp:
+            self.assertEqual(resp.status, 200)
+            body = await resp.text()
+
+        self.assertIn("updatePathHistory", body)
+        self.assertIn("resetPathHistory", body)
+
     async def test_events_uses_sse_content_type(self):
         async with self.client.get("/events") as resp:
             try:
@@ -633,12 +641,30 @@ class DashboardJsTest(unittest.TestCase):
         self.dom_js = self._module("dom.js")
         self.logs_js = self._module("logs.js")
         self.main_js = self._module("main.js")
+        self.path_history_js = self._module("path-history.js")
         self.dashboard_html = (static_dir / "index.html").read_text()
         self.dashboard_css = (static_dir / "dashboard.css").read_text()
 
     def test_index_loads_main_module(self):
         self.assertIn('type="module"', self.dashboard_html)
         self.assertIn("/static/main.js", self.dashboard_html)
+
+    def test_path_history_is_initialized_and_fed_snapshots(self):
+        self.assertIn("initPathHistory", self.main_js)
+        self.assertIn("updatePathHistory(snapshot)", self.telemetry_js)
+
+    def test_path_section_has_canvas_and_controls(self):
+        self.assertIn('id="path-canvas"', self.dashboard_html)
+        self.assertIn('id="path-reset"', self.dashboard_html)
+        self.assertIn('id="path-maximize"', self.dashboard_html)
+        self.assertIn("Estimated Local Path", self.dashboard_html)
+
+    def test_path_history_dead_reckons_with_yaw(self):
+        self.assertIn("Math.cos(yawRad)", self.path_history_js)
+        self.assertIn("Math.sin(yawRad)", self.path_history_js)
+        self.assertIn("awaiting odometry", self.path_history_js)
+        self.assertIn("awaiting imu", self.path_history_js)
+        self.assertIn("stale telemetry", self.path_history_js)
 
     def test_camera_url_uses_window_location_hostname(self):
         self.assertIn("window.location.hostname", self.camera_js)

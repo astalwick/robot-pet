@@ -241,6 +241,44 @@ main {
   box-shadow: 0 0 0 1px var(--border), 0 10px 30px rgba(0, 0, 0, 0.6);
 }
 
+#path-section.maximized {
+  position: fixed;
+  inset: 1rem;
+  z-index: 100;
+  margin: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  box-shadow: 0 0 0 1px var(--border), 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+#path-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+#path-toolbar h2 { flex: 1; }
+#path-status { font-size: 0.75rem; }
+
+#path-canvas-wrap {
+  position: relative;
+  min-height: 0;
+  background: #020a10;
+  border: 1px solid #1a2a3a;
+  overflow: hidden;
+}
+
+#path-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#imu-panel #path-maximize {
+  margin-top: 0.5rem;
+}
+
 .voice-timeline-toggle {
   display: none;
 }

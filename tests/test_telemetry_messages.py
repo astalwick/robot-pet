@@ -23,6 +23,7 @@ from telemetry.messages import (
     pi_battery_message,
     pi_battery_status,
     pi_battery_update,
+    odometry_message,
     robot_motion_update,
     stale_label,
     sensors_update,
@@ -351,6 +352,15 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["link_loop"], {"command_loop_hz": 20.0})
         self.assertEqual(message["drive_status"], {"motion_power_requested": True})
         self.assertNotIn("drive_tuning", message)
+
+    def test_robot_motion_update_carries_odometry(self):
+        message = robot_motion_update(
+            wheels={},
+            motor_battery={},
+            odometry=odometry_message(left_distance_m=1.23, right_distance_m=1.21),
+        )
+
+        self.assertEqual(message["odometry"], {"left_distance_m": 1.23, "right_distance_m": 1.21})
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)

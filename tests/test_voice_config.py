@@ -7,7 +7,14 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from config.voice import VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
+from config.voice import (
+    MAX_AUDIO_GAIN,
+    MIN_AUDIO_GAIN,
+    VoiceConfig,
+    VoiceConfigError,
+    load_voice_config,
+    save_voice_config,
+)
 
 
 class VoiceConfigTest(unittest.TestCase):
@@ -65,8 +72,8 @@ class VoiceConfigTest(unittest.TestCase):
             VoiceConfig.from_dict({"output_channels": 2})
 
     def test_audio_gains_are_clamped(self):
-        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).input_gain, 0.0)
-        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).output_gain, 3.0)
+        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).input_gain, MIN_AUDIO_GAIN)
+        self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).output_gain, MAX_AUDIO_GAIN)
 
     def test_openai_model_must_be_known(self):
         self.assertEqual(VoiceConfig.from_dict({"openai_model": "gpt-5.5"}).openai_model, "gpt-5.5")

@@ -7,6 +7,8 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import (
+    MAX_POLL_RATE_HZ,
+    MIN_POLL_RATE_HZ,
     SafetyConfig,
     SensorEntry,
     SensorsConfig,
@@ -67,8 +69,8 @@ class SensorsConfigTest(unittest.TestCase):
         too_low = SensorsConfig.from_dict({"poll_rate_hz": 0.0})
         too_high = SensorsConfig.from_dict({"poll_rate_hz": 100.0})
 
-        self.assertEqual(too_low.poll_rate_hz, 0.5)
-        self.assertEqual(too_high.poll_rate_hz, 20.0)
+        self.assertEqual(too_low.poll_rate_hz, MIN_POLL_RATE_HZ)
+        self.assertEqual(too_high.poll_rate_hz, MAX_POLL_RATE_HZ)
 
     def test_unknown_kind_raises(self):
         with self.assertRaises(TypeError):

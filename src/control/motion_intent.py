@@ -66,6 +66,8 @@ TURN_APPROACH_DEGREES = 10.0
 TURN_APPROACH_ANGULAR_Z = TURN_ANGULAR_Z / 2
 TURN_CORRECTION_TOLERANCE_DEGREES = 2.0
 TURN_MAX_CORRECTIONS = 2
+TURN_CORRECTION_MIN_SECONDS = 0.05
+TURN_CORRECTION_MAX_SECONDS = 0.4
 TURN_MIN_DEGREES = 1
 TURN_MAX_DEGREES = 360
 
@@ -141,7 +143,10 @@ class _ActiveIntent:
     turn_phase: str = "turning"
     turn_corrections: int = 0
     turn_correction_back: bool = False
+    turn_stop_at: float | None = None
     turn_best_error: float | None = None
+    turn_yaw_rate_degrees_per_second: float | None = None
+    turn_command_angular_z: float | None = None
     last_yaw_sample_time: float | None = None
 
 
@@ -167,7 +172,10 @@ class MotionIntentExecutor:
             self._active.turn_phase = "turning"
             self._active.turn_corrections = 0
             self._active.turn_correction_back = False
+            self._active.turn_stop_at = None
             self._active.turn_best_error = None
+            self._active.turn_yaw_rate_degrees_per_second = None
+            self._active.turn_command_angular_z = None
             self._active.last_yaw_sample_time = None
 
     def active_tool(self) -> str | None:
@@ -331,6 +339,10 @@ class MotionIntentExecutor:
             if (
                 abs(error) <= TURN_CORRECTION_TOLERANCE_DEGREES
                 or self._active.turn_corrections >= TURN_MAX_CORRECTIONS
+                or (
+                    self._active.turn_corrections > 0
+                    and self._active.turn_correction_back != (error < 0)
+                )
             ):
                 self._active = None
                 return IntentTick(command=None, finished=True, result="completed")
@@ -340,13 +352,20 @@ class MotionIntentExecutor:
             self._active.turn_best_error = abs(error)
             self._active.turn_progress_at = now
 
+        angular_z = self._turn_angular_z(correcting_back=error < 0)
+        if self._active.turn_phase == "correcting" or error <= TURN_APPROACH_DEGREES:
+            angular_z = TURN_APPROACH_ANGULAR_Z if angular_z > 0 else -TURN_APPROACH_ANGULAR_Z
+        self._set_turn_command(angular_z)
+
+        timed_stop = self._active.turn_stop_at is not None and now >= self._active.turn_stop_at
         if self._active.turn_phase == "correcting":
             stop = (
                 abs(error) <= TURN_CORRECTION_TOLERANCE_DEGREES
                 or self._active.turn_correction_back != (error < 0)
+                or timed_stop
             )
         else:
-            stop = magnitude >= target_degrees
+            stop = magnitude >= target_degrees or timed_stop
         if stop:
             self._active.turn_phase = "checking"
             return IntentTick(
@@ -360,9 +379,12 @@ class MotionIntentExecutor:
             self._active = None
             return IntentTick(command=None, finished=True, result="turn_stalled")
 
-        angular_z = self._turn_angular_z(correcting_back=error < 0)
-        if self._active.turn_phase == "correcting" or error <= TURN_APPROACH_DEGREES:
-            angular_z = TURN_APPROACH_ANGULAR_Z if angular_z > 0 else -TURN_APPROACH_ANGULAR_Z
+        if fresh_yaw or self._active.turn_stop_at is None:
+            self._active.turn_stop_at = self._turn_stop_at(
+                abs(error),
+                now,
+                allow_partial_pulse=self._active.turn_phase == "correcting",
+            )
         return IntentTick(
             command=MotionCommand(linear_x=0.0, angular_z=angular_z),
             finished=False,
@@ -374,16 +396,44 @@ class MotionIntentExecutor:
     ) -> bool:
         if yaw_sample_time is not None and yaw_sample_time == self._active.last_yaw_sample_time:
             return False
+        sample_time = yaw_sample_time if yaw_sample_time is not None else now
         if self._active.last_yaw is None:
             self._active.last_yaw = yaw_degrees
-            self._active.last_yaw_sample_time = yaw_sample_time
+            self._active.last_yaw_sample_time = sample_time
             self._active.turn_progress_at = now
             return True
 
-        self._active.turned_degrees += _yaw_delta(yaw_degrees, self._active.last_yaw)
+        delta = _yaw_delta(yaw_degrees, self._active.last_yaw)
+        previous_time = self._active.last_yaw_sample_time
+        if previous_time is not None and sample_time > previous_time:
+            self._active.turn_yaw_rate_degrees_per_second = abs(delta) / (sample_time - previous_time)
+        self._active.turned_degrees += delta
         self._active.last_yaw = yaw_degrees
-        self._active.last_yaw_sample_time = yaw_sample_time
+        self._active.last_yaw_sample_time = sample_time
         return True
+
+    def _turn_stop_at(self, error: float, now: float, allow_partial_pulse: bool) -> float | None:
+        rate = self._active.turn_yaw_rate_degrees_per_second
+        if rate is None or rate <= 0.0:
+            return None
+        duration = error / rate
+        if duration > TURN_CORRECTION_MAX_SECONDS and not allow_partial_pulse:
+            return None
+        duration = max(TURN_CORRECTION_MIN_SECONDS, min(TURN_CORRECTION_MAX_SECONDS, duration))
+        return now + duration
+
+    def _set_turn_command(self, angular_z: float) -> None:
+        if self._active.turn_command_angular_z == angular_z:
+            return
+        same_speed = (
+            self._active.turn_command_angular_z is not None
+            and abs(self._active.turn_command_angular_z) == abs(angular_z)
+        )
+        self._active.turn_command_angular_z = angular_z
+        # Direction flips can reuse the latest yaw rate; speed changes need a fresh sample.
+        if not same_speed:
+            self._active.turn_yaw_rate_degrees_per_second = None
+        self._active.turn_stop_at = None
 
     def _turn_stalled(self, magnitude: float, error: float, now: float) -> bool:
         if self._active.turn_phase == "correcting":

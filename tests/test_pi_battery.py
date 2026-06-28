@@ -92,7 +92,7 @@ class PiBatteryServiceTest(unittest.TestCase):
 
     def test_tick_marks_low_at_warning_voltage(self):
         bus = FakeBus()
-        set_u16(bus, 0x20, 13300)
+        set_u16(bus, 0x20, round(PiBatteryConfig().warning_voltage * 1000))
         published = []
         shutdown_commands = []
         service = PiBatteryService(
@@ -110,7 +110,7 @@ class PiBatteryServiceTest(unittest.TestCase):
 
     def test_tick_requests_shutdown_at_shutdown_voltage(self):
         bus = FakeBus()
-        set_u16(bus, 0x20, 13000)
+        set_u16(bus, 0x20, round(PiBatteryConfig().shutdown_voltage * 1000))
         published = []
         shutdown_commands = []
         service = PiBatteryService(

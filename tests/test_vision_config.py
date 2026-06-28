@@ -6,7 +6,20 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from config.vision import VisionConfig, VisionConfigError, load_vision_config, save_vision_config
+from config.vision import (
+    MAX_DETECTION_MAX_WIDTH,
+    MAX_DETECTION_RATE_HZ,
+    MAX_HAAR_MIN_SIZE,
+    MAX_HAAR_SCALE_FACTOR,
+    MIN_DETECTION_MAX_WIDTH,
+    MIN_DETECTION_RATE_HZ,
+    MIN_HAAR_MIN_SIZE,
+    MIN_HAAR_SCALE_FACTOR,
+    VisionConfig,
+    VisionConfigError,
+    load_vision_config,
+    save_vision_config,
+)
 
 
 class VisionConfigTest(unittest.TestCase):
@@ -60,8 +73,8 @@ class VisionConfigTest(unittest.TestCase):
         too_low = VisionConfig.from_dict({"detection_rate_hz": 0.0})
         too_high = VisionConfig.from_dict({"detection_rate_hz": 100.0})
 
-        self.assertEqual(too_low.detection_rate_hz, 0.2)
-        self.assertEqual(too_high.detection_rate_hz, 10.0)
+        self.assertEqual(too_low.detection_rate_hz, MIN_DETECTION_RATE_HZ)
+        self.assertEqual(too_high.detection_rate_hz, MAX_DETECTION_RATE_HZ)
 
     def test_detector_tuning_values_are_clamped(self):
         too_low = VisionConfig.from_dict(
@@ -79,12 +92,12 @@ class VisionConfigTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(too_low.detection_max_width, 160)
-        self.assertEqual(too_low.haar_scale_factor, 1.05)
-        self.assertEqual(too_low.haar_min_size, 8)
-        self.assertEqual(too_high.detection_max_width, 1280)
-        self.assertEqual(too_high.haar_scale_factor, 1.5)
-        self.assertEqual(too_high.haar_min_size, 240)
+        self.assertEqual(too_low.detection_max_width, MIN_DETECTION_MAX_WIDTH)
+        self.assertEqual(too_low.haar_scale_factor, MIN_HAAR_SCALE_FACTOR)
+        self.assertEqual(too_low.haar_min_size, MIN_HAAR_MIN_SIZE)
+        self.assertEqual(too_high.detection_max_width, MAX_DETECTION_MAX_WIDTH)
+        self.assertEqual(too_high.haar_scale_factor, MAX_HAAR_SCALE_FACTOR)
+        self.assertEqual(too_high.haar_min_size, MAX_HAAR_MIN_SIZE)
 
     def test_enabled_is_parsed_as_bool(self):
         truthy = VisionConfig.from_dict({"enabled": 1})

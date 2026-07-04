@@ -178,6 +178,39 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_start_passes_wake_audio_to_scribe_streamer(self):
+        class FakeAudio:
+            def mic_frames(self, _stop_event):
+                return object()
+
+        wake_frames = [b"\x01\x02", b"\x03\x04"]
+        session = VoiceSession(
+            VoiceConfig(),
+            "test-elevenlabs-key",
+            object(),
+            lambda _update: None,
+            FakeAudio(),
+            personalities=CARD_MAP,
+            wake_audio=wake_frames,
+        )
+
+        async def run():
+            async def fake_scribe_streamer(*_args, **kwargs):
+                self.assertEqual(kwargs["wake_audio"], wake_frames)
+                await session.stop_event.wait()
+
+            async def fake_handle_scribe_events(*_args, **_kwargs):
+                await session.stop_event.wait()
+
+            session.scribe_streamer = fake_scribe_streamer
+            with mock.patch("voice.session.handle_scribe_events", fake_handle_scribe_events):
+                await session.start()
+                await session.stop()
+
+        import asyncio
+
+        asyncio.run(run())
+
 
 class AssistantToolsTest(unittest.TestCase):
     def test_assistant_tools(self):

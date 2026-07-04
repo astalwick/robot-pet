@@ -101,6 +101,7 @@ async def stream_audio_to_scribe(
     on_status: Callable[[dict[str, object]], None] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
     vad_silence_threshold_secs: float = SCRIBE_VAD_SILENCE_THRESHOLD_SECS,
+    wake_audio: list[bytes] | None = None,
 ) -> None:
     """Drain local mic audio for the whole active session, opening a Scribe websocket
     only while there is real speech to upload.
@@ -109,6 +110,10 @@ async def stream_audio_to_scribe(
     upload gate run every chunk regardless of socket state. The websocket is opened on
     session start (pre-open), reopened on speech, and closed when an utterance has been
     committed (or timed out) and the brief hold-open grace expires.
+
+    ``wake_audio`` is mic audio buffered around the wake word, so speech that ran
+    straight through "Hey Bloop" reaches Scribe. It seeds the pre-roll and is
+    uploaded once, ahead of the first live speech.
     """
     import websockets
 
@@ -277,7 +282,9 @@ async def stream_audio_to_scribe(
                 last_activity_log_at = now
             if preroll_frames is None:
                 preroll_frames = max(1, round(SCRIBE_PREROLL_SECS / max(chunk_secs, 1e-6)))
-                pre_roll = deque(maxlen=preroll_frames)
+                # Seed with wake audio, widening the window so it survives until the
+                # socket is ready; after the first flush it shrinks back to normal.
+                pre_roll = deque(wake_audio or [], maxlen=preroll_frames + len(wake_audio or []))
             pre_roll.append(chunk)
 
             if not preopen_started:
@@ -305,6 +312,8 @@ async def stream_audio_to_scribe(
                     if state != SCRIBE_UPLOADING:
                         link.got_commit = False
                         flushed = all([await send_chunk(buffered, silent=False) for buffered in list(pre_roll)])
+                        if flushed and pre_roll.maxlen != preroll_frames:
+                            pre_roll = deque(pre_roll, maxlen=preroll_frames)
                         set_state(SCRIBE_UPLOADING if flushed else SCRIBE_RECONNECTING)
                     elif not await send_chunk(chunk, silent=False):
                         set_state(SCRIBE_RECONNECTING)

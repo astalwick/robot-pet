@@ -17,7 +17,7 @@ from typing import Any
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
 from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_motion_intent
-from drivers.respeaker import WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
+from drivers.respeaker import MIC_BLOCKSIZE, WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import (
@@ -50,6 +50,7 @@ TIMELINE_MAX_SIGNAL_EVENTS = 100
 TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
+WAKE_BUFFER_SECS = 2.0
 DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
 FACE_ME_MOTION_TIMEOUT_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
@@ -219,6 +220,7 @@ class RobotVoiceService:
         self.active_config: VoiceConfig | None = None
         self._mode: str | None = None
         self._wake_event = asyncio.Event()
+        self._wake_audio: list[bytes] = []
         self._end_session_event = asyncio.Event()
         self._idle_started_at: float | None = None
         self.status: dict[str, object] = {
@@ -563,6 +565,9 @@ class RobotVoiceService:
         self._idle_started_at = time.monotonic()
         self._wake_event.clear()
         self._end_session_event.clear()
+        # Consume-and-clear so a later talk_now session doesn't replay old wake audio.
+        wake_audio = self._wake_audio
+        self._wake_audio = []
         self.publish(config, status="starting", assistant_speaking=False, last_error=None)
         motion_socket = self.motion_intent_socket
         log.info("voice motion intent socket: %s", motion_socket)
@@ -588,6 +593,7 @@ class RobotVoiceService:
             personalities=self.personalities,
             profile_every=self.profile_every,
             usage=self.usage,
+            wake_audio=wake_audio,
         )
         if self.selected_personality is not None:
             self.session.set_personality(self.selected_personality)
@@ -692,11 +698,13 @@ class RobotVoiceService:
         if audio is None or detector is None or stop_event is None:
             return
 
+        wake_buffer: deque[bytes] = deque(maxlen=int(WAKE_BUFFER_SECS * config.sample_rate / MIC_BLOCKSIZE))
         async for frame in audio.mic_frames(
             stop_event,
             queue_size=WAKE_MIC_QUEUE_SIZE,
             warn_on_drop=False,
         ):
+            wake_buffer.append(frame)
             if self._mode != VOICE_ARMED:
                 continue
             started = time.perf_counter()
@@ -723,6 +731,7 @@ class RobotVoiceService:
                 continue
             # Activate first so the session (and Scribe pre-open) come up behind the
             # chime, hiding the connect latency. The orchestrator runs in its own task.
+            self._wake_audio = list(wake_buffer)
             self._wake_event.set()
             try:
                 await audio.play_wav(config.wake_chime_path)

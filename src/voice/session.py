@@ -54,6 +54,7 @@ class VoiceSession:
         robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
         face_me_caller: Callable[[], dict[str, Any]] | None = None,
         speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+        wake_audio: list[bytes] | None = None,
     ) -> None:
         self.config = config
         self.elevenlabs_api_key = elevenlabs_api_key
@@ -68,6 +69,7 @@ class VoiceSession:
         self.robot_inspection_caller = robot_inspection_caller
         self.face_me_caller = face_me_caller
         self.speaker_direction_caller = speaker_direction_caller
+        self.wake_audio = wake_audio
         self.profile_every = profile_every
         self.usage = usage if usage is not None else UsageTotals()
         self.stop_event = asyncio.Event()
@@ -140,6 +142,7 @@ class VoiceSession:
                     on_status=self.status_callback,
                     on_event=self.event_callback,
                     vad_silence_threshold_secs=self.config.vad_silence_threshold_secs,
+                    wake_audio=self.wake_audio,
                 )
             ),
             asyncio.create_task(

@@ -336,6 +336,41 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(captured["personalities"], cards)
 
+    async def test_activate_session_consumes_wake_audio(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.active_config = service_config()
+        service.audio = mock.Mock()
+        service.audio.stop_io = mock.AsyncMock()
+        wake_frames = [b"\x01" * 2560, b"\x02" * 2560]
+        service._wake_audio = wake_frames
+
+        captured = {}
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                captured["wake_audio"] = kwargs["wake_audio"]
+                self.history = mock.Mock()
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+        openai = types.SimpleNamespace(AsyncOpenAI=lambda api_key: mock.Mock())
+        with (
+            mock.patch.dict(sys.modules, {"openai": openai}),
+            mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "eleven", "OPENAI_API_KEY": "openai"}),
+            mock.patch("robot_voice.VoiceSession", FakeSession),
+            mock.patch("robot_voice.publish_message", return_value=True),
+        ):
+            self.assertTrue(await service._activate_session())
+            await service.stop_all()
+
+        self.assertEqual(captured["wake_audio"], wake_frames)
+        # A later talk_now-triggered session must not replay this audio.
+        self.assertEqual(service._wake_audio, [])
+
     async def test_sample_timeline_zeros_stale_playback_rms(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
         levels = AudioLevels(mic_peak=321, playback_rms=900, playback_at=0.0)

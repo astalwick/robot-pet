@@ -259,6 +259,7 @@ LOUD = (20480).to_bytes(2, "little") * SAMPLES  # rms 20480, well above the 100 
 SOFT = (50).to_bytes(2, "little") * SAMPLES  # rms 50, below the gate but non-silent
 QUIET = b"\x00\x00" * SAMPLES  # rms 0
 CHUNK_SECS = SAMPLES / 16000
+WAKE = (300).to_bytes(2, "little") * SAMPLES  # distinct payload standing in for buffered wake audio
 
 STOP = object()
 FAIL = object()
@@ -362,7 +363,7 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
             events.append(self.scribe_events.get_nowait())
         return events
 
-    def start(self, connector, vad_silence_threshold_secs=None, **patches):
+    def start(self, connector, vad_silence_threshold_secs=None, wake_audio=None, **patches):
         fake_websockets = types.SimpleNamespace(connect=connector)
         defaults = dict(MIC_SCRIBE_GATE_HOLD_SECS=0, SCRIBE_RECONNECT_BASE_SECS=0)
         defaults.update(patches)
@@ -375,6 +376,8 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         streamer_kwargs = {}
         if vad_silence_threshold_secs is not None:
             streamer_kwargs["vad_silence_threshold_secs"] = vad_silence_threshold_secs
+        if wake_audio is not None:
+            streamer_kwargs["wake_audio"] = wake_audio
         return asyncio.create_task(
             stream_audio_to_scribe(
                 self._chunks(),
@@ -462,6 +465,60 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(socket.sent), 4)
         self.assertEqual(decode_payload(socket.sent[0]), SOFT)
         self.assertEqual(decode_payload(socket.sent[-1]), LOUD)
+
+    async def test_wake_audio_uploaded_before_live_audio(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]), wake_audio=[WAKE], SCRIBE_PREROLL_SECS=0.1)
+        self.push(SOFT)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(len(socket.sent), 3)
+        self.assertEqual(decode_payload(socket.sent[0]), WAKE)
+        self.assertEqual(decode_payload(socket.sent[-1]), LOUD)
+
+    async def test_wake_audio_survives_a_small_preroll_window(self):
+        # Preroll window is 2 frames but wake audio is 3: the seeded frames must not
+        # be evicted while the socket connects.
+        socket = FakeScribe()
+        task = self.start(Connector([socket]), wake_audio=[WAKE, WAKE, WAKE], SCRIBE_PREROLL_SECS=0.04)
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertEqual(len(socket.sent), 5)
+        self.assertEqual([decode_payload(message) for message in socket.sent[:3]], [WAKE, WAKE, WAKE])
+
+    async def test_wake_audio_uploaded_only_once(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            wake_audio=[WAKE],
+            SCRIBE_PREROLL_SECS=0.04,
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.0,
+            SCRIBE_COMMIT_TIMEOUT_SECS=10.0,
+            SCRIBE_HOLD_OPEN_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        socket.deliver(committed_message("first utterance"))
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        wake_sends = [message for message in socket.sent if decode_payload(message) == WAKE]
+        self.assertEqual(len(wake_sends), 1)
 
     async def test_usage_counts_only_sent_bytes(self):
         socket = FakeScribe()

@@ -306,6 +306,39 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
                 with suppress(asyncio.CancelledError):
                     await loop_task
 
+    async def test_wake_snapshots_recent_audio(self):
+        service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
+        service._mode = "armed"
+        service._detector = mock.Mock()
+        service._detector.check.side_effect = [False, False, True]
+        service._detector.last_score = 0.9
+        service._detector.fire_count = 1
+        service._detector.last_fire_at = 0.0
+        service._io_stop_event = asyncio.Event()
+
+        frames = [b"\x01" * 2560, b"\x02" * 2560, b"\x03" * 2560]
+
+        async def fake_mic_frames(stop_event, queue_size=10, warn_on_drop=False):
+            for frame in frames:
+                yield frame
+            await asyncio.sleep(3600)
+
+        audio = mock.Mock()
+        audio.mic_frames = fake_mic_frames
+        audio.play_wav = mock.AsyncMock()
+        service.audio = audio
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "x", "ELEVENLABS_API_KEY": "y"}):
+            with mock.patch("robot_voice.publish_message", return_value=True):
+                loop_task = asyncio.create_task(service._run_wake_loop(VoiceConfig()))
+                await asyncio.sleep(0.05)
+                loop_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await loop_task
+
+        self.assertTrue(service._wake_event.is_set())
+        self.assertEqual(service._wake_audio, frames)
+
     async def test_credentialed_wake_chime_failure_is_published(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service._mode = "armed"

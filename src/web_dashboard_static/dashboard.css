@@ -348,6 +348,34 @@ main {
   z-index: 2;
 }
 
+#voice-turn-stats-list {
+  margin-top: 0.4rem;
+}
+
+#model-frames-panel {
+  margin-top: 0.8rem;
+}
+
+#model-frames-panel h3 {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+.model-frames-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.model-frames-grid img {
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #000;
+}
+
 #voice-timeline-hover.hidden {
   display: none;
 }

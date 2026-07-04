@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 HALF_FOV_H_DEGREES = 51.0
 ROBOT_HALF_WIDTH_M = 0.166
 CORRIDOR_DISTANCES_M = (0.5, 1.0)
+SENSED_CORRIDOR_MIN_M = 0.15
 
 RULER_TICK_DEGREES = range(-50, 51, 10)
 RULER_LABELS = {20: "L20", 40: "L40", -20: "R20", -40: "R40"}
@@ -14,6 +16,7 @@ RULER_LABELS = {20: "L20", 40: "L40", -20: "R20", -40: "R40"}
 CROSSHAIR_COLOR = (255, 255, 255)
 RULER_COLOR = (120, 255, 120)
 CORRIDOR_COLORS = ((0, 220, 255), (0, 255, 255))
+SENSED_CORRIDOR_COLOR = (0, 120, 255)
 LINE_THICKNESS = 1
 FONT = 0
 FONT_SCALE = 0.45
@@ -32,7 +35,30 @@ def _corridor_half_angle(distance_m: float) -> float:
     return math.degrees(math.atan(ROBOT_HALF_WIDTH_M / distance_m))
 
 
-def annotate_snapshot(jpeg_bytes: bytes) -> bytes:
+def nearest_forward_clearance_m(forward_clearances_m: dict[str, float | None] | None) -> float | None:
+    if not forward_clearances_m:
+        return None
+    values = [value for value in forward_clearances_m.values() if isinstance(value, (int, float))]
+    if not values:
+        return None
+    return min(values)
+
+
+def _forward_depth_banner(forward_clearances_m: dict[str, float | None]) -> str:
+    parts: list[str] = []
+    for label in ("left", "center", "right"):
+        value = forward_clearances_m.get(label)
+        if value is None:
+            parts.append("--")
+        else:
+            parts.append(f"{value:.2f}")
+    return f"fwd L {parts[0]}  C {parts[1]}  R {parts[2]}  m"
+
+
+def annotate_snapshot(
+    jpeg_bytes: bytes,
+    forward_clearances_m: dict[str, float | None] | None = None,
+) -> bytes:
     """Draw the navigation overlay on a camera JPEG and return new JPEG bytes."""
     try:
         import cv2
@@ -49,6 +75,18 @@ def annotate_snapshot(jpeg_bytes: bytes) -> bytes:
     center_x = angle_to_x(0.0, width)
 
     cv2.line(overlay, (center_x, 0), (center_x, height - 1), CROSSHAIR_COLOR, LINE_THICKNESS)
+
+    if forward_clearances_m:
+        cv2.putText(
+            overlay,
+            _forward_depth_banner(forward_clearances_m),
+            (8, 18),
+            FONT,
+            FONT_SCALE,
+            SENSED_CORRIDOR_COLOR,
+            FONT_THICKNESS,
+            cv2.LINE_AA,
+        )
 
     ruler_y = height - 12
     tick_top = ruler_y - 6
@@ -85,6 +123,24 @@ def annotate_snapshot(jpeg_bytes: bytes) -> bytes:
             FONT,
             FONT_SCALE,
             color,
+            FONT_THICKNESS,
+            cv2.LINE_AA,
+        )
+
+    sensed_distance = nearest_forward_clearance_m(forward_clearances_m)
+    if sensed_distance is not None and sensed_distance >= SENSED_CORRIDOR_MIN_M:
+        half_angle = _corridor_half_angle(sensed_distance)
+        for side in (-1.0, 1.0):
+            x = max(0, min(width - 1, angle_to_x(side * half_angle, width)))
+            cv2.line(overlay, (x, corridor_top), (x, height - 1), SENSED_CORRIDOR_COLOR, LINE_THICKNESS)
+        label_x = max(2, angle_to_x(half_angle, width) - 4)
+        cv2.putText(
+            overlay,
+            f"body @{sensed_distance:.2f}m SENSED",
+            (label_x, height - 20),
+            FONT,
+            FONT_SCALE,
+            SENSED_CORRIDOR_COLOR,
             FONT_THICKNESS,
             cv2.LINE_AA,
         )

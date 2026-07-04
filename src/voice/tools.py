@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from voice.camera_overlay import annotate_snapshot
+from voice.model_frames import save_model_frame
 from voice.assistant import (
     CHECK_HEALTH_TOOL,
     CHECK_HEALTH_TOOL_NAME,
@@ -45,6 +46,7 @@ from voice.assistant import (
     WEB_SEARCH_TOOL,
     check_health_snapshot,
     check_surroundings_snapshot,
+    forward_clearances,
 )
 
 
@@ -171,6 +173,19 @@ def _result(call: RobotToolCall, ok: bool, output: dict[str, Any]) -> RobotToolR
     return RobotToolResult(name=call.name, call_id=call.call_id, ok=ok, output=output)
 
 
+async def _forward_clearances(context: VoiceToolContext) -> dict[str, float | None] | None:
+    if context.robot_inspection_caller is None:
+        return None
+    try:
+        snapshot = await asyncio.to_thread(context.robot_inspection_caller)
+        surroundings = check_surroundings_snapshot(snapshot)
+        if surroundings.get("ok"):
+            return forward_clearances(surroundings)
+    except Exception:
+        return None
+    return None
+
+
 async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResult:
     """Turn in coarse steps, capturing a camera snapshot at each, and return them all.
 
@@ -193,7 +208,9 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
-        jpeg = annotate_snapshot(jpeg)
+        clearances = await _forward_clearances(context)
+        jpeg = annotate_snapshot(jpeg, clearances)
+        save_model_frame(jpeg, "scan")
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
         facing = round(heading)
         if facing == 0:
@@ -274,7 +291,9 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
-        jpeg = annotate_snapshot(jpeg)
+        clearances = await _forward_clearances(context)
+        jpeg = annotate_snapshot(jpeg, clearances)
+        save_model_frame(jpeg, "look")
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
         image_parts = [
             {"type": "input_text", "text": "Here is the current camera snapshot from the robot."},

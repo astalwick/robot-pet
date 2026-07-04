@@ -850,6 +850,135 @@ class MotionObservationTest(unittest.TestCase):
         self.assertIn("surroundings", tool_output)
         self.assertIn("Position:", follow_up[1]["content"])
 
+    def test_encoder_stall_gets_hint_action_log_and_caption(self):
+        from voice.agent_runner import ENCODER_STALL_HINT, GoalPose, _action_log_line, motion_camera_caption
+
+        line = _action_log_line(
+            "move",
+            {"distance_meters": 0.5},
+            {"ok": False, "error": "encoder_no_progress", "traveled_m": 0.10},
+        )
+        self.assertEqual(line, "moved 0.5 forward (stalled at 0.10)")
+        caption = motion_camera_caption("move", {"distance_meters": 0.5}, {"error": "encoder_no_progress", "traveled_m": 0.10})
+        self.assertTrue(caption.endswith("(stalled)."))
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Freed.")
+            return call("move", arguments={"distance_meters": 0.5})
+
+        def move(_name, **_):
+            return {"ok": False, "error": "encoder_no_progress", "traveled_m": 0.10}
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move forward.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=move,
+            )
+        )
+
+        tool_output = json.loads(openai.responses.calls[1]["input"][0]["output"])
+        self.assertEqual(tool_output["hint"], ENCODER_STALL_HINT)
+        pose = GoalPose()
+        pose.record_motion("move", {"distance_meters": 0.5}, tool_output)
+        self.assertIn("stalled at 0.10", pose.recent_actions[0])
+
+    def test_backward_encoder_stall_hint_advises_forward(self):
+        from voice.agent_runner import encoder_stall_hint
+
+        hint = encoder_stall_hint(-0.3)
+        self.assertIn("Drive forward straight", hint)
+        self.assertNotIn("Back up straight", hint)
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Freed.")
+            return call("move", arguments={"distance_meters": -0.3})
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Back up.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name, **_: {
+                    "ok": False,
+                    "error": "encoder_no_progress",
+                    "traveled_m": -0.08,
+                },
+            )
+        )
+
+        tool_output = json.loads(openai.responses.calls[1]["input"][0]["output"])
+        self.assertIn("Drive forward straight", tool_output["hint"])
+
+
+    def test_forward_sensor_sentence_in_motion_caption(self):
+        telemetry = {
+            "sources": {"sensors": {"stale": False}},
+            "sensors": {
+                "status": "polling",
+                "readings": [
+                    {
+                        "name": "front_left",
+                        "distance_mm": 420,
+                        "ok": True,
+                        "role": "forward",
+                        "stop_below_mm": 150,
+                    },
+                    {
+                        "name": "front_center",
+                        "distance_mm": 900,
+                        "ok": True,
+                        "role": "forward",
+                        "stop_below_mm": 150,
+                    },
+                    {"name": "front_right", "ok": False, "role": "forward", "stop_below_mm": 150},
+                ],
+            },
+        }
+
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Done.")
+            return call("move", arguments={"distance_meters": 0.5})
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move forward.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name, **_: {"ok": True, "result": "completed", "traveled_m": 0.5},
+                robot_inspection_caller=lambda: telemetry,
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+            )
+        )
+
+        image_message = next(
+            item for item in openai.responses.calls[1]["input"] if isinstance(item.get("content"), list)
+        )
+        caption = next(part["text"] for part in image_message["content"] if part.get("type") == "input_text")
+        self.assertIn("Forward sensors: left 0.42 meters, center 0.90 meters, right unavailable.", caption)
+
 
 if __name__ == "__main__":
     unittest.main()

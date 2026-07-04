@@ -263,8 +263,9 @@ SCAN_TOOL = {
         "Look around by sweeping a requested number of degrees and returning observations, "
         "then facing the starting direction again. Use this when you need to survey more "
         "than what is directly ahead. Each image includes a degree ruler along the bottom "
-        "(L20 means turn left 20 degrees; R20 means turn right with degrees=-20) and "
-        "corridor lines showing the robot body width at half a meter and one meter ahead."
+        "(L20 means turn left 20 degrees; R20 means turn right with degrees=-20), fixed "
+        "corridor lines at half a meter and one meter ahead, and an orange SENSED corridor "
+        "pair at the nearest forward sensor distance."
     ),
     "parameters": {
         "type": "object",
@@ -304,8 +305,9 @@ LOOK_TOOL = {
     "description": (
         "Look forward from the robot camera so you can answer questions about what the robot "
         "sees right now. The image includes a degree ruler along the bottom (L20 means turn "
-        "left 20 degrees; R20 means turn right with degrees=-20) and corridor lines showing "
-        "the robot body width at half a meter and one meter ahead."
+        "left 20 degrees; R20 means turn right with degrees=-20), fixed corridor lines at "
+        "half a meter and one meter ahead, and an orange SENSED corridor pair at the nearest "
+        "forward sensor distance."
     ),
     "parameters": {
         "type": "object",
@@ -411,6 +413,78 @@ def _motor_battery_available(snapshot: dict[str, Any], battery: object) -> bool:
     return _motion_value_available(snapshot, battery)
 
 
+def _interpret_sensor_reading(reading: dict[str, Any]) -> dict[str, Any]:
+    role = reading.get("role")
+    name = reading.get("name")
+    ok = reading.get("ok")
+    distance_mm = reading.get("distance_mm")
+
+    if role == "forward" and ok and distance_mm is not None:
+        stop_below_mm = reading.get("stop_below_mm")
+        tripped = stop_below_mm is not None and distance_mm < stop_below_mm
+        return {
+            "name": name,
+            "role": "forward",
+            "clearance_m": round(distance_mm / 1000, 2),
+            "stops_below_m": round(stop_below_mm / 1000, 2) if stop_below_mm is not None else None,
+            "tripped": tripped,
+        }
+
+    if role == "cliff" and ok and distance_mm is not None:
+        trip_above_mm = reading.get("trip_above_mm")
+        cliff_detected = trip_above_mm is not None and distance_mm > trip_above_mm
+        return {
+            "name": name,
+            "role": "cliff",
+            "status": "cliff_detected" if cliff_detected else "floor_normal",
+        }
+
+    result: dict[str, Any] = {
+        "name": name,
+        "distance_mm": distance_mm,
+        "ok": ok,
+    }
+    if role is not None:
+        result["role"] = role
+    return result
+
+
+def forward_clearances(surroundings: dict[str, Any] | None) -> dict[str, float | None]:
+    clearances = {"left": None, "center": None, "right": None}
+    if not surroundings or not surroundings.get("ok"):
+        return clearances
+    sensors = surroundings.get("sensors") or {}
+    for reading in sensors.get("readings") or []:
+        if not isinstance(reading, dict) or reading.get("role") != "forward":
+            continue
+        name = (reading.get("name") or "").lower()
+        clearance = reading.get("clearance_m")
+        if clearance is None or reading.get("ok") is False:
+            slot = None
+        else:
+            slot = float(clearance)
+        if "left" in name:
+            clearances["left"] = slot
+        elif "right" in name:
+            clearances["right"] = slot
+        elif "center" in name:
+            clearances["center"] = slot
+    return clearances
+
+
+def forward_sensors_sentence(clearances: dict[str, float | None]) -> str:
+    if not any(value is not None for value in clearances.values()):
+        return ""
+    parts: list[str] = []
+    for label in ("left", "center", "right"):
+        value = clearances.get(label)
+        if value is None:
+            parts.append(f"{label} unavailable")
+        else:
+            parts.append(f"{label} {value:.2f} meters")
+    return f" Forward sensors: {', '.join(parts)}."
+
+
 def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     if snapshot is None:
         return {"ok": False, "error": "telemetry_unavailable"}
@@ -482,11 +556,7 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "available": True,
             "status": sensors.get("status"),
             "readings": [
-                {
-                    "name": reading.get("name"),
-                    "distance_mm": reading.get("distance_mm"),
-                    "ok": reading.get("ok"),
-                }
+                _interpret_sensor_reading(reading)
                 for reading in sensors.get("readings") or []
                 if isinstance(reading, dict)
             ],

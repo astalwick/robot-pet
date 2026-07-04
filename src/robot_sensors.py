@@ -16,6 +16,8 @@ from config.sensors import (
     ImuEntry,
     SensorsConfig,
     SensorsConfigError,
+    cliff_trip_mm,
+    forward_stop_mm,
     load_sensors_config,
 )
 from drivers.imu import ImuDriver
@@ -53,6 +55,23 @@ def _imu_signature(imu: ImuEntry) -> tuple[Any, ...]:
         imu.zero_quaternion,
         imu.zero_gravity,
     )
+
+
+def _reading_dict_with_config(reading: Any, config: SensorsConfig) -> dict[str, Any]:
+    payload = reading_to_dict(reading)
+    entry = next((sensor for sensor in config.sensors if sensor.name == reading.name), None)
+    if entry is None or entry.role is None:
+        return payload
+    payload["role"] = entry.role
+    if entry.role == "forward":
+        stop_below_mm = forward_stop_mm(entry, config.safety)
+        if stop_below_mm is not None:
+            payload["stop_below_mm"] = stop_below_mm
+    if entry.role == "cliff":
+        trip_above_mm = cliff_trip_mm(entry, config.safety)
+        if trip_above_mm is not None:
+            payload["trip_above_mm"] = trip_above_mm
+    return payload
 
 
 class SensorsService:
@@ -120,7 +139,7 @@ class SensorsService:
             sensors_update(
                 enabled=True,
                 status="polling",
-                readings=[reading_to_dict(reading) for reading in readings],
+                readings=[_reading_dict_with_config(reading, self.config) for reading in readings],
                 poll_rate_hz=self.config.poll_rate_hz,
                 imu=imu,
                 now=now,

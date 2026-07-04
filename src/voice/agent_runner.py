@@ -40,8 +40,11 @@ from voice.assistant import (
     TURN_TOOL_NAME,
     VoiceState,
     check_surroundings_snapshot,
+    forward_clearances,
+    forward_sensors_sentence,
 )
 from voice.camera_overlay import annotate_snapshot
+from voice.model_frames import save_model_frame
 from voice.tools import (
     AGENT_TOOLS,
     RobotToolCall,
@@ -65,7 +68,7 @@ MAX_EMPTY_RESPONSES = 3
 # Runaway guards, not a budget the goal is expected to spend. The model never sees
 # them; the harness enforces them.
 MAX_STEPS = 60
-MAX_SECONDS = 120.0
+MAX_SECONDS = 420.0
 
 TIMEOUT_FINAL = "I ran out of time working on that, so I stopped for now."
 STEP_LIMIT_FINAL = "I tried a bunch of steps but could not finish that, so I stopped."
@@ -203,12 +206,27 @@ def _action_log_line(tool: str, arguments: dict[str, Any], output: dict[str, Any
             blocked_by = output.get("blocked_by")
             side = _blocked_side_label(blocked_by) if isinstance(blocked_by, str) else "blocked"
             return f"moved {abs(commanded):.1f} {direction} (blocked at {abs(traveled):.2f}, {side})"
-        if isinstance(traveled, (int, float)):
+        if output.get("error") == "encoder_no_progress" and isinstance(traveled, (int, float)):
+            return f"moved {abs(commanded):.1f} {direction} (stalled at {abs(traveled):.2f})"
+        if isinstance(traveled, (int, float)) and _motion_succeeded(output):
             move_dir = "forward" if traveled >= 0 else "backward"
             return f"moved {abs(traveled):.2f} {move_dir}"
         return None
 
     return None
+
+
+def encoder_stall_hint(distance_meters: float | None = None) -> str:
+    snag = (
+        "Your wheels stalled but no front sensor tripped. You are probably snagged on "
+        "something beside your body at wheel height, like a doorframe edge or a furniture leg."
+    )
+    if isinstance(distance_meters, (int, float)) and distance_meters < 0:
+        return f"{snag} Drive forward straight to free yourself. Do not turn in place while snagged."
+    return f"{snag} Back up straight to free yourself. Do not turn in place while snagged."
+
+
+ENCODER_STALL_HINT = encoder_stall_hint()
 
 
 def safety_blocked_hint(blocked_by: str) -> str | None:
@@ -232,6 +250,7 @@ def safety_blocked_hint(blocked_by: str) -> str | None:
 
 def motion_camera_caption(tool: str, arguments: dict[str, Any], output: dict[str, Any], pose_line: str = "") -> str:
     blocked = output.get("error") == "safety_blocked"
+    stalled = output.get("error") == "encoder_no_progress"
     if tool == MOVE_TOOL_NAME:
         traveled = output.get("traveled_m")
         if isinstance(traveled, (int, float)):
@@ -255,7 +274,7 @@ def motion_camera_caption(tool: str, arguments: dict[str, Any], output: dict[str
         action = "facing you"
     else:
         action = tool
-    caption = f"Camera view after {action}{' (blocked)' if blocked else ''}."
+    caption = f"Camera view after {action}{' (blocked)' if blocked else ' (stalled)' if stalled else ''}."
     if pose_line:
         caption = f"{caption} {pose_line}"
     return caption
@@ -268,6 +287,7 @@ async def _attach_goal_motion_observation(
     pose_text: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     enriched = dict(output)
+    surroundings: dict[str, Any] | None = None
     if context.robot_inspection_caller is not None:
         try:
             snapshot = await asyncio.to_thread(context.robot_inspection_caller)
@@ -283,17 +303,25 @@ async def _attach_goal_motion_observation(
             hint = safety_blocked_hint(blocked_by)
             if hint is not None:
                 enriched["hint"] = hint
+    elif enriched.get("error") == "encoder_no_progress":
+        distance = call.arguments.get("distance_meters") if call.name == MOVE_TOOL_NAME else None
+        enriched["hint"] = encoder_stall_hint(distance)
+
+    clearances = forward_clearances(surroundings)
+    depth_sentence = forward_sensors_sentence(clearances)
 
     image_parts = None
     if context.camera_snapshot_caller is not None:
         try:
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
-            jpeg = annotate_snapshot(jpeg)
+            caption = motion_camera_caption(call.name, call.arguments, enriched, pose_text) + depth_sentence
+            jpeg = annotate_snapshot(jpeg, clearances)
+            save_model_frame(jpeg, f"goal-{call.name}", caption)
             data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
             image_parts = [
                 {
                     "type": "input_text",
-                    "text": motion_camera_caption(call.name, call.arguments, enriched, pose_text),
+                    "text": caption,
                 },
                 {"type": "input_image", "image_url": data_url},
             ]

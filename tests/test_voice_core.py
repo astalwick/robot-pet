@@ -539,6 +539,42 @@ class AssistantStreamingTest(unittest.TestCase):
         self.assertEqual(result["vision"], {"available": False})
         self.assertNotIn("memory_used_mb", result["pi"])
 
+    def test_inspect_robot_snapshot_interprets_forward_and_cliff_readings(self):
+        result = inspect_robot_snapshot(
+            {
+                "sources": {"sensors": {"stale": False}},
+                "sensors": {
+                    "status": "polling",
+                    "readings": [
+                        {
+                            "name": "front_center",
+                            "distance_mm": 420,
+                            "ok": True,
+                            "role": "forward",
+                            "stop_below_mm": 150,
+                        },
+                        {
+                            "name": "cliff_left",
+                            "distance_mm": 72,
+                            "ok": True,
+                            "role": "cliff",
+                            "trip_above_mm": 160,
+                        },
+                        {"name": "debug_raw", "distance_mm": 55, "ok": True},
+                    ],
+                },
+            }
+        )
+
+        forward = result["sensors"]["readings"][0]
+        self.assertEqual(forward["clearance_m"], 0.42)
+        self.assertEqual(forward["stops_below_m"], 0.15)
+        self.assertFalse(forward["tripped"])
+        cliff = result["sensors"]["readings"][1]
+        self.assertEqual(cliff["status"], "floor_normal")
+        raw = result["sensors"]["readings"][2]
+        self.assertEqual(raw, {"name": "debug_raw", "distance_mm": 55, "ok": True})
+
     def test_inspect_robot_snapshot_reads_battery_and_drive_from_robot_motion(self):
         result = inspect_robot_snapshot(
             {

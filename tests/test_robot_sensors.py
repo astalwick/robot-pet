@@ -173,6 +173,32 @@ class SensorsServiceTest(unittest.TestCase):
         self.assertEqual(message["status"], "polling")
         self.assertEqual(message["readings"][0]["distance_mm"], 100)
 
+    def test_published_readings_include_role_and_thresholds(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "sensors.json")
+            write_config(
+                path,
+                {
+                    "enabled": True,
+                    "poll_rate_hz": 10,
+                    "sensors": [
+                        {"name": "cliff_left", "kind": "vl53l0x", "mux_channel": 0, "role": "cliff"},
+                        {"name": "front_center", "kind": "vl53l1x", "mux_channel": 1, "role": "forward"},
+                        {"name": "debug_raw", "kind": "vl53l0x", "mux_channel": 2},
+                    ],
+                },
+            )
+            service, published, _drivers, _imu_drivers = self._make_service(path)
+            bump_mtime(path)
+            service.tick()
+
+        readings = {item["name"]: item for item in published[-1]["readings"]}
+        self.assertEqual(readings["cliff_left"]["role"], "cliff")
+        self.assertEqual(readings["cliff_left"]["trip_above_mm"], 200)
+        self.assertEqual(readings["front_center"]["role"], "forward")
+        self.assertEqual(readings["front_center"]["stop_below_mm"], 150)
+        self.assertNotIn("role", readings["debug_raw"])
+
     def test_driver_recreated_when_sensor_list_changes(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sensors.json")

@@ -617,6 +617,46 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         return buffer
 
 
+    async def test_model_frames_list_returns_newest_first_with_captions(self):
+        import voice.model_frames as model_frames
+
+        frames_dir = Path(self.tmpdir.name) / "model-frames"
+        frames_dir.mkdir()
+        (frames_dir / "1000-look.jpg").write_bytes(b"one")
+        (frames_dir / "1000-look.txt").write_text("caption one", encoding="utf-8")
+        (frames_dir / "2000-scan.jpg").write_bytes(b"two")
+        with mock.patch.object(model_frames, "MODEL_FRAMES_DIR", frames_dir):
+            import robot_web_dashboard
+
+            with mock.patch.object(robot_web_dashboard.model_frames, "MODEL_FRAMES_DIR", frames_dir):
+                async with self.client.get("/api/model-frames") as resp:
+                    payload = await resp.json()
+
+        self.assertEqual(payload["frames"][0]["name"], "2000-scan.jpg")
+        self.assertEqual(payload["frames"][1]["name"], "1000-look.jpg")
+        self.assertEqual(payload["frames"][1]["caption"], "caption one")
+
+    async def test_model_frame_file_rejects_bad_names(self):
+        async with self.client.get("/model-frames/foo.txt") as resp:
+            self.assertEqual(resp.status, 404)
+
+    async def test_model_frame_file_serves_bytes(self):
+        import voice.model_frames as model_frames
+
+        frames_dir = Path(self.tmpdir.name) / "model-frames"
+        frames_dir.mkdir()
+        (frames_dir / "1234-look.jpg").write_bytes(b"jpeg-data")
+        with mock.patch.object(model_frames, "MODEL_FRAMES_DIR", frames_dir):
+            import robot_web_dashboard
+
+            with mock.patch.object(robot_web_dashboard.model_frames, "MODEL_FRAMES_DIR", frames_dir):
+                async with self.client.get("/model-frames/1234-look.jpg") as resp:
+                    self.assertEqual(resp.status, 200)
+                    self.assertEqual(resp.headers["Content-Type"], "image/jpeg")
+                    body = await resp.read()
+        self.assertEqual(body, b"jpeg-data")
+
+
 class DashboardJsTest(unittest.TestCase):
     """Verifies dashboard ES modules (camera hostname, redeploy, voice, etc.)."""
 

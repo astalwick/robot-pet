@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -63,6 +64,7 @@ from telemetry.paths import (
     DEFAULT_WEB_DASHBOARD_PORT,
 )
 from telemetry.socket_client import publish_message, send_voice_command, subscribe
+from voice import model_frames
 from voice.personality import load_personalities
 
 
@@ -842,6 +844,33 @@ async def voice_personalities_handler(request: web.Request) -> web.Response:
     return web.json_response({"personalities": sorted(load_personalities().keys())})
 
 
+MODEL_FRAME_NAME_RE = re.compile(r"^[0-9]+-[a-z0-9_-]+\.jpg$")
+
+
+async def model_frames_list_handler(request: web.Request) -> web.Response:
+    base_dir = model_frames.MODEL_FRAMES_DIR
+    if not base_dir.is_dir():
+        return web.json_response({"frames": []})
+    frames = []
+    for path in sorted(base_dir.glob("*.jpg"), key=lambda item: item.name, reverse=True)[: model_frames.MAX_FRAMES]:
+        caption_path = path.with_suffix(".txt")
+        caption = ""
+        if caption_path.is_file():
+            caption = caption_path.read_text(encoding="utf-8")
+        frames.append({"name": path.name, "t": path.stat().st_mtime, "caption": caption})
+    return web.json_response({"frames": frames})
+
+
+async def model_frame_file_handler(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    if MODEL_FRAME_NAME_RE.fullmatch(name) is None:
+        raise web.HTTPNotFound()
+    path = model_frames.MODEL_FRAMES_DIR / name
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Content-Type": "image/jpeg"})
+
+
 def build_app(state: WebDashboardState) -> web.Application:
     app = web.Application(middlewares=[no_cache_middleware])
     app["state"] = state
@@ -855,6 +884,8 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_post("/config/{name}", config_apply)
     app.router.add_post("/voice/command", voice_command_handler)
     app.router.add_get("/voice/personalities", voice_personalities_handler)
+    app.router.add_get("/api/model-frames", model_frames_list_handler)
+    app.router.add_get("/model-frames/{name}", model_frame_file_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
     return app
 

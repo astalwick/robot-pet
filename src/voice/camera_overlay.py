@@ -24,10 +24,16 @@ FONT_THICKNESS = 1
 
 
 def angle_to_x(theta_degrees: float, image_width: int) -> int:
-    """Map an angle left (+) or right (-) of center to a pixel column."""
+    """Map an angle left (+) or right (-) of center to a pixel column.
+
+    The lens is rectilinear, so pixel offset grows with tan(angle), not the
+    angle itself. Measured against real 40-degree turns: a linear ruler here
+    reads them as only about 32 degrees.
+    """
     center = image_width / 2
     half_span = image_width / 2
-    x = center - (theta_degrees / HALF_FOV_H_DEGREES) * half_span
+    scale = math.tan(math.radians(theta_degrees)) / math.tan(math.radians(HALF_FOV_H_DEGREES))
+    x = center - scale * half_span
     return int(round(x))
 
 

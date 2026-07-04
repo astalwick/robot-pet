@@ -34,6 +34,10 @@ class AngleToXTest(unittest.TestCase):
     def test_right_edge_maps_to_width(self):
         self.assertEqual(angle_to_x(-51.0, 640), 640)
 
+    def test_ruler_is_rectilinear(self):
+        # tan(20)/tan(51) of the half span, not 20/51 of it
+        self.assertEqual(angle_to_x(20.0, 640), 226)
+
     def test_positive_angle_is_left_of_center(self):
         left = angle_to_x(20.0, 640)
         center = angle_to_x(0.0, 640)

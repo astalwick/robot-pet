@@ -21,6 +21,7 @@ never the final or part of history. Only a response with no tool call is the fin
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -30,9 +31,13 @@ from typing import Any
 from lib.log import setup_logging
 from voice.assistant import (
     CONFIG_DIR,
+    FACE_ME_TOOL_NAME,
+    MOVE_TOOL_NAME,
     OPENAI_CREATE_RETRY_DELAY_SECS,
     SHARED_ROBOT_GUIDANCE,
+    TURN_TOOL_NAME,
     VoiceState,
+    check_surroundings_snapshot,
 )
 from voice.tools import (
     AGENT_TOOLS,
@@ -67,6 +72,95 @@ NUDGE_TEXT = (
     "You replied with no tool call and no words. Either call a tool to keep working, "
     "or say a short final sentence if you are done."
 )
+
+GOAL_MOTION_OBSERVATION_TOOLS = frozenset({MOVE_TOOL_NAME, TURN_TOOL_NAME, FACE_ME_TOOL_NAME})
+
+
+def safety_blocked_hint(blocked_by: str) -> str | None:
+    reason = blocked_by.lower()
+    if "cliff" in reason:
+        return "A cliff sensor tripped. Back away from the edge before anything else."
+    if "right" in reason:
+        return (
+            "You are blocked on the right side. Back up 0.2 to 0.3 meters to create "
+            "clearance before turning; turning in place will sweep your right corner into the obstacle."
+        )
+    if "left" in reason:
+        return (
+            "You are blocked on the left side. Back up 0.2 to 0.3 meters to create "
+            "clearance before turning; turning in place will sweep your left corner into the obstacle."
+        )
+    if "center" in reason:
+        return "Blocked straight ahead. Back up, then pick a direction with more clearance."
+    return None
+
+
+def motion_camera_caption(tool: str, arguments: dict[str, Any], output: dict[str, Any], pose_line: str = "") -> str:
+    blocked = output.get("error") == "safety_blocked"
+    if tool == MOVE_TOOL_NAME:
+        traveled = output.get("traveled_m")
+        if isinstance(traveled, (int, float)):
+            direction = "forward" if traveled >= 0 else "backward"
+            action = f"moving {abs(traveled):.2f} meters {direction}"
+        else:
+            distance = arguments.get("distance_meters")
+            if isinstance(distance, (int, float)):
+                direction = "forward" if distance >= 0 else "backward"
+                action = f"moving {abs(distance):.2f} meters {direction}"
+            else:
+                action = "moving"
+    elif tool == TURN_TOOL_NAME:
+        turn_degrees = output.get("measured_degrees", arguments.get("degrees"))
+        if isinstance(turn_degrees, (int, float)) and turn_degrees != 0:
+            side = "left" if turn_degrees > 0 else "right"
+            action = f"turning {abs(turn_degrees):.0f} degrees {side}"
+        else:
+            action = "turning"
+    elif tool == FACE_ME_TOOL_NAME:
+        action = "facing you"
+    else:
+        action = tool
+    caption = f"Camera view after {action}{' (blocked)' if blocked else ''}."
+    if pose_line:
+        caption = f"{caption} {pose_line}"
+    return caption
+
+
+async def _attach_goal_motion_observation(
+    call: RobotToolCall,
+    output: dict[str, Any],
+    context: VoiceToolContext,
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
+    enriched = dict(output)
+    if context.robot_inspection_caller is not None:
+        try:
+            snapshot = await asyncio.to_thread(context.robot_inspection_caller)
+            surroundings = check_surroundings_snapshot(snapshot)
+            if surroundings.get("ok"):
+                enriched["surroundings"] = surroundings
+        except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
+            log.warning("goal motion surroundings fetch failed: %s", exc)
+
+    if enriched.get("error") == "safety_blocked":
+        blocked_by = enriched.get("blocked_by")
+        if isinstance(blocked_by, str):
+            hint = safety_blocked_hint(blocked_by)
+            if hint is not None:
+                enriched["hint"] = hint
+
+    image_parts = None
+    if context.camera_snapshot_caller is not None:
+        try:
+            jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
+            data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+            image_parts = [
+                {"type": "input_text", "text": motion_camera_caption(call.name, call.arguments, enriched)},
+                {"type": "input_image", "image_url": data_url},
+            ]
+        except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
+            log.warning("goal motion camera fetch failed: %s", exc)
+
+    return enriched, image_parts
 
 
 AGENT_SYSTEM_PROMPT = (CONFIG_DIR / "agent_system_prompt.md").read_text().strip()
@@ -296,8 +390,15 @@ async def run_agent_goal(
                 return ""
             log.info("tool call %s args=%s ok=%s", call.name, call.arguments, result.ok)
 
+            output = dict(result.output)
+            image_parts = result.image_parts
+            if call.name in GOAL_MOTION_OBSERVATION_TOOLS:
+                output, motion_image = await _attach_goal_motion_observation(call, output, context)
+                if motion_image is not None:
+                    image_parts = motion_image
+
             input_items = [
-                {"type": "function_call_output", "call_id": call.call_id, "output": json.dumps(result.output)}
+                {"type": "function_call_output", "call_id": call.call_id, "output": json.dumps(output)}
             ]
             for extra in function_calls[1:]:
                 input_items.append(
@@ -307,8 +408,8 @@ async def run_agent_goal(
                         "output": json.dumps({"ok": False, "error": "only one tool runs per step"}),
                     }
                 )
-            if result.image_parts:
-                input_items.append({"role": "user", "content": result.image_parts})
+            if image_parts:
+                input_items.append({"role": "user", "content": image_parts})
 
         log.info("goal hit step limit (%d steps): %r", max_steps, goal)
         return await speak_final(STEP_LIMIT_FINAL)

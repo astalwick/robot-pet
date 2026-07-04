@@ -671,5 +671,95 @@ class GuardRailsTest(unittest.TestCase):
         self.assertEqual(openai.responses.calls, [])
 
 
+class MotionObservationTest(unittest.TestCase):
+    TELEMETRY_SNAPSHOT = {
+        "sources": {
+            "gamepad_teleop": {"stale": False},
+            "sensors": {"stale": False},
+        },
+        "sensors": {
+            "status": "ok",
+            "readings": [{"name": "front_right", "distance_mm": 120, "ok": True}],
+        },
+    }
+
+    def test_move_attaches_surroundings_hint_and_camera(self):
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Backed up.")
+            return call("move", arguments={"distance_meters": 0.5})
+
+        def move(_name, **_):
+            return {
+                "ok": False,
+                "error": "safety_blocked",
+                "traveled_m": 0.31,
+                "blocked_by": "front_right_obstacle",
+            }
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move forward.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=move,
+                robot_inspection_caller=lambda: self.TELEMETRY_SNAPSHOT,
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+            )
+        )
+
+        follow_up = openai.responses.calls[1]["input"]
+        tool_output = json.loads(follow_up[0]["output"])
+        self.assertFalse(tool_output["ok"])
+        self.assertEqual(tool_output["error"], "safety_blocked")
+        self.assertTrue(tool_output["surroundings"]["sensors"]["available"])
+        self.assertIn("right side", tool_output["hint"])
+
+        image_message = next(item for item in follow_up if isinstance(item.get("content"), list))
+        text_parts = [part for part in image_message["content"] if part.get("type") == "input_text"]
+        image_parts = [part for part in image_message["content"] if part.get("type") == "input_image"]
+        self.assertIn("0.31 meters forward", text_parts[0]["text"])
+        self.assertIn("(blocked)", text_parts[0]["text"])
+        self.assertTrue(image_parts[0]["image_url"].startswith("data:image/jpeg;base64,"))
+
+    def test_failing_camera_still_returns_motion_result_with_surroundings(self):
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] >= 2:
+                return final("Done.")
+            return call("move", arguments={"distance_meters": 0.5})
+
+        def camera():
+            raise RuntimeError("camera dead")
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move forward.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name, **_: {"ok": True, "result": "completed", "traveled_m": 0.5},
+                robot_inspection_caller=lambda: self.TELEMETRY_SNAPSHOT,
+                camera_snapshot_caller=camera,
+            )
+        )
+
+        follow_up = openai.responses.calls[1]["input"]
+        self.assertEqual(len(follow_up), 1)
+        tool_output = json.loads(follow_up[0]["output"])
+        self.assertTrue(tool_output["ok"])
+        self.assertIn("surroundings", tool_output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -275,6 +275,64 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(published[-1]["personality"], "nina")
 
+    async def test_publish_turns_stt_led_off_when_voice_is_disabled(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.leds = mock.Mock()
+        service.status["scribe_state"] = "waiting_for_commit"
+
+        with mock.patch("robot_voice.publish_message", return_value=True):
+            service.publish(service_config(enabled=False, wake_word_enabled=False), status="disabled")
+
+        service.leds.update.assert_called_with(voice_on=False, stt_active=False, llm_active=False)
+
+    async def test_stop_all_publishes_clean_terminal_state(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.leds = mock.Mock()
+        service.status.update(
+            {
+                "assistant_speaking": True,
+                "assistant_working": True,
+                "partial_transcript": "hello",
+                "last_committed_transcript": "hello there",
+                "last_assistant_text": "Once upon a time",
+                "barge_in_mic_rms": 900,
+                "barge_in_gate_open": True,
+                "scribe_state": "waiting_for_commit",
+                "scribe_last_error": "stale error",
+                "false_starts": 2,
+            }
+        )
+        service.timeline.add_event({"type": "phase", "t": 1.0, "name": "hearing", "on": True})
+        published = []
+
+        with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
+            await service.stop_all(
+                final_config=service_config(enabled=False, wake_word_enabled=False),
+                final_status="disabled",
+            )
+
+        message = published[-1]
+        self.assertEqual(message["status"], "disabled")
+        self.assertFalse(message["enabled"])
+        self.assertFalse(message["assistant_speaking"])
+        self.assertIsNone(message["partial_transcript"])
+        self.assertIsNone(message["last_committed_transcript"])
+        self.assertIsNone(message["last_assistant_text"])
+        self.assertEqual(message["scribe_state"], "closed")
+        self.assertNotIn("scribe_last_error", message)
+        self.assertEqual(message["false_starts"], 0)
+        self.assertIn("timeline", message)
+        closed_phases = [
+            event
+            for event in message["timeline"]["events"]
+            if event.get("type") == "phase" and event.get("on") is False
+        ]
+        self.assertEqual(
+            {event.get("name") for event in closed_phases},
+            {"hearing", "thinking", "speaking", "user_speech"},
+        )
+        service.leds.update.assert_called_with(voice_on=False, stt_active=False, llm_active=False)
+
     async def test_publish_profile_logs_when_enabled(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01, profile_every=1)
 

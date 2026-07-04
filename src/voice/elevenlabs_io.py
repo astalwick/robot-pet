@@ -370,6 +370,7 @@ async def stream_audio_to_scribe(
         await close_link("scribe_close")
         if audio_levels is not None:
             audio_levels.scribe_gate_open = False
+        set_state(SCRIBE_CLOSED)
 
 
 async def speak_with_eleven_flash(

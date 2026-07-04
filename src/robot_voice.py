@@ -12,6 +12,7 @@ import time
 import urllib.request
 from collections import deque
 from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -278,8 +279,11 @@ class RobotVoiceService:
                     with suppress(OSError):
                         config_text = Path(self.config_path).read_text()
                     if self._config_load_error_text != error_text or self._config_load_error_config != config_text:
-                        await self.stop_all()
-                        self.publish(VoiceConfig(), status="error", last_error=error_text)
+                        await self.stop_all(
+                            final_config=VoiceConfig(),
+                            final_status="error",
+                            final_error=error_text,
+                        )
                         self._config_load_error_text = error_text
                         self._config_load_error_config = config_text
                     await asyncio.sleep(self.poll_seconds)
@@ -289,14 +293,16 @@ class RobotVoiceService:
                 self._config_load_error_config = None
 
                 if not config.enabled or not config.wake_word_enabled:
-                    await self.stop_all()
-                    self.publish(config, status="disabled", assistant_speaking=False, last_error=None)
+                    await self.stop_all(final_config=config, final_status="disabled")
                     await asyncio.sleep(self.poll_seconds)
                     continue
 
                 await self._run_wake_orchestrator(config)
 
-            await self.stop_all()
+            final_config = None
+            if self.active_config is not None:
+                final_config = replace(self.active_config, enabled=False, wake_word_enabled=False)
+            await self.stop_all(final_config=final_config, final_status="disabled")
         finally:
             if command_server is not None:
                 command_server.close()
@@ -808,7 +814,13 @@ class RobotVoiceService:
             "fresh": age <= STABLE_CACHE_MAX_AGE_SECONDS,
         }
 
-    async def stop_all(self) -> None:
+    async def stop_all(
+        self,
+        *,
+        final_config: VoiceConfig | None = None,
+        final_status: str | None = None,
+        final_error: str | None = None,
+    ) -> None:
         if self._orchestrator_task is not None:
             orchestrator_task = self._orchestrator_task
             self._orchestrator_task = None
@@ -856,6 +868,35 @@ class RobotVoiceService:
         self.active_config = None
         self._orchestrator_startup_latched = None
         self._orchestrator_startup_error = None
+        self._close_timeline_phases()
+        self._last_timeline_publish_at = 0.0
+        self.status.update(
+            {
+                "assistant_speaking": False,
+                "assistant_working": False,
+                "partial_transcript": None,
+                "last_committed_transcript": None,
+                "last_assistant_text": None,
+                "barge_in_threshold_rms": None,
+                "barge_in_mic_rms": None,
+                "barge_in_playback_rms": None,
+                "barge_in_gate_open": None,
+                "barge_in_last_reason": None,
+                "barge_in_event_count": None,
+                "barge_in_last_event": None,
+                "scribe_state": "closed",
+                "scribe_last_error": None,
+                "false_starts": 0,
+            }
+        )
+        self.leds.update(voice_on=False, stt_active=False, llm_active=False)
+        if final_config is not None and final_status is not None:
+            self.publish(
+                final_config,
+                status=final_status,
+                last_error=final_error,
+                force_timeline=True,
+            )
 
     async def _sample_timeline(self) -> None:
         interval = 1.0 / TIMELINE_SAMPLE_HZ
@@ -910,7 +951,7 @@ class RobotVoiceService:
         voice_on = config.enabled and config.wake_word_enabled
         self.leds.update(
             voice_on=voice_on,
-            stt_active=self.status["scribe_state"] in ("uploading", "waiting_for_commit"),
+            stt_active=voice_on and self.status["scribe_state"] in ("uploading", "waiting_for_commit"),
             llm_active=self.status["status"] == "thinking",
         )
         timeline = None

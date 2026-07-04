@@ -5,6 +5,7 @@ import os
 import sys
 import types
 import unittest
+from contextlib import suppress
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -452,6 +453,26 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connector.calls, 1)
         self.assertTrue(socket.sent)
+
+    async def test_cancel_while_uploading_publishes_closed_state(self):
+        socket = FakeScribe()
+        task = self.start(Connector([socket]))
+        try:
+            self.push(LOUD)
+            await self.settle()
+            self.push(LOUD)
+            await self.settle()
+
+            self.assertTrue(any(status.get("scribe_state") == "uploading" for status in self.statuses))
+
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        finally:
+            for patch in self._patches:
+                patch.stop()
+
+        self.assertEqual(self.statuses[-1]["scribe_state"], "closed")
 
     async def test_sends_preroll_before_live_audio(self):
         socket = FakeScribe()

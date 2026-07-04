@@ -120,15 +120,10 @@ class VoiceConfigTest(unittest.TestCase):
         policy = turn_policy_from_config(config)
         self.assertEqual(policy.explicit_interrupt_words, frozenset({"halt", "stop"}))
 
-    def test_speculative_playback_flag_reaches_turn_policy(self):
-        from voice.turn_policy import turn_policy_from_config
-
-        self.assertFalse(turn_policy_from_config(VoiceConfig()).speculative_playback_enabled)
-        self.assertTrue(
-            turn_policy_from_config(
-                VoiceConfig.from_dict({"speculative_playback_enabled": True})
-            ).speculative_playback_enabled
-        )
+    def test_legacy_speculative_playback_key_is_ignored(self):
+        config = VoiceConfig.from_dict({"speculative_playback_enabled": True})
+        self.assertEqual(config, VoiceConfig())
+        self.assertNotIn("speculative_playback_enabled", config.to_dict())
 
 
 if __name__ == "__main__":

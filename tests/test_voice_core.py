@@ -3429,15 +3429,17 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_spoken_speculative_turn_without_commit_reaches_history(self):
+    def test_speculative_turn_without_commit_is_cancelled_by_watchdog(self):
         async def run():
             history = ConversationHistory()
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
+            timeline_events = []
+            playback_opened = []
             policy = TurnPolicy(
                 speculative_partial_delay_secs=0,
-                speculative_playback_delay_secs=0.01,
-                speculative_local_quiet_secs=0.01,
+                speculative_local_quiet_secs=0,
+                speculative_no_commit_timeout_secs=0.05,
             )
 
             async def fake_run_assistant_turn(
@@ -3453,8 +3455,8 @@ class AssistantStreamingTest(unittest.TestCase):
             ):
                 if on_assistant_chunk:
                     on_assistant_chunk("Batteries store energy for the robot.")
-                # Real TTS stays gated on playback before it finishes.
                 await playback_event.wait()
+                playback_opened.append(True)
                 return "Batteries store energy for the robot."
 
             handler_task = asyncio.create_task(
@@ -3468,17 +3470,18 @@ class AssistantStreamingTest(unittest.TestCase):
                     policy=policy,
                     conversation_history=history,
                     assistant_runner=fake_run_assistant_turn,
+                    on_event=timeline_events.append,
                 )
             )
 
-            # Speculative trigger via a stable partial, and no commit ever arrives.
             await scribe_events.put({"type": "partial", "text": "Tell me about batteries."})
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.15)
 
-            exchanges = history.exchanges()
-            self.assertEqual(len(exchanges), 1)
-            self.assertEqual(exchanges[0].user_text, "Tell me about batteries.")
-            self.assertEqual(exchanges[0].assistant_text, "Batteries store energy for the robot.")
+            self.assertEqual(playback_opened, [])
+            self.assertEqual(len(history.exchanges()), 0)
+            cancel_events = [event for event in timeline_events if event.get("type") == "turn_cancel"]
+            self.assertEqual(len(cancel_events), 1)
+            self.assertEqual(cancel_events[0]["reason"], "no_commit")
 
             stop_event.set()
             handler_task.cancel()
@@ -3487,7 +3490,7 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_speculative_turn_waits_for_commit_when_playback_is_disabled(self):
+    def test_speculative_turn_waits_for_commit(self):
         async def run():
             history = ConversationHistory()
             scribe_events = asyncio.Queue()
@@ -3496,7 +3499,6 @@ class AssistantStreamingTest(unittest.TestCase):
             policy = TurnPolicy(
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
-                speculative_playback_enabled=False,
             )
 
             async def fake_run_assistant_turn(

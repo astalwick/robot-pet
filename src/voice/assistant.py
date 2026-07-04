@@ -1276,18 +1276,12 @@ async def handle_scribe_events(
                 trigger_stop_playback_now()
             await turn.cancel(reason)
 
-    async def release_speculative_playback(turn: ActiveTurn) -> None:
-        await asyncio.sleep(policy.speculative_playback_delay_secs)
-        while state.active_turn is turn and turn.is_active() and not turn.playback_event.is_set():
-            quiet_remaining_secs = policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), state.last_local_speech_at)
-            if quiet_remaining_secs <= 0:
-                turn.open_playback()
-                # If the turn already finished generating before playback
-                # opened, commit it now — assistant_done has already fired and
-                # won't fire again.
-                await maybe_commit_history(turn)
-                return
-            await asyncio.sleep(quiet_remaining_secs)
+    async def cancel_unconfirmed_speculation(turn: ActiveTurn) -> None:
+        await asyncio.sleep(policy.speculative_no_commit_timeout_secs)
+        if state.active_turn is turn and turn.speculative and not turn.playback_event.is_set():
+            turn.playback_release_task = None
+            await cancel_active_turn("no_commit")
+            status(status="listening", assistant_working=False, partial_transcript=None)
 
     async def release_committed_playback(turn: ActiveTurn) -> None:
         await asyncio.sleep(policy.commit_playback_delay_secs)
@@ -1568,8 +1562,7 @@ async def handle_scribe_events(
             emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
         status(status="thinking", assistant_speaking=False, assistant_working=True)
         if speculative:
-            if policy.speculative_playback_enabled:
-                turn.playback_release_task = asyncio.create_task(release_speculative_playback(turn))
+            turn.playback_release_task = asyncio.create_task(cancel_unconfirmed_speculation(turn))
         else:
             turn.playback_release_task = asyncio.create_task(release_committed_playback(turn))
 
@@ -1645,10 +1638,6 @@ async def handle_scribe_events(
         if active_turn and active_turn.speculative and text != active_turn.prompt and policy.transcript_matches(text, active_turn.prompt):
             if policy.should_replace_speculative_prompt(text, active_turn.prompt):
                 await start_turn(text, speculative=True)
-            else:
-                if policy.looks_incomplete_partial(text) and active_turn.playback_release_task:
-                    await cancel_task(active_turn.playback_release_task)
-                    active_turn.playback_release_task = None
             return
 
         if (

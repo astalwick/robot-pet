@@ -39,7 +39,6 @@ class VoiceConfig:
     alternate_voice_id: str | None = None
     personality: str = "default"
     openai_model: str = DEFAULT_OPENAI_MODEL
-    speculative_playback_enabled: bool = False
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
     barge_in_min_chars: int = 12
@@ -75,9 +74,6 @@ class VoiceConfig:
             alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
             personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
             openai_model=str(values.get("openai_model", defaults.openai_model)).strip() or defaults.openai_model,
-            speculative_playback_enabled=bool(
-                values.get("speculative_playback_enabled", defaults.speculative_playback_enabled)
-            ),
             barge_in_enabled=bool(values.get("barge_in_enabled", defaults.barge_in_enabled)),
             barge_in_min_words=int(values.get("barge_in_min_words", defaults.barge_in_min_words)),
             barge_in_min_chars=int(values.get("barge_in_min_chars", defaults.barge_in_min_chars)),
@@ -233,12 +229,6 @@ VOICE_FIELDS = (
         "type": "select",
         "options": list(OPENAI_MODEL_CHOICES),
         "help": "Conversation model. Requests use reasoning effort none.",
-    },
-    {
-        "key": "speculative_playback_enabled",
-        "label": "Speculative speech",
-        "type": "boolean",
-        "help": "Let stable partial transcripts speak before Scribe commits",
     },
     {
         "key": "barge_in_enabled",

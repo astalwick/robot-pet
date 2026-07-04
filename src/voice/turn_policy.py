@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 
 
 SPECULATIVE_PARTIAL_DELAY_SECS = 0.35
-SPECULATIVE_PLAYBACK_DELAY_SECS = 0.8
 COMMIT_PLAYBACK_DELAY_SECS = 0.2
+SPECULATIVE_NO_COMMIT_TIMEOUT_SECS = 8.0
 SPECULATIVE_LOCAL_QUIET_SECS = 0.65
 SPECULATIVE_CONFIRM_SIMILARITY = 0.82
 USER_ACTIVE_RMS_THRESHOLD = 100
@@ -23,10 +23,9 @@ LOCAL_SPEECH_WINDOW_SECS = 1.2
 @dataclass(frozen=True)
 class TurnPolicy:
     speculative_partial_delay_secs: float = SPECULATIVE_PARTIAL_DELAY_SECS
-    speculative_playback_delay_secs: float = SPECULATIVE_PLAYBACK_DELAY_SECS
     commit_playback_delay_secs: float = COMMIT_PLAYBACK_DELAY_SECS
     speculative_local_quiet_secs: float = SPECULATIVE_LOCAL_QUIET_SECS
-    speculative_playback_enabled: bool = True
+    speculative_no_commit_timeout_secs: float = SPECULATIVE_NO_COMMIT_TIMEOUT_SECS
     confirm_similarity: float = SPECULATIVE_CONFIRM_SIMILARITY
     min_speculative_words: int = 3
     min_speculative_chars: int = 10
@@ -228,7 +227,6 @@ def turn_policy_from_config(config: VoiceConfig) -> TurnPolicy:
     return TurnPolicy(
         min_barge_in_words=config.barge_in_min_words,
         min_barge_in_chars=config.barge_in_min_chars,
-        speculative_playback_enabled=config.speculative_playback_enabled,
         barge_in_enabled=config.barge_in_enabled,
         barge_in_min_rms=config.barge_in_min_rms,
         barge_in_sustain_ms=config.barge_in_sustain_ms,

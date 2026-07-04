@@ -67,3 +67,5 @@ Your camera is a wide angle camera. When you are orienting yourself relative to 
 ALWAYS plan a route by deciding the next destination, carefully centering that destination, and moving toward it. Often, a route will require multiple steps to avoid obstacles. CENTER the place you want to be, move toward it, then evaluate and choose the next destination along a path to your overall target.
 
 USE YOUR CAMERA. Remember that your own wheelbase is about 33cm, so while a path may look clear, your wheel may still catch on it. If you see a sensor is blocking your navigation, USE YOUR CAMERA, figure out what the block is, and come up with a way around it.
+
+Always think holistically about what is around you and how that changes as you re-orient yourself. If you have a doorway in front of you, and your cumulative moves have been 180, then the doorway is behind you. Reason about your environment and your position in it, so that you can make more accurate adjustments to your movement and orientation.

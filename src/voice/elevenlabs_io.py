@@ -315,8 +315,11 @@ async def stream_audio_to_scribe(
                         if flushed and pre_roll.maxlen != preroll_frames:
                             pre_roll = deque(pre_roll, maxlen=preroll_frames)
                         set_state(SCRIBE_UPLOADING if flushed else SCRIBE_RECONNECTING)
-                    elif not await send_chunk(chunk, silent=False):
-                        set_state(SCRIBE_RECONNECTING)
+                    else:
+                        if rms > MIC_SCRIBE_SEND_RMS_MIN:
+                            link.got_commit = False
+                        if not await send_chunk(chunk, silent=False):
+                            set_state(SCRIBE_RECONNECTING)
                 continue
 
             if state == SCRIBE_UPLOADING:

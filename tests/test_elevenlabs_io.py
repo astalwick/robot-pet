@@ -595,6 +595,30 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         commits = [event for event in self.drain_events() if event["type"] == "commit"]
         self.assertEqual(commits, [{"type": "commit", "text": "early commit"}])
 
+    async def test_speech_after_early_commit_still_gets_tail(self):
+        socket = FakeScribe()
+        task = self.start(
+            Connector([socket]),
+            SCRIBE_POST_SPEECH_TAIL_SECS=0.04,
+            SCRIBE_COMMIT_TIMEOUT_SECS=10.0,
+        )
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        socket.deliver(committed_message("early commit"))
+        await self.settle()
+        sent_after_commit = len(socket.sent)
+
+        self.push(LOUD)
+        await self.settle()
+        self.push(QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        silent = [message for message in socket.sent[sent_after_commit:] if is_silent(message)]
+        self.assertGreaterEqual(len(silent), 1)
+
     async def test_commit_timeout_closes_without_synthetic_commit(self):
         socket = FakeScribe()
         task = self.start(

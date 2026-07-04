@@ -262,8 +262,9 @@ SCAN_TOOL = {
     "description": (
         "Look around by sweeping a requested number of degrees and returning observations, "
         "then facing the starting direction again. Use this when you need to survey more "
-        "than what is directly ahead. The camera is wide angle, so each image covers a "
-        "broad view with wide-angle perspective."
+        "than what is directly ahead. Each image includes a degree ruler along the bottom "
+        "(L20 means turn left 20 degrees; R20 means turn right with degrees=-20) and "
+        "corridor lines showing the robot body width at half a meter and one meter ahead."
     ),
     "parameters": {
         "type": "object",
@@ -302,8 +303,9 @@ LOOK_TOOL = {
     "name": LOOK_TOOL_NAME,
     "description": (
         "Look forward from the robot camera so you can answer questions about what the robot "
-        "sees right now. The camera is wide angle, so the image covers a broad view with "
-        "wide-angle perspective."
+        "sees right now. The image includes a degree ruler along the bottom (L20 means turn "
+        "left 20 degrees; R20 means turn right with degrees=-20) and corridor lines showing "
+        "the robot body width at half a meter and one meter ahead."
     ),
     "parameters": {
         "type": "object",

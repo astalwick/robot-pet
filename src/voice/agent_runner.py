@@ -41,6 +41,7 @@ from voice.assistant import (
     VoiceState,
     check_surroundings_snapshot,
 )
+from voice.camera_overlay import annotate_snapshot
 from voice.tools import (
     AGENT_TOOLS,
     RobotToolCall,
@@ -287,6 +288,7 @@ async def _attach_goal_motion_observation(
     if context.camera_snapshot_caller is not None:
         try:
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
+            jpeg = annotate_snapshot(jpeg)
             data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
             image_parts = [
                 {

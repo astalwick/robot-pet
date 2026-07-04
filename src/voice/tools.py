@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from voice.camera_overlay import annotate_snapshot
 from voice.assistant import (
     CHECK_HEALTH_TOOL,
     CHECK_HEALTH_TOOL_NAME,
@@ -192,6 +193,7 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
+        jpeg = annotate_snapshot(jpeg)
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
         facing = round(heading)
         if facing == 0:
@@ -272,6 +274,7 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
             return _result(call, False, {"ok": False, "error": str(exc)})
+        jpeg = annotate_snapshot(jpeg)
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
         image_parts = [
             {"type": "input_text", "text": "Here is the current camera snapshot from the robot."},

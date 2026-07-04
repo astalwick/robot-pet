@@ -48,7 +48,7 @@ log = setup_logging("robot-voice")
 
 # The goal loop deliberates between physical actions, so it spends a little more
 # thinking time than the low-latency assistant turn, which runs with no reasoning.
-AGENT_REASONING_EFFORT = "low"
+AGENT_REASONING_EFFORT = "medium"
 
 # The model occasionally returns a response with no tool call and no text. We nudge
 # it a few times, then give up rather than spin forever.

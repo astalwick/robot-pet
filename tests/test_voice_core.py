@@ -1971,13 +1971,13 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_continuation_commit_replaces_turn_before_playback_release(self):
+    def test_continuation_commit_stitches_prefix_before_playback_release(self):
         async def run():
             started_inputs = []
             cancelled = []
             scribe_events = asyncio.Queue()
             stop_event = asyncio.Event()
-            policy = TurnPolicy(commit_playback_delay_secs=0.08)
+            policy = TurnPolicy(commit_playback_delay_secs=0.08, continuation_grace_secs=0)
 
             async def fake_run_assistant_turn(
                 turn_id,
@@ -1994,7 +1994,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 started_inputs.append(prompt)
                 try:
                     await playback_event.wait()
-                    return "ok"
+                    await asyncio.Event().wait()
                 except asyncio.CancelledError:
                     cancelled.append(prompt)
                     raise
@@ -2014,10 +2014,16 @@ class AssistantStreamingTest(unittest.TestCase):
 
             await scribe_events.put({"type": "commit", "text": "Tell me about batteries"})
             await asyncio.sleep(0.02)
-            await scribe_events.put({"type": "commit", "text": "Tell me about batteries and motors"})
+            await scribe_events.put({"type": "commit", "text": "and motors please"})
             await asyncio.sleep(0.02)
 
-            self.assertEqual(started_inputs, ["Tell me about batteries", "Tell me about batteries and motors"])
+            self.assertEqual(
+                started_inputs,
+                [
+                    "Tell me about batteries",
+                    "Tell me about batteries and motors please",
+                ],
+            )
             self.assertEqual(cancelled, ["Tell me about batteries"])
 
             stop_event.set()
@@ -3574,7 +3580,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3644,7 +3649,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3697,6 +3701,196 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_continuation_retraction_skips_history(self):
+        async def run():
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                continuation_grace_secs=2.0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                if on_assistant_chunk:
+                    on_assistant_chunk("Apples are a fruit.")
+                await playback_event.wait()
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    raise
+                return "Apples are a fruit."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    stop_playback_now=lambda: None,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "partial", "text": "and the tomatoes"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(len(history.exchanges()), 0)
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_commit_during_grace_retracts_when_partial_was_too_short(self):
+        async def run():
+            started_prompts = []
+            playback_opened = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                continuation_grace_secs=2.0,
+                commit_playback_delay_secs=0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                prompt = openai_input[-1]["content"]
+                started_prompts.append(prompt)
+                await playback_event.wait()
+                playback_opened.append(prompt)
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    raise
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                    stop_playback_now=lambda: None,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "partial", "text": "and"})
+            await scribe_events.put({"type": "commit", "text": "and the tomatoes please"})
+            await asyncio.sleep(0.15)
+
+            stitched = "I want to buy some apples today and the tomatoes please"
+            self.assertIn(stitched, started_prompts)
+            self.assertIn(stitched, playback_opened)
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_commit_continuation_stitches_prefix_before_playback(self):
+        async def run():
+            started_prompts = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_prompts.append(openai_input[-1]["content"])
+                await playback_event.wait()
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            with mock.patch.object(ActiveTurn, "open_playback"):
+                await scribe_events.put({"type": "commit", "text": "Tell me about batteries"})
+                await asyncio.sleep(0.05)
+                await scribe_events.put({"type": "commit", "text": "and motors please"})
+                await asyncio.sleep(0.05)
+
+            self.assertEqual(
+                started_prompts,
+                [
+                    "Tell me about batteries",
+                    "Tell me about batteries and motors please",
+                ],
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_continuation_partial_after_grace_uses_barge_in(self):
         async def run():
             cancelled = []
@@ -3707,7 +3901,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=0.02,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3772,7 +3965,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3831,6 +4023,79 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_commit_continuation_stitch_does_not_leave_stale_prefix(self):
+        async def run():
+            started_prompts = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                commit_playback_delay_secs=0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                prompt = openai_input[-1]["content"]
+                started_prompts.append(prompt)
+                await playback_event.wait()
+                return "ok"
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                )
+            )
+
+            original_open_playback = ActiveTurn.open_playback
+
+            def open_playback_after_first_turn(self):
+                if self.prompt == "Tell me about batteries":
+                    return
+                original_open_playback(self)
+
+            with mock.patch.object(ActiveTurn, "open_playback", open_playback_after_first_turn):
+                await scribe_events.put({"type": "commit", "text": "Tell me about batteries"})
+                await asyncio.sleep(0.05)
+                await scribe_events.put({"type": "commit", "text": "and motors please"})
+                await asyncio.sleep(0.05)
+
+            await asyncio.sleep(0.15)
+            await scribe_events.put({"type": "commit", "text": "What time is it right now"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(
+                started_prompts,
+                [
+                    "Tell me about batteries",
+                    "Tell me about batteries and motors please",
+                    "What time is it right now",
+                ],
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_explicit_interrupt_commit_clears_prefix_without_stitching(self):
         async def run():
             started_prompts = []
@@ -3840,7 +4105,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=1.0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3903,7 +4167,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -3960,6 +4223,72 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_two_word_partial_within_grace_does_not_retract(self):
+        async def run():
+            timeline_events = []
+            playback_stops = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            policy = TurnPolicy(
+                speculative_partial_delay_secs=0,
+                speculative_local_quiet_secs=0,
+                continuation_grace_secs=2.0,
+            )
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                await playback_event.wait()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    raise
+
+            async def stop_playback_now():
+                playback_stops.append("stop")
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=policy,
+                    assistant_runner=fake_run_assistant_turn,
+                    on_event=timeline_events.append,
+                    stop_playback_now=stop_playback_now,
+                )
+            )
+
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "partial", "text": "and the"})
+            await asyncio.sleep(0.05)
+
+            cancel_events = [event for event in timeline_events if event.get("type") == "turn_cancel"]
+            self.assertFalse(any(event.get("reason") == "continuation_retraction" for event in cancel_events))
+            self.assertEqual(playback_stops, [])
+            self.assertTrue(any(event.get("type") == "barge_in_rejected" for event in timeline_events))
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
     def test_commit_stitches_pending_utterance_prefix(self):
         async def run():
             started_prompts = []
@@ -3969,7 +4298,6 @@ class AssistantStreamingTest(unittest.TestCase):
                 speculative_partial_delay_secs=1.0,
                 speculative_local_quiet_secs=0,
                 continuation_grace_secs=2.0,
-                continuation_min_words=2,
             )
 
             async def fake_run_assistant_turn(
@@ -4053,7 +4381,7 @@ class AssistantStreamingTest(unittest.TestCase):
                     voice_state=VoiceState("test-voice"),
                     stop_event=stop_event,
                     system_prompt="test system prompt",
-                    policy=TurnPolicy(continuation_grace_secs=2.0, continuation_min_words=2),
+                    policy=TurnPolicy(continuation_grace_secs=2.0),
                     assistant_runner=fake_run_assistant_turn,
                     goal_runner=fake_goal_runner,
                     progress_speaker=fake_progress_speaker,

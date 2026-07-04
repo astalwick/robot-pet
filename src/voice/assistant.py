@@ -1280,7 +1280,8 @@ async def handle_scribe_events(
                 turn.assistant_text = streamed
                 recent_assistant_text = streamed
                 recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-                history.append_exchange(turn.committed_text or turn.prompt, streamed)
+                if reason != "continuation_retraction":
+                    history.append_exchange(turn.committed_text or turn.prompt, streamed)
                 turn.history_committed = True
             if stop_playback_now and turn.is_playing_back():
                 trigger_stop_playback_now()
@@ -1603,6 +1604,26 @@ async def handle_scribe_events(
         report_barge_in(source, outcome)
         return outcome
 
+    def continuation_retraction_eligible(turn: ActiveTurn, text: str, now: float) -> bool:
+        return (
+            not policy.has_explicit_interrupt(text)
+            and turn.playback_opened_at is not None
+            and now - turn.playback_opened_at <= policy.continuation_grace_secs
+            and len(re.findall(r"\S+", text)) >= policy.continuation_min_words
+        )
+
+    async def retract_continuation(turn: ActiveTurn, fragment_text: str, now: float) -> None:
+        first_half = turn.committed_text or turn.prompt
+        state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
+        state.utterance_prefix_deadline = now + 10.0
+        emit("false_start", turn_id=turn.turn_id, text=fragment_text)
+        await cancel_active_turn("continuation_retraction")
+        status(status="hearing", partial_transcript=fragment_text)
+        await cancel_task(state.debounce_task)
+        state.debounce_task = asyncio.create_task(
+            start_after_stable_partial(f"{state.utterance_prefix} {fragment_text}")
+        )
+
     async def handle_partial(text: str) -> None:
         now = asyncio.get_running_loop().time()
         normalized_partial = policy.normalized_transcript(text)
@@ -1628,19 +1649,9 @@ async def handle_scribe_events(
         if playback:
             if (
                 playback is state.active_turn
-                and not policy.has_explicit_interrupt(text)
-                and playback.playback_opened_at is not None
-                and now - playback.playback_opened_at <= policy.continuation_grace_secs
-                and len(re.findall(r"\S+", text)) >= policy.continuation_min_words
+                and continuation_retraction_eligible(playback, text, now)
             ):
-                first_half = playback.committed_text or playback.prompt
-                state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
-                state.utterance_prefix_deadline = now + 10.0
-                emit("false_start", turn_id=playback.turn_id, text=text)
-                await cancel_active_turn("continuation_retraction")
-                status(status="hearing", partial_transcript=text)
-                await cancel_task(state.debounce_task)
-                state.debounce_task = asyncio.create_task(start_after_stable_partial(f"{state.utterance_prefix} {text}"))
+                await retract_continuation(playback, text, now)
                 return
             outcome = consider_playback_barge_in("partial", text, now, playback)
             if outcome.accepted:
@@ -1681,9 +1692,14 @@ async def handle_scribe_events(
             and not active_turn.is_speaking()
             and policy.normalized_transcript(text) != policy.normalized_transcript(active_turn.prompt)
         ):
+            first_half = active_turn.committed_text or active_turn.prompt
+            state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
+            state.utterance_prefix_deadline = now + 10.0
             await cancel_active_turn("commit_continuation")
             await cancel_task(state.debounce_task)
-            state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
+            state.debounce_task = asyncio.create_task(
+                start_after_stable_partial(f"{state.utterance_prefix} {text}")
+            )
             return
 
         await cancel_task(state.debounce_task)
@@ -1709,6 +1725,8 @@ async def handle_scribe_events(
                 status(status="listening")
                 return
 
+            raw_commit = text
+
             if policy.has_explicit_interrupt(text):
                 state.utterance_prefix = ""
             elif state.utterance_prefix and now < state.utterance_prefix_deadline:
@@ -1730,6 +1748,23 @@ async def handle_scribe_events(
                 return
 
             active_turn = state.active_turn
+            if (
+                active_turn
+                and active_turn.is_playing_back()
+                and not policy.has_explicit_interrupt(raw_commit)
+                and continuation_retraction_eligible(active_turn, text, now)
+            ):
+                first_half = active_turn.committed_text or active_turn.prompt
+                stitched = f"{first_half} {text}".strip()
+                emit("false_start", turn_id=active_turn.turn_id, text=text)
+                await cancel_active_turn("continuation_retraction")
+                status(status="hearing", partial_transcript=text)
+                if should_start_from_commit:
+                    status(status="thinking", partial_transcript=None, last_committed_transcript=stitched)
+                    await start_turn(stitched, speculative=False)
+                else:
+                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                return
             if (
                 active_turn
                 and active_turn.is_playing_back()
@@ -1768,8 +1803,9 @@ async def handle_scribe_events(
                     return
                 if not should_start_from_commit:
                     return
+                stitched = f"{active_turn.committed_text or active_turn.prompt} {text}".strip()
                 await cancel_active_turn("commit_continuation")
-                await start_turn(text, speculative=False)
+                await start_turn(stitched, speculative=False)
                 return
 
             if active_turn and active_turn.is_active():

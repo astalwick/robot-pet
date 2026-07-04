@@ -18,6 +18,7 @@ from typing import Any
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
 from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_motion_intent
 from drivers.respeaker import MIC_BLOCKSIZE, WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
+from drivers.status_leds import StatusLeds
 from lib.log import setup_logging
 from telemetry.messages import voice_update
 from telemetry.paths import (
@@ -249,6 +250,7 @@ class RobotVoiceService:
             "false_starts": 0,
         }
         self.last_logged_error: str | None = None
+        self.leds = StatusLeds()
         self.timeline = TimelineBuffer()
         self._sampler_task: asyncio.Task[None] | None = None
         self._wake_task: asyncio.Task[None] | None = None
@@ -906,6 +908,11 @@ class RobotVoiceService:
             self.last_logged_error = None
         now = time.monotonic()
         voice_on = config.enabled and config.wake_word_enabled
+        self.leds.update(
+            voice_on=voice_on,
+            stt_active=self.status["scribe_state"] in ("uploading", "waiting_for_commit"),
+            llm_active=self.status["status"] == "thinking",
+        )
         timeline = None
         timeline_seconds = 0.0
         timeline_started = time.perf_counter()

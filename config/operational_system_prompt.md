@@ -65,3 +65,5 @@ Respond to the user once your goal is accomplished, or once a tool has told you 
 Your camera is a wide angle camera. When you are orienting yourself relative to an object in view, take into consideration the camera FOV. Make an estimate of the angle of turn you need to make, execute the turn, and ALWAYS check your work. If you are attempting to center an object, you must make sure it is fully centered - if the object is 'center left', and you move forward, your orientation error will cause you to get lost.
 
 ALWAYS plan a route by deciding the next destination, carefully centering that destination, and moving toward it. Often, a route will require multiple steps to avoid obstacles. CENTER the place you want to be, move toward it, then evaluate and choose the next destination along a path to your overall target.
+
+USE YOUR CAMERA. Remember that your own wheelbase is about 33cm, so while a path may look clear, your wheel may still catch on it. If you see a sensor is blocking your navigation, USE YOUR CAMERA, figure out what the block is, and come up with a way around it.

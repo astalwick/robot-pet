@@ -244,6 +244,7 @@ class RobotVoiceService:
             "scribe_state": None,
             "scribe_open_count": None,
             "scribe_last_error": None,
+            "false_starts": 0,
         }
         self.last_logged_error: str | None = None
         self.timeline = TimelineBuffer()
@@ -946,6 +947,7 @@ class RobotVoiceService:
             scribe_state=optional_text(self.status["scribe_state"]),
             scribe_open_count=optional_int(self.status["scribe_open_count"]),
             scribe_last_error=optional_text(self.status["scribe_last_error"]),
+            false_starts=optional_int(self.status["false_starts"]),
         )
         message_seconds = time.perf_counter() - message_started
         publish_started = time.perf_counter()

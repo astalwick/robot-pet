@@ -720,6 +720,7 @@ class TurnRuntimeState:
     barge_in_hearing_reported: bool = False
     utterance_prefix: str = ""
     utterance_prefix_deadline: float = 0.0
+    false_starts: int = 0
 
 
 def reset_recent_barge_in_audio(state: TurnRuntimeState) -> None:
@@ -1264,7 +1265,11 @@ async def handle_scribe_events(
         turn = state.active_turn
         state.active_turn = None
         if turn and (turn.is_active() or (turn.playback_release_task and not turn.playback_release_task.done())):
-            emit("turn_cancel", turn_id=turn.turn_id, reason=reason, was_speaking=turn.is_speaking())
+            was_speaking = turn.is_speaking()
+            emit("turn_cancel", turn_id=turn.turn_id, reason=reason, was_speaking=was_speaking)
+            if reason == "continuation_retraction" and was_speaking:
+                state.false_starts += 1
+                status(false_starts=state.false_starts)
             streamed = turn.assistant_streamed_text().strip()
             if streamed:
                 emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)

@@ -449,6 +449,7 @@ def voice_update(
     scribe_state: str | None = None,
     scribe_open_count: int | None = None,
     scribe_last_error: str | None = None,
+    false_starts: int | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -514,6 +515,8 @@ def voice_update(
         payload["scribe_open_count"] = scribe_open_count
     if scribe_last_error is not None:
         payload["scribe_last_error"] = scribe_last_error
+    if false_starts is not None:
+        payload["false_starts"] = false_starts
     return payload
 
 

@@ -311,6 +311,7 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertNotIn("scribe_state", without_scribe)
         self.assertNotIn("scribe_open_count", without_scribe)
         self.assertNotIn("scribe_last_error", without_scribe)
+        self.assertNotIn("false_starts", without_scribe)
 
         with_scribe = voice_update(
             enabled=True,
@@ -323,10 +324,12 @@ class TelemetryMessagesTest(unittest.TestCase):
             scribe_state="uploading",
             scribe_open_count=3,
             scribe_last_error="boom",
+            false_starts=2,
         )
         self.assertEqual(with_scribe["scribe_state"], "uploading")
         self.assertEqual(with_scribe["scribe_open_count"], 3)
         self.assertEqual(with_scribe["scribe_last_error"], "boom")
+        self.assertEqual(with_scribe["false_starts"], 2)
 
     def test_robot_motion_update_uses_its_own_source(self):
         message = robot_motion_update(

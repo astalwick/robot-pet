@@ -600,6 +600,7 @@ class ActiveTurn:
     assistant_text: str | None = None
     history_committed: bool = False
     delay_playback: bool = False
+    playback_opened_at: float | None = None
 
     def __post_init__(self) -> None:
         if not self.speculative:
@@ -626,6 +627,8 @@ class ActiveTurn:
         return now - self.speech_started_at
 
     def open_playback(self) -> None:
+        if not self.playback_event.is_set():
+            self.playback_opened_at = asyncio.get_running_loop().time()
         self.playback_event.set()
 
     def assistant_streamed_text(self) -> str:
@@ -715,6 +718,8 @@ class TurnRuntimeState:
     last_partial_audio_seq: int = -1
     barge_in_event_count: int = 0
     barge_in_hearing_reported: bool = False
+    utterance_prefix: str = ""
+    utterance_prefix_deadline: float = 0.0
 
 
 def reset_recent_barge_in_audio(state: TurnRuntimeState) -> None:
@@ -1616,6 +1621,22 @@ async def handle_scribe_events(
         active_turn = state.active_turn
         playback = current_playback()
         if playback:
+            if (
+                playback is state.active_turn
+                and not policy.has_explicit_interrupt(text)
+                and playback.playback_opened_at is not None
+                and now - playback.playback_opened_at <= policy.continuation_grace_secs
+                and len(re.findall(r"\S+", text)) >= policy.continuation_min_words
+            ):
+                first_half = playback.committed_text or playback.prompt
+                state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
+                state.utterance_prefix_deadline = now + 10.0
+                emit("false_start", turn_id=playback.turn_id, text=text)
+                await cancel_active_turn("continuation_retraction")
+                status(status="hearing", partial_transcript=text)
+                await cancel_task(state.debounce_task)
+                state.debounce_task = asyncio.create_task(start_after_stable_partial(f"{state.utterance_prefix} {text}"))
+                return
             outcome = consider_playback_barge_in("partial", text, now, playback)
             if outcome.accepted:
                 publish_barge_in_hearing("stt")
@@ -1625,6 +1646,7 @@ async def handle_scribe_events(
                 await cancel_task(state.debounce_task)
                 state.debounce_task = None
                 if outcome.reason == "explicit_interrupt":
+                    state.utterance_prefix = ""
                     status(status="listening", partial_transcript=None)
                 else:
                     state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
@@ -1632,6 +1654,13 @@ async def handle_scribe_events(
                 emit("barge_in_rejected", source="partial", reason=outcome.reason, text=text)
                 status(status="speaking", assistant_speaking=True, partial_transcript=None)
             return
+
+        if policy.has_explicit_interrupt(text):
+            state.utterance_prefix = ""
+        elif state.utterance_prefix and now < state.utterance_prefix_deadline:
+            text = f"{state.utterance_prefix} {text}"
+        elif state.utterance_prefix:
+            state.utterance_prefix = ""
 
         status(status="hearing", partial_transcript=text)
 
@@ -1665,6 +1694,7 @@ async def handle_scribe_events(
             if is_end_session_request(text, policy):
                 if state.active_goal is not None:
                     await cancel_active_goal("committed_speech")
+                state.utterance_prefix = ""
                 status(status="listening", partial_transcript=None, last_committed_transcript=text)
                 if session_end_caller:
                     session_end_caller()
@@ -1673,6 +1703,14 @@ async def handle_scribe_events(
                 emit("echo_suppressed", source="commit", text=text)
                 status(status="listening")
                 return
+
+            if policy.has_explicit_interrupt(text):
+                state.utterance_prefix = ""
+            elif state.utterance_prefix and now < state.utterance_prefix_deadline:
+                text = f"{state.utterance_prefix} {text}"
+                state.utterance_prefix = ""
+            elif state.utterance_prefix:
+                state.utterance_prefix = ""
 
             should_start_from_commit, commit_reason = policy.commit_decision(text)
             emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
@@ -1706,6 +1744,7 @@ async def handle_scribe_events(
                 publish_barge_in_event("commit", outcome.reason)
                 await cancel_active_turn("barge_in_commit")
                 if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
+                    state.utterance_prefix = ""
                     status(status="listening", partial_transcript=None, last_committed_transcript=text)
                     return
                 status(status="thinking", partial_transcript=None, last_committed_transcript=text)

@@ -45,6 +45,8 @@ class TurnPolicy:
     assistant_echo_window_slop_words: int = 2
     assistant_echo_memory_secs: float = 10.0
     explicit_interrupt_scan_words: int = 3
+    continuation_grace_secs: float = 1.5
+    continuation_min_words: int = 2
     incomplete_partial_suffixes: tuple[str, ...] = ("-", ",", ":", ";")
     complete_partial_suffixes: tuple[str, ...] = (".", "?", "!")
     explicit_interrupt_words: frozenset[str] = field(

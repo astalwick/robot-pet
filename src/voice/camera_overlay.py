@@ -38,7 +38,11 @@ def _corridor_half_angle(distance_m: float) -> float:
 def nearest_forward_clearance_m(forward_clearances_m: dict[str, float | None] | None) -> float | None:
     if not forward_clearances_m:
         return None
-    values = [value for value in forward_clearances_m.values() if isinstance(value, (int, float))]
+    values = [
+        value
+        for value in forward_clearances_m.values()
+        if isinstance(value, (int, float)) and math.isfinite(value)
+    ]
     if not values:
         return None
     return min(values)
@@ -50,6 +54,8 @@ def _forward_depth_banner(forward_clearances_m: dict[str, float | None]) -> str:
         value = forward_clearances_m.get(label)
         if value is None:
             parts.append("--")
+        elif math.isinf(value):
+            parts.append("inf")
         else:
             parts.append(f"{value:.2f}")
     return f"fwd L {parts[0]}  C {parts[1]}  R {parts[2]}  m"
@@ -76,17 +82,43 @@ def annotate_snapshot(
 
     cv2.line(overlay, (center_x, 0), (center_x, height - 1), CROSSHAIR_COLOR, LINE_THICKNESS)
 
+    sensed_distance = nearest_forward_clearance_m(forward_clearances_m)
+
+    banner_lines: list[str] = []
     if forward_clearances_m:
-        cv2.putText(
-            overlay,
-            _forward_depth_banner(forward_clearances_m),
-            (8, 18),
-            FONT,
-            FONT_SCALE,
-            SENSED_CORRIDOR_COLOR,
-            FONT_THICKNESS,
-            cv2.LINE_AA,
-        )
+        banner_lines.append(_forward_depth_banner(forward_clearances_m))
+    if sensed_distance is not None and sensed_distance >= SENSED_CORRIDOR_MIN_M:
+        banner_lines.append(f"body @{sensed_distance:.2f}m SENSED")
+
+    if banner_lines:
+        text_sizes: list[tuple[int, int]] = []
+        for line in banner_lines:
+            size, _ = cv2.getTextSize(line, FONT, 0.6, FONT_THICKNESS)
+            text_sizes.append(size)
+
+        max_width = max(w for w, _ in text_sizes)
+        total_height = sum(h for _, h in text_sizes) + (len(banner_lines) - 1) * 2
+        padding = 6
+        box_width = max_width + 2 * padding
+        box_height = total_height + 2 * padding
+
+        cv2.rectangle(overlay, (0, 0), (box_width, box_height), (0, 0, 0), -1)
+
+        y_offset = padding
+        for i, line in enumerate(banner_lines):
+            text_height = text_sizes[i][1]
+            baseline_y = y_offset + text_height
+            cv2.putText(
+                overlay,
+                line,
+                (padding, baseline_y),
+                FONT,
+                0.6,
+                SENSED_CORRIDOR_COLOR,
+                FONT_THICKNESS,
+                cv2.LINE_AA,
+            )
+            y_offset += text_height + 2
 
     ruler_y = height - 12
     tick_top = ruler_y - 6
@@ -127,23 +159,11 @@ def annotate_snapshot(
             cv2.LINE_AA,
         )
 
-    sensed_distance = nearest_forward_clearance_m(forward_clearances_m)
     if sensed_distance is not None and sensed_distance >= SENSED_CORRIDOR_MIN_M:
         half_angle = _corridor_half_angle(sensed_distance)
         for side in (-1.0, 1.0):
             x = max(0, min(width - 1, angle_to_x(side * half_angle, width)))
             cv2.line(overlay, (x, corridor_top), (x, height - 1), SENSED_CORRIDOR_COLOR, LINE_THICKNESS)
-        label_x = max(2, angle_to_x(half_angle, width) - 4)
-        cv2.putText(
-            overlay,
-            f"body @{sensed_distance:.2f}m SENSED",
-            (label_x, height - 20),
-            FONT,
-            FONT_SCALE,
-            SENSED_CORRIDOR_COLOR,
-            FONT_THICKNESS,
-            cv2.LINE_AA,
-        )
 
     blended = cv2.addWeighted(overlay, 0.85, image, 0.15, 0)
     ok, encoded = cv2.imencode(".jpg", blended, [int(cv2.IMWRITE_JPEG_QUALITY), 90])

@@ -18,7 +18,7 @@ Speak in English most of the time. Speak French when the user speaks French.
 
 ## Camera
 
-When you see the world through the robot camera, each image includes a degree ruler along the bottom, fixed corridor lines at half a meter and one meter ahead, and an orange SENSED corridor pair at the nearest forward sensor distance. Read where a target sits on the ruler: L20 means turn left 20 degrees; R20 means turn right with degrees=-20. The forward sensor distances tell you how far obstacles ahead actually are; the orange SENSED pair shows your body width at exactly that distance. If the gap you are aiming at does not fully enclose the SENSED pair, your body will not fit through it.
+When you see the world through the robot camera, each image includes a degree ruler along the bottom, fixed corridor lines at half a meter and one meter ahead, and an orange SENSED corridor pair at the nearest forward sensor distance. Read where a target sits on the ruler: L20 means turn left 20 degrees; R20 means turn right with degrees=-20. The forward sensor distances tell you how far obstacles ahead actually are; the orange SENSED pair shows your body width at exactly that distance. If the gap you are aiming at does not fully enclose the SENSED pair, your body will not fit through it. A reading of inf means that sensor sees nothing within its range; two dashes mean it is not reporting right now. The SENSED pair is drawn from the nearest real distance.
 
 ## Tools
 

@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import unittest
@@ -12,7 +13,7 @@ from voice.camera_overlay import (
     annotate_snapshot,
     nearest_forward_clearance_m,
 )
-from voice.assistant import forward_clearances
+from voice.assistant import forward_clearances, forward_sensors_sentence
 
 try:
     import cv2
@@ -65,6 +66,25 @@ class ForwardClearancesTest(unittest.TestCase):
             {"left": None, "center": None, "right": None},
         )
 
+    def test_no_object_in_range_maps_to_infinity(self):
+        clearances = forward_clearances(
+            {
+                "ok": True,
+                "sensors": {
+                    "readings": [
+                        {"name": "front_right", "role": "forward", "status": "no_object_in_range"},
+                    ]
+                },
+            }
+        )
+        self.assertEqual(clearances["right"], math.inf)
+
+    def test_sentence_covers_all_reading_states(self):
+        self.assertEqual(
+            forward_sensors_sentence({"left": 0.42, "center": math.inf, "right": None}),
+            " Forward sensors: left 0.42 meters, center clear beyond range, right unavailable.",
+        )
+
 
 class NearestClearanceTest(unittest.TestCase):
     def test_uses_minimum_available_clearance(self):
@@ -80,6 +100,17 @@ class NearestClearanceTest(unittest.TestCase):
 
     def test_sub_minimum_clearance_skips_sensed_pair_distance(self):
         self.assertLess(0.10, SENSED_CORRIDOR_MIN_M)
+
+    def test_infinite_clearance_never_binds(self):
+        self.assertEqual(
+            nearest_forward_clearance_m({"left": 0.42, "center": math.inf, "right": None}),
+            0.42,
+        )
+
+    def test_all_infinite_gives_no_sensed_distance(self):
+        self.assertIsNone(
+            nearest_forward_clearance_m({"left": math.inf, "center": math.inf, "right": math.inf})
+        )
 
 
 @unittest.skipUnless(HAS_CV2, "opencv not installed")

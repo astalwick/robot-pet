@@ -561,6 +561,13 @@ class AssistantStreamingTest(unittest.TestCase):
                             "trip_above_mm": 160,
                         },
                         {"name": "debug_raw", "distance_mm": 55, "ok": True},
+                        {
+                            "name": "front_right",
+                            "distance_mm": None,
+                            "ok": True,
+                            "role": "forward",
+                            "stop_below_mm": 150,
+                        },
                     ],
                 },
             }
@@ -574,6 +581,8 @@ class AssistantStreamingTest(unittest.TestCase):
         self.assertEqual(cliff["status"], "floor_normal")
         raw = result["sensors"]["readings"][2]
         self.assertEqual(raw, {"name": "debug_raw", "distance_mm": 55, "ok": True})
+        clear = result["sensors"]["readings"][3]
+        self.assertEqual(clear, {"name": "front_right", "role": "forward", "status": "no_object_in_range"})
 
     def test_inspect_robot_snapshot_reads_battery_and_drive_from_robot_motion(self):
         result = inspect_robot_snapshot(

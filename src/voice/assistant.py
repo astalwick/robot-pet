@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import time
 from collections.abc import AsyncIterator, Callable
@@ -419,6 +420,11 @@ def _interpret_sensor_reading(reading: dict[str, Any]) -> dict[str, Any]:
     ok = reading.get("ok")
     distance_mm = reading.get("distance_mm")
 
+    if role == "forward" and ok and distance_mm is None:
+        # The driver reports a valid measurement with no distance when nothing
+        # is within range: infinite clearance, not a failure.
+        return {"name": name, "role": "forward", "status": "no_object_in_range"}
+
     if role == "forward" and ok and distance_mm is not None:
         stop_below_mm = reading.get("stop_below_mm")
         tripped = stop_below_mm is not None and distance_mm < stop_below_mm
@@ -459,7 +465,9 @@ def forward_clearances(surroundings: dict[str, Any] | None) -> dict[str, float |
             continue
         name = (reading.get("name") or "").lower()
         clearance = reading.get("clearance_m")
-        if clearance is None or reading.get("ok") is False:
+        if reading.get("status") == "no_object_in_range":
+            slot = math.inf
+        elif clearance is None or reading.get("ok") is False:
             slot = None
         else:
             slot = float(clearance)
@@ -480,6 +488,8 @@ def forward_sensors_sentence(clearances: dict[str, float | None]) -> str:
         value = clearances.get(label)
         if value is None:
             parts.append(f"{label} unavailable")
+        elif math.isinf(value):
+            parts.append(f"{label} clear beyond range")
         else:
             parts.append(f"{label} {value:.2f} meters")
     return f" Forward sensors: {', '.join(parts)}."

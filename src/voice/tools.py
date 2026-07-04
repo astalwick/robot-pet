@@ -47,6 +47,7 @@ from voice.assistant import (
     check_health_snapshot,
     check_surroundings_snapshot,
     forward_clearances,
+    forward_sensors_sentence,
 )
 
 
@@ -220,6 +221,8 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
                 f"Scan snapshot {index + 1} of {captures}: the view {facing} degrees to your left of start. "
                 f"To face what you see here, turn {facing} degrees left (call turn with degrees={facing})."
             )
+        if clearances is not None:
+            label += forward_sensors_sentence(clearances)
         image_parts.append({"type": "input_text", "text": label})
         image_parts.append({"type": "input_image", "image_url": data_url})
 
@@ -295,8 +298,11 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
         jpeg = annotate_snapshot(jpeg, clearances)
         save_model_frame(jpeg, "look")
         data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+        caption = "Here is the current camera snapshot from the robot."
+        if clearances is not None:
+            caption += forward_sensors_sentence(clearances)
         image_parts = [
-            {"type": "input_text", "text": "Here is the current camera snapshot from the robot."},
+            {"type": "input_text", "text": caption},
             {"type": "input_image", "image_url": data_url},
         ]
         return RobotToolResult(

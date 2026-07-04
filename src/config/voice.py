@@ -39,6 +39,7 @@ class VoiceConfig:
     alternate_voice_id: str | None = None
     personality: str = "default"
     openai_model: str = DEFAULT_OPENAI_MODEL
+    vad_silence_threshold_secs: float = 1.0
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
     barge_in_min_chars: int = 12
@@ -74,6 +75,9 @@ class VoiceConfig:
             alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
             personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
             openai_model=str(values.get("openai_model", defaults.openai_model)).strip() or defaults.openai_model,
+            vad_silence_threshold_secs=float(
+                values.get("vad_silence_threshold_secs", defaults.vad_silence_threshold_secs)
+            ),
             barge_in_enabled=bool(values.get("barge_in_enabled", defaults.barge_in_enabled)),
             barge_in_min_words=int(values.get("barge_in_min_words", defaults.barge_in_min_words)),
             barge_in_min_chars=int(values.get("barge_in_min_chars", defaults.barge_in_min_chars)),
@@ -229,6 +233,15 @@ VOICE_FIELDS = (
         "type": "select",
         "options": list(OPENAI_MODEL_CHOICES),
         "help": "Conversation model. Requests use reasoning effort none.",
+    },
+    {
+        "key": "vad_silence_threshold_secs",
+        "label": "VAD silence (s)",
+        "type": "number",
+        "help": "0.5 .. 2.0 seconds of silence before Scribe commits an utterance",
+        "min": 0.5,
+        "max": 2.0,
+        "step": 0.1,
     },
     {
         "key": "barge_in_enabled",

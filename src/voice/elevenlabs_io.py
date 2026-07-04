@@ -100,6 +100,7 @@ async def stream_audio_to_scribe(
     usage: Any = None,
     on_status: Callable[[dict[str, object]], None] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    vad_silence_threshold_secs: float = SCRIBE_VAD_SILENCE_THRESHOLD_SECS,
 ) -> None:
     """Drain local mic audio for the whole active session, opening a Scribe websocket
     only while there is real speech to upload.
@@ -116,7 +117,7 @@ async def stream_audio_to_scribe(
             "model_id": SCRIBE_MODEL,
             "audio_format": "pcm_16000",
             "commit_strategy": "vad",
-            "vad_silence_threshold_secs": str(SCRIBE_VAD_SILENCE_THRESHOLD_SECS),
+            "vad_silence_threshold_secs": str(vad_silence_threshold_secs),
             "vad_threshold": str(SCRIBE_VAD_THRESHOLD),
             "min_speech_duration_ms": str(SCRIBE_MIN_SPEECH_DURATION_MS),
             "min_silence_duration_ms": str(SCRIBE_MIN_SILENCE_DURATION_MS),

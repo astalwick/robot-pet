@@ -319,8 +319,10 @@ class Connector:
     def __init__(self, sockets):
         self.sockets = list(sockets)
         self.calls = 0
+        self.urls = []
 
-    async def __call__(self, *_args, **_kwargs):
+    async def __call__(self, url, *_args, **_kwargs):
+        self.urls.append(url)
         self.calls += 1
         item = self.sockets.pop(0)
         if isinstance(item, type) and issubclass(item, Exception):
@@ -360,7 +362,7 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
             events.append(self.scribe_events.get_nowait())
         return events
 
-    def start(self, connector, **patches):
+    def start(self, connector, vad_silence_threshold_secs=None, **patches):
         fake_websockets = types.SimpleNamespace(connect=connector)
         defaults = dict(MIC_SCRIBE_GATE_HOLD_SECS=0, SCRIBE_RECONNECT_BASE_SECS=0)
         defaults.update(patches)
@@ -370,6 +372,9 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         ]
         for patch in self._patches:
             patch.start()
+        streamer_kwargs = {}
+        if vad_silence_threshold_secs is not None:
+            streamer_kwargs["vad_silence_threshold_secs"] = vad_silence_threshold_secs
         return asyncio.create_task(
             stream_audio_to_scribe(
                 self._chunks(),
@@ -378,6 +383,7 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
                 usage=self.usage,
                 on_status=self.statuses.append,
                 on_event=self.events.append,
+                **streamer_kwargs,
             )
         )
 
@@ -408,6 +414,15 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         await self.finish(task)
 
         self.assertEqual(connector.calls, 1)
+
+    async def test_vad_silence_threshold_secs_appears_in_scribe_url(self):
+        connector = Connector([FakeScribe()])
+        task = self.start(connector, vad_silence_threshold_secs=1.2)
+        self.push(QUIET)
+        await self.settle()
+        await self.finish(task)
+
+        self.assertIn("vad_silence_threshold_secs=1.2", connector.urls[0])
 
     async def test_preopen_failure_does_not_stop_streamer(self):
         connector = Connector([RuntimeError, FakeScribe()])

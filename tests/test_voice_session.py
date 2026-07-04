@@ -147,6 +147,37 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_start_passes_vad_silence_threshold_to_scribe_streamer(self):
+        class FakeAudio:
+            def mic_frames(self, _stop_event):
+                return object()
+
+        session = VoiceSession(
+            VoiceConfig(vad_silence_threshold_secs=1.2),
+            "test-elevenlabs-key",
+            object(),
+            lambda _update: None,
+            FakeAudio(),
+            personalities=CARD_MAP,
+        )
+
+        async def run():
+            async def fake_scribe_streamer(*_args, **kwargs):
+                self.assertEqual(kwargs["vad_silence_threshold_secs"], 1.2)
+                await session.stop_event.wait()
+
+            async def fake_handle_scribe_events(*_args, **_kwargs):
+                await session.stop_event.wait()
+
+            session.scribe_streamer = fake_scribe_streamer
+            with mock.patch("voice.session.handle_scribe_events", fake_handle_scribe_events):
+                await session.start()
+                await session.stop()
+
+        import asyncio
+
+        asyncio.run(run())
+
 
 class AssistantToolsTest(unittest.TestCase):
     def test_assistant_tools(self):

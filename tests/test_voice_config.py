@@ -125,6 +125,12 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual(config, VoiceConfig())
         self.assertNotIn("speculative_playback_enabled", config.to_dict())
 
+    def test_vad_silence_threshold_secs_defaults_and_round_trips(self):
+        self.assertEqual(VoiceConfig().vad_silence_threshold_secs, 1.0)
+        config = VoiceConfig.from_dict({"vad_silence_threshold_secs": 1.2})
+        self.assertEqual(config.vad_silence_threshold_secs, 1.2)
+        self.assertEqual(config.to_dict()["vad_silence_threshold_secs"], 1.2)
+
 
 if __name__ == "__main__":
     unittest.main()

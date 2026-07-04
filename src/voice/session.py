@@ -139,6 +139,7 @@ class VoiceSession:
                     usage=self.usage,
                     on_status=self.status_callback,
                     on_event=self.event_callback,
+                    vad_silence_threshold_secs=self.config.vad_silence_threshold_secs,
                 )
             ),
             asyncio.create_task(

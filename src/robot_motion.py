@@ -718,10 +718,24 @@ class MotionRunner:
             self.pending_intent_complete = None
             self.encoder_move = None
             if tick.result == "completed":
-                complete({"ok": True, "result": "completed"})
+                payload = {"ok": True, "result": "completed"}
             else:
-                complete({"ok": False, "error": tick.result or "unknown"})
+                payload = {"ok": False, "error": tick.result or "unknown"}
+            if tick.details:
+                payload.update(tick.details)
+            complete(payload)
         return tick.command
+
+    def _encoder_move_traveled_m(self, travel_counts: float | None = None) -> float:
+        distance = self.intent_executor.active_move_distance_meters()
+        if distance is None:
+            return 0.0
+        if travel_counts is None:
+            counts = self.encoder_move.last_travel if self.encoder_move is not None else 0.0
+        else:
+            counts = travel_counts
+        sign = 1.0 if distance >= 0 else -1.0
+        return sign * counts / ENCODER_COUNTS_PER_METER
 
     def _encoder_move_should_stop(
         self,
@@ -742,7 +756,18 @@ class MotionRunner:
 
         # A forward move that safety blocks is no longer making progress.
         if distance > 0 and commanding_forward and safety.blocked:
-            self._end_encoder_move("safety_blocked")
+            travel_counts = None
+            if self.encoder_move is not None:
+                left_now, right_now = motor.read_wheel_positions()
+                if left_now is not None and right_now is not None:
+                    travel_counts = (
+                        abs(_encoder_delta(left_now, self.encoder_move.left_start))
+                        + abs(_encoder_delta(right_now, self.encoder_move.right_start))
+                    ) / 2
+            details = {"traveled_m": self._encoder_move_traveled_m(travel_counts)}
+            if self._last_safety_reason is not None:
+                details["blocked_by"] = self._last_safety_reason
+            self._end_encoder_move("safety_blocked", details)
             return "safety_blocked"
 
         if self.encoder_move is None:
@@ -769,37 +794,45 @@ class MotionRunner:
             + abs(_encoder_delta(right_now, self.encoder_move.right_start))
         ) / 2
         if travel >= self.encoder_move.target_counts:
-            self._complete_encoder_move()
+            traveled_m = self._encoder_move_traveled_m(travel)
+            self._complete_encoder_move({"traveled_m": traveled_m})
             return "completed"
 
         if travel > self.encoder_move.last_travel:
             self.encoder_move.last_travel = travel
             self.encoder_move.last_progress_at = now
         elif now - self.encoder_move.last_progress_at >= ENCODER_MOVE_NO_PROGRESS_TIMEOUT_SECONDS:
-            self._end_encoder_move("encoder_no_progress")
+            traveled_m = self._encoder_move_traveled_m(travel)
+            self._end_encoder_move("encoder_no_progress", {"traveled_m": traveled_m})
             return "encoder_no_progress"
 
         return None
 
-    def _complete_encoder_move(self) -> None:
+    def _complete_encoder_move(self, details: dict | None = None) -> None:
         self.intent_executor.cancel()
         complete = self.pending_intent_complete
         self.pending_intent_complete = None
         self.encoder_move = None
         if complete is not None:
-            complete({"ok": True, "result": "completed"})
+            payload = {"ok": True, "result": "completed"}
+            if details:
+                payload.update(details)
+            complete(payload)
 
-    def _end_encoder_move(self, reason: str) -> None:
+    def _end_encoder_move(self, reason: str, details: dict | None = None) -> None:
         self.intent_executor.cancel()
-        self._fail_pending_intent(reason)
+        self._fail_pending_intent(reason, details)
 
-    def _fail_pending_intent(self, reason: str) -> None:
+    def _fail_pending_intent(self, reason: str, details: dict | None = None) -> None:
         self.encoder_move = None
         if self.pending_intent_complete is None:
             return
         complete = self.pending_intent_complete
         self.pending_intent_complete = None
-        complete({"ok": False, "error": reason})
+        payload = {"ok": False, "error": reason}
+        if details:
+            payload.update(details)
+        complete(payload)
 
     def _set_drive_state(self, state: str, reason: str | None = None) -> None:
         if state != self.drive_state or reason != self.stop_reason:

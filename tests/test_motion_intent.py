@@ -238,6 +238,7 @@ class MotionIntentExecutorTest(unittest.TestCase):
         done = executor.tick(now=1.5, gamepad_active=False, yaw_degrees=-90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
+        self.assertAlmostEqual(done.details["measured_degrees"], -90.0)
 
     def test_face_me_within_already_facing_range_completes_without_moving(self):
         executor = MotionIntentExecutor()
@@ -296,6 +297,19 @@ class MotionIntentExecutorTest(unittest.TestCase):
         done = executor.tick(now=3.5, gamepad_active=False, yaw_degrees=within_tolerance)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
+        self.assertAlmostEqual(done.details["measured_degrees"], within_tolerance)
+
+    def test_turn_negative_degrees_reports_negative_measured_rotation(self):
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=-45)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=-45.0)
+        self.assertTrue(stopping.snap_stop)
+        done = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-45.0)
+        self.assertTrue(done.finished)
+        self.assertEqual(done.result, "completed")
+        self.assertAlmostEqual(done.details["measured_degrees"], -45.0)
 
     def test_turn_uses_half_speed_inside_final_approach_range(self):
         executor = MotionIntentExecutor()
@@ -483,6 +497,7 @@ class MotionIntentExecutorTest(unittest.TestCase):
         done = executor.tick(now=1.0, gamepad_active=False, yaw_degrees=-90.0)
         self.assertTrue(done.finished)
         self.assertEqual(done.result, "completed")
+        self.assertAlmostEqual(done.details["measured_degrees"], 90.0)
 
     def test_turn_rejects_non_numeric_degrees(self):
         executor = MotionIntentExecutor()

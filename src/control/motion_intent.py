@@ -121,6 +121,7 @@ class IntentTick:
     finished: bool
     result: str | None  # "completed" or "preempted_by_gamepad" when finished
     snap_stop: bool = False
+    details: dict | None = None
 
 
 @dataclass
@@ -295,8 +296,7 @@ class MotionIntentExecutor:
         if self._active.tool == "face_me":
             relative = self._active.relative_degrees
             if abs(relative) <= FACE_ME_ALREADY_FACING_DEGREES:
-                self._active = None
-                return IntentTick(command=None, finished=True, result="completed")
+                return self._finish_turn("completed")
             return self._turn_tick(yaw_degrees, yaw_sample_time, abs(relative), now)
 
         if self._active.tool == "turn":
@@ -322,8 +322,7 @@ class MotionIntentExecutor:
         yaw sample before deciding whether a short correction is needed.
         """
         if yaw_degrees is None:
-            self._active = None
-            return IntentTick(command=None, finished=True, result="imu_unavailable")
+            return self._finish_turn("imu_unavailable")
 
         fresh_yaw = self._record_turn_yaw(yaw_degrees, yaw_sample_time, now)
         magnitude = abs(self._active.turned_degrees)
@@ -344,8 +343,7 @@ class MotionIntentExecutor:
                     and self._active.turn_correction_back != (error < 0)
                 )
             ):
-                self._active = None
-                return IntentTick(command=None, finished=True, result="completed")
+                return self._finish_turn("completed")
             self._active.turn_phase = "correcting"
             self._active.turn_corrections += 1
             self._active.turn_correction_back = error < 0
@@ -376,8 +374,7 @@ class MotionIntentExecutor:
             )
 
         if self._turn_stalled(magnitude, abs(error), now):
-            self._active = None
-            return IntentTick(command=None, finished=True, result="turn_stalled")
+            return self._finish_turn("turn_stalled")
 
         if fresh_yaw or self._active.turn_stop_at is None:
             self._active.turn_stop_at = self._turn_stop_at(
@@ -389,6 +386,24 @@ class MotionIntentExecutor:
             command=MotionCommand(linear_x=0.0, angular_z=angular_z),
             finished=False,
             result=None,
+        )
+
+    def _finish_turn(self, result: str) -> IntentTick:
+        turned = self._active.turned_degrees
+        if self._active.tool == "face_me":
+            commanded = self._active.relative_degrees
+        else:
+            commanded = self._active.degrees
+        if commanded is not None and commanded != 0:
+            measured = math.copysign(abs(turned), commanded)
+        else:
+            measured = turned
+        self._active = None
+        return IntentTick(
+            command=None,
+            finished=True,
+            result=result,
+            details={"measured_degrees": measured},
         )
 
     def _record_turn_yaw(

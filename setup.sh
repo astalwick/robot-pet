@@ -10,15 +10,15 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/14] Installing base packages..."
+echo "[1/15] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools
 
 # Add user to dialout group for serial port access (idempotent)
-echo "[2/14] Adding $USER to dialout group..."
+echo "[2/15] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
 # I2C for ToF sensors and future IMU (idempotent)
-echo "[3/14] Enabling I2C and adding $USER to i2c group..."
+echo "[3/15] Enabling I2C and adding $USER to i2c group..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if ! grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG" 2>/dev/null; then
     echo "dtparam=i2c_arm=on" | sudo tee -a "$BOOT_CONFIG" >/dev/null
@@ -29,7 +29,7 @@ fi
 sudo usermod -a -G i2c "$USER"
 
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
-echo "[4/14] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
+echo "[4/15] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
 sudo usermod -a -G input "$USER"
 sudo usermod -a -G audio "$USER"
 sudo tee /etc/udev/rules.d/99-robot-pet-respeaker.rules >/dev/null <<'UDEV'
@@ -39,7 +39,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=2886 --attr-match=idProduct=001e
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
-echo "[5/14] Configuring UART for RoboClaw..."
+echo "[5/15] Configuring UART for RoboClaw..."
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
     echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
     echo "    Added enable_uart=1 to $BOOT_CONFIG"
@@ -53,13 +53,34 @@ else
     echo "    Bluetooth already disabled on UART"
 fi
 
+# Cut power on halt/shutdown (Pi 4/5 EEPROM; idempotent)
+echo "[6/15] Configuring EEPROM power-off on halt..."
+if command -v rpi-eeprom-config >/dev/null 2>&1; then
+    EEPROM_CONFIG="$(mktemp)"
+    sudo rpi-eeprom-config >"$EEPROM_CONFIG"
+    if grep -q "^POWER_OFF_ON_HALT=1" "$EEPROM_CONFIG"; then
+        echo "    POWER_OFF_ON_HALT=1 already set"
+    else
+        if grep -q "^POWER_OFF_ON_HALT=" "$EEPROM_CONFIG"; then
+            sed -i 's/^POWER_OFF_ON_HALT=.*/POWER_OFF_ON_HALT=1/' "$EEPROM_CONFIG"
+        else
+            echo "POWER_OFF_ON_HALT=1" >>"$EEPROM_CONFIG"
+        fi
+        sudo rpi-eeprom-config --apply "$EEPROM_CONFIG"
+        echo "    Set POWER_OFF_ON_HALT=1 in EEPROM"
+    fi
+    rm "$EEPROM_CONFIG"
+else
+    echo "    rpi-eeprom-config not found; skipping EEPROM power-off setting"
+fi
+
 # Create log directory (idempotent)
-echo "[6/14] Creating log directory at $LOG_DIR..."
+echo "[7/15] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[7/14] Installing login welcome message..."
+echo "[8/15] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -118,7 +139,7 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Configure interactive Bash sessions to start in robot-pet with the venv active.
-echo "[8/14] Configuring Bash login directory, venv, and dashboard autostart..."
+echo "[9/15] Configuring Bash login directory, venv, and dashboard autostart..."
 BASHRC="$HOME/.bashrc"
 BASH_LOGIN_START="# >>> robot-pet login setup >>>"
 BASH_LOGIN_END="# <<< robot-pet login setup <<<"
@@ -143,7 +164,7 @@ fi
 BASH_LOGIN
 
 # Install redeploy permissions for the dashboard action.
-echo "[9/14] Installing redeploy permissions..."
+echo "[10/15] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
 chmod +x "$REPO_DIR/restart.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
@@ -201,7 +222,7 @@ rm "$SUDOERS_TMP"
 # Set up Python venv (idempotent - only creates if missing or misconfigured).
 # --system-site-packages lets the venv import apt-installed Pi libraries
 # (picamera2, libcamera) that aren't reliably pip-installable.
-echo "[10/14] Setting up Python venv at $VENV_PATH..."
+echo "[11/15] Setting up Python venv at $VENV_PATH..."
 NEEDS_VENV_RECREATE=0
 if [[ -d "$VENV_PATH" ]]; then
   if ! grep -q "^include-system-site-packages = true" "$VENV_PATH/pyvenv.cfg" 2>/dev/null; then
@@ -217,7 +238,7 @@ if [[ "$NEEDS_VENV_RECREATE" == "1" ]]; then
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[11/14] Installing Python packages..."
+echo "[12/15] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 python -m pip install -e "$REPO_DIR"
@@ -227,11 +248,11 @@ python -m pip install -e "$REPO_DIR"
 # otherwise make pip fall back to the ancient 0.4.0 (missing download_models).
 python -m pip install --no-deps --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
 
-echo "[12/14] Running tests..."
+echo "[13/15] Running tests..."
 python -m unittest discover tests
 
 # Set ReSpeaker PCM volume and persist via alsa-restore.service on next boot
-echo "[13/14] Setting speaker volume..."
+echo "[14/15] Setting speaker volume..."
 if amixer -c 0 sset 'PCM' 100% >/dev/null; then
   sudo alsactl store || echo "    WARNING: could not persist ALSA mixer state; continuing"
 else
@@ -239,7 +260,7 @@ else
 fi
 
 # Install and enable systemd services
-echo "[14/14] Installing systemd services..."
+echo "[15/15] Installing systemd services..."
 for service_file in "$REPO_DIR/systemd/"*.service; do
   sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
 done

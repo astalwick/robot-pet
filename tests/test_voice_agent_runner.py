@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import sys
 import unittest
@@ -13,6 +14,7 @@ from voice.agent_runner import (
     NUDGE_TEXT,
     STEP_LIMIT_FINAL,
     TIMEOUT_FINAL,
+    goal_pose_text,
     run_agent_goal,
 )
 from voice.assistant import VoiceState
@@ -317,9 +319,10 @@ class ReasonsWellTest(unittest.TestCase):
         # The second call chains on the first response and carries only the new
         # observation, not a rebuilt transcript.
         self.assertEqual(second["previous_response_id"], "resp_1")
-        self.assertEqual(len(second["input"]), 1)
+        self.assertEqual(len(second["input"]), 2)
         self.assertEqual(second["input"][0]["type"], "function_call_output")
         self.assertEqual(second["input"][0]["call_id"], "call_x")
+        self.assertIn("Position:", second["input"][1]["content"])
 
     def test_natural_termination_speaks_final_with_no_nudge(self):
         spoken: list[str] = []
@@ -726,7 +729,93 @@ class MotionObservationTest(unittest.TestCase):
         image_parts = [part for part in image_message["content"] if part.get("type") == "input_image"]
         self.assertIn("0.31 meters forward", text_parts[0]["text"])
         self.assertIn("(blocked)", text_parts[0]["text"])
+        self.assertIn("Position:", text_parts[0]["text"])
         self.assertTrue(image_parts[0]["image_url"].startswith("data:image/jpeg;base64,"))
+
+    def test_turn_then_blocked_move_pose_in_next_input(self):
+        steps = {"n": 0}
+
+        def motion(name, **_kwargs):
+            if name == "turn":
+                return {"ok": True, "result": "completed", "measured_degrees": 28.0}
+            return {
+                "ok": False,
+                "error": "safety_blocked",
+                "traveled_m": 0.31,
+                "blocked_by": "front_right_obstacle",
+            }
+
+        def responder(_input_items):
+            steps["n"] += 1
+            if steps["n"] == 1:
+                return call("turn", arguments={"degrees": 30})
+            if steps["n"] == 2:
+                return call("move", arguments={"distance_meters": 0.5})
+            return final("Done.")
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Turn and move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=motion,
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+            )
+        )
+
+        follow_up = openai.responses.calls[2]["input"]
+        image_message = next(item for item in follow_up if isinstance(item.get("content"), list))
+        caption = next(
+            part["text"] for part in image_message["content"] if part.get("type") == "input_text"
+        )
+        heading_rad = math.radians(28.0)
+        expected_x = 0.31 * math.cos(heading_rad)
+        expected_y = 0.31 * math.sin(heading_rad)
+        self.assertIn(f"{expected_x:.2f} meters forward", caption)
+        self.assertIn(f"{expected_y:.2f} meters left", caption)
+        self.assertIn("28 degrees left of your starting heading", caption)
+        self.assertIn("turned 30 left (measured 28)", caption)
+        self.assertIn("moved 0.5 forward (blocked at 0.31, right side)", caption)
+
+    def test_goal_pose_text_formats_position_and_actions(self):
+        from voice.agent_runner import GoalPose
+
+        pose = GoalPose(x=1.4, y=0.3, heading=85.0)
+        pose.recent_actions = [
+            "turned 30 left (measured 28)",
+            "moved 0.5 forward (blocked at 0.31, right side)",
+        ]
+        text = goal_pose_text(pose)
+        self.assertIn("1.40 meters forward and 0.30 meters left", text)
+        self.assertIn("85 degrees left of your starting heading", text)
+        self.assertIn("Recent actions: turned 30 left (measured 28)", text)
+
+    def test_failed_turn_without_measurement_does_not_update_pose(self):
+        from voice.agent_runner import GoalPose
+
+        pose = GoalPose()
+        pose.record_motion(
+            "turn",
+            {"degrees": 30},
+            {"ok": False, "error": "motion_caller_missing"},
+        )
+        self.assertEqual(pose.heading, 0.0)
+        self.assertEqual(pose.recent_actions, [])
+
+    def test_stalled_turn_with_measurement_still_updates_pose(self):
+        from voice.agent_runner import GoalPose
+
+        pose = GoalPose()
+        pose.record_motion(
+            "turn",
+            {"degrees": 30},
+            {"ok": False, "error": "turn_stalled", "measured_degrees": 12.0},
+        )
+        self.assertEqual(pose.heading, 12.0)
+        self.assertEqual(pose.recent_actions, ["turned 30 left (measured 12)"])
 
     def test_failing_camera_still_returns_motion_result_with_surroundings(self):
         steps = {"n": 0}
@@ -755,10 +844,11 @@ class MotionObservationTest(unittest.TestCase):
         )
 
         follow_up = openai.responses.calls[1]["input"]
-        self.assertEqual(len(follow_up), 1)
+        self.assertEqual(len(follow_up), 2)
         tool_output = json.loads(follow_up[0]["output"])
         self.assertTrue(tool_output["ok"])
         self.assertIn("surroundings", tool_output)
+        self.assertIn("Position:", follow_up[1]["content"])
 
 
 if __name__ == "__main__":

@@ -23,9 +23,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass, field
 from typing import Any
 
 from lib.log import setup_logging
@@ -74,6 +76,138 @@ NUDGE_TEXT = (
 )
 
 GOAL_MOTION_OBSERVATION_TOOLS = frozenset({MOVE_TOOL_NAME, TURN_TOOL_NAME, FACE_ME_TOOL_NAME})
+GOAL_POSE_TOOLS = GOAL_MOTION_OBSERVATION_TOOLS
+MAX_RECENT_ACTIONS = 5
+
+
+def _motion_succeeded(output: dict[str, Any]) -> bool:
+    return output.get("ok") is not False
+
+
+def _turn_measured_degrees(arguments: dict[str, Any], output: dict[str, Any]) -> float | None:
+    measured = output.get("measured_degrees")
+    if measured is None and _motion_succeeded(output):
+        measured = arguments.get("degrees", arguments.get("relative_degrees"))
+    if isinstance(measured, (int, float)):
+        return measured
+    return None
+
+
+@dataclass
+class GoalPose:
+    x: float = 0.0
+    y: float = 0.0
+    heading: float = 0.0
+    recent_actions: list[str] = field(default_factory=list)
+
+    def record_motion(self, tool: str, arguments: dict[str, Any], output: dict[str, Any]) -> None:
+        line = _action_log_line(tool, arguments, output)
+        if line:
+            self.recent_actions.append(line)
+            if len(self.recent_actions) > MAX_RECENT_ACTIONS:
+                self.recent_actions.pop(0)
+
+        if tool in (TURN_TOOL_NAME, FACE_ME_TOOL_NAME):
+            measured = _turn_measured_degrees(arguments, output)
+            if measured is not None:
+                self.heading += measured
+            return
+
+        if tool == MOVE_TOOL_NAME:
+            traveled = output.get("traveled_m")
+            if not isinstance(traveled, (int, float)):
+                return
+            heading_rad = math.radians(self.heading)
+            self.x += traveled * math.cos(heading_rad)
+            self.y += traveled * math.sin(heading_rad)
+
+
+def _normalize_heading_degrees(heading: float) -> float:
+    normalized = heading % 360.0
+    if normalized > 180.0:
+        normalized -= 360.0
+    return normalized
+
+
+def _format_axis_distance(value: float, positive_label: str, negative_label: str) -> str | None:
+    if abs(value) < 0.005:
+        return None
+    label = positive_label if value > 0 else negative_label
+    return f"{abs(value):.2f} meters {label}"
+
+
+def _position_phrase(x: float, y: float) -> str:
+    forward = _format_axis_distance(x, "forward", "back")
+    lateral = _format_axis_distance(y, "left", "right")
+    if forward and lateral:
+        return f"{forward} and {lateral}"
+    if forward:
+        return forward
+    if lateral:
+        return lateral
+    return "at your starting point"
+
+
+def _facing_phrase(heading: float) -> str:
+    normalized = _normalize_heading_degrees(heading)
+    if abs(normalized) < 0.5:
+        return "facing your starting heading"
+    if normalized > 0:
+        return f"facing {abs(normalized):.0f} degrees left of your starting heading"
+    return f"facing {abs(normalized):.0f} degrees right of your starting heading"
+
+
+def goal_pose_text(pose: GoalPose) -> str:
+    position = _position_phrase(pose.x, pose.y)
+    facing = _facing_phrase(pose.heading)
+    text = f"Position: {position} of where you started this goal, {facing}."
+    if pose.recent_actions:
+        text = f"{text} Recent actions: {', '.join(pose.recent_actions)}."
+    return text
+
+
+def _blocked_side_label(blocked_by: str) -> str:
+    reason = blocked_by.lower()
+    if "right" in reason:
+        return "right side"
+    if "left" in reason:
+        return "left side"
+    if "center" in reason:
+        return "center"
+    return blocked_by
+
+
+def _action_log_line(tool: str, arguments: dict[str, Any], output: dict[str, Any]) -> str | None:
+    if tool == TURN_TOOL_NAME:
+        commanded = arguments.get("degrees")
+        measured = _turn_measured_degrees(arguments, output)
+        if not isinstance(commanded, (int, float)) or measured is None:
+            return None
+        side = "left" if commanded > 0 else "right"
+        return f"turned {abs(commanded):.0f} {side} (measured {abs(measured):.0f})"
+
+    if tool == FACE_ME_TOOL_NAME:
+        measured = _turn_measured_degrees(arguments, output)
+        if measured is None:
+            return None
+        return f"faced you (measured {abs(measured):.0f})"
+
+    if tool == MOVE_TOOL_NAME:
+        commanded = arguments.get("distance_meters")
+        if not isinstance(commanded, (int, float)):
+            return None
+        direction = "forward" if commanded > 0 else "backward"
+        traveled = output.get("traveled_m")
+        if output.get("error") == "safety_blocked" and isinstance(traveled, (int, float)):
+            blocked_by = output.get("blocked_by")
+            side = _blocked_side_label(blocked_by) if isinstance(blocked_by, str) else "blocked"
+            return f"moved {abs(commanded):.1f} {direction} (blocked at {abs(traveled):.2f}, {side})"
+        if isinstance(traveled, (int, float)):
+            move_dir = "forward" if traveled >= 0 else "backward"
+            return f"moved {abs(traveled):.2f} {move_dir}"
+        return None
+
+    return None
 
 
 def safety_blocked_hint(blocked_by: str) -> str | None:
@@ -130,6 +264,7 @@ async def _attach_goal_motion_observation(
     call: RobotToolCall,
     output: dict[str, Any],
     context: VoiceToolContext,
+    pose_text: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     enriched = dict(output)
     if context.robot_inspection_caller is not None:
@@ -154,7 +289,10 @@ async def _attach_goal_motion_observation(
             jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
             data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
             image_parts = [
-                {"type": "input_text", "text": motion_camera_caption(call.name, call.arguments, enriched)},
+                {
+                    "type": "input_text",
+                    "text": motion_camera_caption(call.name, call.arguments, enriched, pose_text),
+                },
                 {"type": "input_image", "image_url": data_url},
             ]
         except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
@@ -300,6 +438,7 @@ async def run_agent_goal(
     ]
     previous_response_id: str | None = None
     empty_responses = 0
+    pose = GoalPose()
 
     # The acknowledgement the assistant spoke alongside start_goal plays here, riding
     # the same narration lifecycle so it overlaps the first model call and is
@@ -392,8 +531,13 @@ async def run_agent_goal(
 
             output = dict(result.output)
             image_parts = result.image_parts
+            if call.name in GOAL_POSE_TOOLS:
+                pose.record_motion(call.name, call.arguments, output)
+            pose_text = goal_pose_text(pose)
             if call.name in GOAL_MOTION_OBSERVATION_TOOLS:
-                output, motion_image = await _attach_goal_motion_observation(call, output, context)
+                output, motion_image = await _attach_goal_motion_observation(
+                    call, output, context, pose_text
+                )
                 if motion_image is not None:
                     image_parts = motion_image
 
@@ -410,6 +554,8 @@ async def run_agent_goal(
                 )
             if image_parts:
                 input_items.append({"role": "user", "content": image_parts})
+            elif call.name in GOAL_MOTION_OBSERVATION_TOOLS:
+                input_items.append({"role": "user", "content": pose_text})
 
         log.info("goal hit step limit (%d steps): %r", max_steps, goal)
         return await speak_final(STEP_LIMIT_FINAL)

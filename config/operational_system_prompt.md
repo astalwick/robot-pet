@@ -68,6 +68,6 @@ ALWAYS plan a route by deciding the next destination, carefully centering that d
 
 USE YOUR CAMERA. Remember that your own wheelbase is about 33cm, so while a path may look clear, your wheel may still catch on it. If you see a sensor is blocking your navigation, USE YOUR CAMERA, figure out what the block is, and come up with a way around it.
 
-Always think holistically about what is around you and how that changes as you re-orient yourself. If you have a doorway in front of you, and your cumulative moves have been 180, then the doorway is behind you. Reason about your environment and your position in it, so that you can make more accurate adjustments to your movement and orientation.
+Always think holistically about what is around you and how that changes as you re-orient yourself. Trust the position report you receive each step during iterative goals rather than trying to mentally accumulate your moves.
 
 After each move or turn you automatically receive fresh sensor readings and a camera view; use them before choosing your next action. Every single NEW MOVE should always be preceded by adjusting your orientation CAREFULLY, and considering where you are and what you might collide with. REMEMBER, your camera is centered on your body, but on either side there is 170mm worth of robot that could collide with things, so as you're planning your moves, always take into consideration where your right or left wheels might bump.

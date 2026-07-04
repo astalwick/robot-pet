@@ -84,6 +84,15 @@ class TurnPolicyTest(unittest.TestCase):
         for ending in ["-", ",", ":", ";"]:
             self.assertFalse(should_speculate(f"What is your name{ending}"))
 
+    def test_trailing_continuation_words_block_speculation(self):
+        policy = TurnPolicy()
+        for text in ("turn left and", "I want to know about the"):
+            should_speculate, reason = policy.speculation_decision(text)
+            self.assertFalse(should_speculate)
+            self.assertEqual(reason, "incomplete_partial")
+        for text in ("what is that for?", "bring me the ball please"):
+            self.assertFalse(policy.looks_incomplete_partial(text))
+
     def test_matching_commit_confirms_speculative_prompt(self):
         self.assertTrue(transcript_matches("What is your name?", "what is your name"))
 
@@ -3607,9 +3616,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "partial", "text": "and the tomatoes"})
             await asyncio.sleep(0.05)
@@ -3617,7 +3626,7 @@ class AssistantStreamingTest(unittest.TestCase):
             cancel_events = [event for event in timeline_events if event.get("type") == "turn_cancel"]
             self.assertTrue(any(event.get("reason") == "continuation_retraction" for event in cancel_events))
             self.assertEqual(playback_stops, ["stop"])
-            self.assertIn("I want to buy some apples and and the tomatoes", started_prompts)
+            self.assertIn("I want to buy some apples today and the tomatoes", started_prompts)
 
             stop_event.set()
             handler_task.cancel()
@@ -3671,9 +3680,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.08)
             await scribe_events.put({"type": "audio_activity", "rms": 900})
             await scribe_events.put({"type": "partial", "text": "wait please"})
@@ -3681,7 +3690,7 @@ class AssistantStreamingTest(unittest.TestCase):
 
             cancel_events = [event for event in timeline_events if event.get("type") == "turn_cancel"]
             self.assertFalse(any(event.get("reason") == "continuation_retraction" for event in cancel_events))
-            self.assertEqual(cancelled, ["I want to buy some apples and"])
+            self.assertEqual(cancelled, ["I want to buy some apples today"])
             self.assertTrue(any(event.get("type") == "barge_in_fired" for event in timeline_events))
 
             stop_event.set()
@@ -3736,9 +3745,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "audio_activity", "rms": 900})
             await scribe_events.put({"type": "partial", "text": "stop please"})
@@ -3747,7 +3756,7 @@ class AssistantStreamingTest(unittest.TestCase):
             cancel_events = [event for event in timeline_events if event.get("type") == "turn_cancel"]
             self.assertFalse(any(event.get("reason") == "continuation_retraction" for event in cancel_events))
             self.assertFalse(any(event.get("type") == "false_start" for event in timeline_events))
-            self.assertEqual(cancelled, ["I want to buy some apples and"])
+            self.assertEqual(cancelled, ["I want to buy some apples today"])
             self.assertTrue(any(
                 event.get("type") == "barge_in_fired" and event.get("reason") == "explicit_interrupt"
                 for event in timeline_events
@@ -3804,16 +3813,16 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(1.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "partial", "text": "and the tomatoes"})
             await scribe_events.put({"type": "commit", "text": "stop please"})
             await asyncio.sleep(0.05)
 
-            self.assertEqual(started_prompts, ["I want to buy some apples and"])
-            self.assertNotIn("I want to buy some apples and stop please", started_prompts)
+            self.assertEqual(started_prompts, ["I want to buy some apples today"])
+            self.assertNotIn("I want to buy some apples today stop please", started_prompts)
 
             stop_event.set()
             handler_task.cancel()
@@ -3870,9 +3879,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "partial", "text": "and"})
             await asyncio.sleep(0.05)
@@ -3933,15 +3942,15 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             )
 
-            await scribe_events.put({"type": "partial", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "partial", "text": "I want to buy some apples today"})
             await asyncio.sleep(1.05)
-            await scribe_events.put({"type": "commit", "text": "I want to buy some apples and"})
+            await scribe_events.put({"type": "commit", "text": "I want to buy some apples today"})
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "partial", "text": "and the tomatoes"})
             await scribe_events.put({"type": "commit", "text": "and the tomatoes please"})
             await asyncio.sleep(0.05)
 
-            self.assertIn("I want to buy some apples and and the tomatoes please", started_prompts)
+            self.assertIn("I want to buy some apples today and the tomatoes please", started_prompts)
 
             stop_event.set()
             handler_task.cancel()

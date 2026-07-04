@@ -52,6 +52,11 @@ class TurnPolicy:
     explicit_interrupt_words: frozenset[str] = field(
         default_factory=lambda: frozenset({"stop", "wait", "no", "cancel", "pause"})
     )
+    incomplete_trailing_words: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            {"and", "but", "or", "so", "because", "then", "if", "the", "a", "an", "of", "to", "with", "for"}
+        )
+    )
 
     def normalized_transcript(self, text: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", text.lower())).strip()
@@ -64,7 +69,13 @@ class TurnPolicy:
         return difflib.SequenceMatcher(None, normalized_left, normalized_right).ratio() >= self.confirm_similarity
 
     def looks_incomplete_partial(self, text: str) -> bool:
-        return text.strip().endswith(self.incomplete_partial_suffixes)
+        stripped = text.strip()
+        if stripped.endswith(self.incomplete_partial_suffixes):
+            return True
+        if stripped.endswith(self.complete_partial_suffixes):
+            return False
+        words = self.normalized_transcript(text).split()
+        return bool(words) and words[-1] in self.incomplete_trailing_words
 
     def transcript_features(self, text: str) -> dict[str, object]:
         normalized = self.normalized_transcript(text)

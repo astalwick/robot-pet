@@ -502,6 +502,27 @@ class TimelineBufferTest(unittest.TestCase):
         self.assertEqual(last["input_to_audio_ms"], 1200)
         self.assertEqual(latency["median_input_to_audio_ms"], 1200)
 
+    def test_latency_stats_matches_stitched_prompt_to_commit_suffix(self):
+        buffer = TimelineBuffer()
+        buffer.add_event({"type": "commit", "t": 1.0, "text": "and motors please"})
+        buffer.add_event(
+            {
+                "type": "turn_start",
+                "t": 1.3,
+                "turn_id": 1,
+                "speculative": False,
+                "prompt": "Tell me about batteries and motors please",
+            }
+        )
+        buffer.add_event({"type": "assistant_start", "t": 1.9, "turn_id": 1})
+
+        latency = buffer.snapshot(now=2.0)["latency"]
+        last = latency["last"]
+
+        self.assertEqual(last["input_type"], "commit")
+        self.assertEqual(last["input_to_audio_ms"], 900)
+        self.assertEqual(latency["median_input_to_audio_ms"], 900)
+
 
 def service_config(**kwargs):
     from config.voice import VoiceConfig

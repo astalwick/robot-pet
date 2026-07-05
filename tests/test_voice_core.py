@@ -745,7 +745,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["I feel fine."])
+            self.assertEqual("".join(chunks), "I feel fine.")
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output["battery"]["status"], "ok")
             self.assertNotIn("sensors", tool_output)
@@ -797,7 +797,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["I moved."])
+            self.assertEqual("".join(chunks), "I moved.")
             follow_up = fake_responses.calls[1]["input"]
             tool_output = json.loads(follow_up[0]["output"])
             self.assertEqual(tool_output["traveled_m"], 0.5)
@@ -853,7 +853,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["Let me check.", "I see you."])
+            self.assertEqual("".join(chunks), "Let me check.I see you.")
             self.assertEqual(len(fake_responses.calls), 2)
 
         asyncio.run(run())
@@ -1042,9 +1042,9 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(
-                chunks, ["On it.", AgentGoalRequest(goal="find the ball", preamble="")]
-            )
+            self.assertTrue(all(isinstance(chunk, str) for chunk in chunks[:-1]))
+            self.assertEqual("".join(chunks[:-1]), "On it.")
+            self.assertEqual(chunks[-1], AgentGoalRequest(goal="find the ball", preamble=""))
             self.assertEqual(len(fake_responses.calls), 1)
 
         asyncio.run(run())
@@ -1079,7 +1079,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 ]
 
             self.assertEqual(fake_responses.calls, 2)
-            self.assertEqual(chunks, ["Hello there."])
+            self.assertEqual("".join(chunks), "Hello there.")
 
         asyncio.run(run())
 
@@ -1107,7 +1107,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["Hello."])
+            self.assertEqual("".join(chunks), "Hello.")
             self.assertEqual(calls[0]["model"], "gpt-5.5")
             self.assertEqual(calls[0]["reasoning"], {"effort": "none"})
 
@@ -1160,7 +1160,7 @@ class AssistantStreamingTest(unittest.TestCase):
             ]
 
             self.assertTrue(pending[0])
-            self.assertEqual(chunks, ["Bye."])
+            self.assertEqual("".join(chunks), "Bye.")
             self.assertEqual(len(fake_responses.calls), 2)
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output, {"ok": True, "ended": True})
@@ -1230,7 +1230,43 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_run_assistant_turn_start_goal_skips_tts_speaker(self):
+    def test_run_assistant_turn_starts_speaker_before_openai_stream(self):
+        async def run():
+            speaker_started = asyncio.Event()
+            create_saw_speaker_started = []
+
+            class FakeResponses:
+                async def create(self, **kwargs):
+                    create_saw_speaker_started.append(speaker_started.is_set())
+
+                    async def stream():
+                        yield SimpleNamespace(type="response.output_text.delta", delta="Hello.")
+                        yield SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1"))
+
+                    return stream()
+
+            async def fake_speaker(text_chunks, *args, **kwargs):
+                speaker_started.set()
+                async for _chunk in text_chunks:
+                    pass
+
+            text = await run_assistant_turn(
+                1,
+                [{"role": "user", "content": "Hello"}],
+                asyncio.Event(),
+                asyncio.Event(),
+                SimpleNamespace(responses=FakeResponses()),
+                "key",
+                VoiceState("test-voice"),
+                tts_speaker=fake_speaker,
+            )
+
+            self.assertEqual(text, "Hello.")
+            self.assertEqual(create_saw_speaker_started, [True])
+
+        asyncio.run(run())
+
+    def test_run_assistant_turn_start_goal_opens_speaker_without_speech(self):
         async def run():
             class FakeResponses:
                 def __init__(self):
@@ -1276,8 +1312,9 @@ class AssistantStreamingTest(unittest.TestCase):
             )
 
             self.assertEqual(result, AgentGoalRequest(goal="patrol the room"))
-            # A pure handoff never opens the TTS/playback path.
-            self.assertEqual(spoken, [])
+            # Stage 3 starts the speaker immediately to prewarm TTS; pure handoff
+            # still yields no speech into it.
+            self.assertEqual(spoken, [True])
 
         asyncio.run(run())
 
@@ -1329,7 +1366,7 @@ class AssistantStreamingTest(unittest.TestCase):
             )
 
             self.assertEqual(result, AgentGoalRequest(goal="find the ball", preamble=""))
-            self.assertEqual(spoken, ["On it."])
+            self.assertEqual("".join(spoken), "On it.")
             self.assertEqual(len(fake_responses.calls), 1)
 
         asyncio.run(run())
@@ -1422,7 +1459,7 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["I see you."])
+            self.assertEqual("".join(chunks), "I see you.")
             self.assertEqual(
                 [(event["type"], event["name"], event.get("ok")) for event in timeline_events],
                 [("tool_start", LOOK_TOOL_NAME, None), ("tool_done", LOOK_TOOL_NAME, True)],
@@ -4877,6 +4914,7 @@ class RobotToolDispatchTest(unittest.TestCase):
             result = await dispatch_tool(self._call("scan", arguments={"degrees": 10000}), context)
 
             self.assertTrue(result.ok)
+            self.assertEqual(result.output["snapshots"], 4)
             self.assertEqual(result.output["degrees_covered"], 360)
             self.assertEqual(len(turns), 4)
 
@@ -4898,8 +4936,12 @@ class RobotToolDispatchTest(unittest.TestCase):
             result = await dispatch_tool(self._call("scan", arguments={"degrees": 180}), context)
 
             self.assertTrue(result.ok)
-            # Two snapshot turns of +90, then a corrective turn back to start so the
-            # snapshot labels stay true from where the robot now sits.
+            self.assertEqual(result.output["snapshots"], 3)
+            self.assertEqual(result.output["degrees_covered"], 180)
+            labels = [part["text"] for part in result.image_parts or [] if part["type"] == "input_text"]
+            self.assertIn("the view 180 degrees to your left of start", labels[2])
+            # Two turns between snapshots, then a corrective turn back to start so
+            # the snapshot labels stay true from where the robot now sits.
             self.assertEqual(turns[:2], [90, 90])
             self.assertEqual(sum(turns), 0)
 

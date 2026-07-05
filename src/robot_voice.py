@@ -137,6 +137,12 @@ class TimelineBuffer:
                     if user_event.get("text") == prompt:
                         source = user_event
                         break
+                if source is None and isinstance(prompt, str):
+                    for user_event in reversed(user_events):
+                        text = user_event.get("text")
+                        if isinstance(text, str) and prompt.endswith(text):
+                            source = user_event
+                            break
                 records[turn_id] = {
                     "turn_id": turn_id,
                     "speculative": bool(event.get("speculative")),

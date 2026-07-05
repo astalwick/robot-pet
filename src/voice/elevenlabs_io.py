@@ -9,6 +9,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import cache
 from typing import Any
 from urllib.parse import urlencode
 
@@ -74,6 +75,7 @@ def log_elevenlabs_payload(data: object, context: str) -> None:
         log.warning("elevenlabs %s: %s", context, data)
 
 
+@cache
 def ssl_context() -> ssl.SSLContext:
     try:
         import certifi
@@ -434,7 +436,7 @@ async def speak_with_eleven_flash(
                             "similarity_boost": 0.85,
                             "use_speaker_boost": False,
                         },
-                        "generation_config": {"chunk_length_schedule": [120, 160, 250, 290]},
+                        "generation_config": {"chunk_length_schedule": [50, 120, 250, 290]},
                         "xi_api_key": elevenlabs_api_key,
                     }
                 )
@@ -528,7 +530,7 @@ async def speak_with_eleven_flash(
         for attempt in range(2):
             await ensure_voice_socket()
             try:
-                await ws.send(json.dumps({"text": chunk, "try_trigger_generation": True}))
+                await ws.send(json.dumps({"text": chunk}))
                 return
             except Exception:
                 if attempt:

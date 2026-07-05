@@ -911,7 +911,6 @@ async def stream_openai_words(
     )
 
     pending = ""
-    word_buffer: list[str] = []
     response_input: object = openai_input
     previous_response_id: str | None = None
     text_streamed = False
@@ -965,11 +964,9 @@ async def stream_openai_words(
                 else:
                     pending = ""
 
-                word_buffer.extend(pieces)
-                while len(word_buffer) >= 3:
+                for piece in pieces:
                     text_streamed = True
-                    yield "".join(word_buffer[:3])
-                    del word_buffer[:3]
+                    yield piece
                 continue
 
             if event_type == "response.output_item.done":
@@ -987,12 +984,9 @@ async def stream_openai_words(
                     record_openai_usage(usage, getattr(response, "usage", None), openai_model)
 
         if pending:
-            word_buffer.append(pending)
-            pending = ""
-        if word_buffer:
             text_streamed = True
-            yield "".join(word_buffer)
-            word_buffer.clear()
+            yield pending
+            pending = ""
 
         if not function_calls:
             return
@@ -1133,26 +1127,8 @@ async def run_assistant_turn(
         on_event,
     )
 
-    # Peek the first chunk before opening the speaker. When the model's first move
-    # is a goal handoff, the AgentGoalRequest is the only thing the stream yields,
-    # so we return it here without ever opening the TTS socket. (A handoff that only
-    # appears after earlier tool calls is rarer and is caught in the loop below.)
-    try:
-        first_chunk = await words.__anext__()
-    except StopAsyncIteration:
-        first_chunk = None
-
-    if isinstance(first_chunk, AgentGoalRequest):
-        return first_chunk
-
     async def captured_openai_words() -> AsyncIterator[str | VoiceSwitch]:
         nonlocal goal_request
-        if isinstance(first_chunk, str):
-            assistant_chunks.append(first_chunk)
-            if on_assistant_chunk:
-                on_assistant_chunk(first_chunk)
-        if first_chunk is not None:
-            yield first_chunk
         async for chunk in words:
             # A goal handoff is a control signal, not speech — keep it out of the
             # speaker so nothing is spoken, and return it as the turn result.

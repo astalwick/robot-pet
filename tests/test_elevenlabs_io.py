@@ -106,6 +106,10 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
             await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
 
         self.assertEqual(json.loads(ws.sent[0])["xi_api_key"], "key")
+        self.assertEqual(
+            json.loads(ws.sent[0])["generation_config"]["chunk_length_schedule"],
+            [50, 120, 250, 290],
+        )
 
     async def test_tts_prewarms_socket_before_first_text_chunk(self):
         ws = FakeWebsocket([json.dumps({"isFinal": True})])
@@ -127,7 +131,7 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
             await speak_with_eleven_flash(delayed_chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
 
-        self.assertEqual(json.loads(ws.sent[1]), {"text": "hello", "try_trigger_generation": True})
+        self.assertEqual(json.loads(ws.sent[1]), {"text": "hello"})
 
     async def test_tts_cancel_closes_prewarmed_socket_before_text(self):
         ws = FakeWebsocket([])
@@ -197,7 +201,7 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
             await speak_with_eleven_flash(chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
 
         self.assertEqual(calls, 2)
-        self.assertEqual(json.loads(ws.sent[1]), {"text": "hello", "try_trigger_generation": True})
+        self.assertEqual(json.loads(ws.sent[1]), {"text": "hello"})
 
     async def test_tts_retries_failed_text_send(self):
         sockets = [
@@ -221,7 +225,7 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls, 2)
         self.assertTrue(sockets[0].closed)
-        self.assertEqual(json.loads(sockets[1].sent[1]), {"text": "hello", "try_trigger_generation": True})
+        self.assertEqual(json.loads(sockets[1].sent[1]), {"text": "hello"})
 
     async def test_tts_switch_voice_reopens_socket(self):
         sockets = [

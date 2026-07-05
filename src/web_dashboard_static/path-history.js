@@ -184,13 +184,13 @@ function stopFrames() {
 function resize() {
   if (!canvas || !wrap) return;
   dpr = window.devicePixelRatio || 1;
-  const rect = wrap.getBoundingClientRect();
-  viewW = Math.max(1, Math.floor(rect.width));
-  viewH = Math.max(1, Math.floor(rect.height));
+  const nextW = Math.max(1, wrap.clientWidth);
+  const nextH = Math.max(1, wrap.clientHeight);
+  if (nextW === viewW && nextH === viewH) return;
+  viewW = nextW;
+  viewH = nextH;
   canvas.width = Math.floor(viewW * dpr);
   canvas.height = Math.floor(viewH * dpr);
-  canvas.style.width = `${viewW}px`;
-  canvas.style.height = `${viewH}px`;
 }
 
 function render() {

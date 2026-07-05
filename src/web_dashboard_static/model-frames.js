@@ -23,6 +23,8 @@ function renderFrames(frames) {
 
 async function pollModelFrames() {
   if (document.hidden) return;
+  const section = document.getElementById('voice-timeline-section');
+  if (section && !section.classList.contains('maximized')) return;
   try {
     const response = await fetch('/api/model-frames');
     if (!response.ok) return;

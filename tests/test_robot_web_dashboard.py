@@ -844,6 +844,20 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("#voice-timeline-section.maximized #voice-turn-stats", self.dashboard_css)
         self.assertIn("#voice-timeline-section.maximized #model-frames-panel", self.dashboard_css)
 
+    def test_canvas_resize_uses_client_dimensions_not_inline_styles(self):
+        self.assertIn("wrap.clientWidth", self.voice_timeline_js)
+        self.assertIn("wrap.clientHeight", self.voice_timeline_js)
+        self.assertNotIn("canvas.style.width", self.voice_timeline_js)
+        self.assertNotIn("canvas.style.height", self.voice_timeline_js)
+        self.assertIn("wrap.clientWidth", self.path_history_js)
+        self.assertIn("wrap.clientHeight", self.path_history_js)
+        self.assertNotIn("canvas.style.width", self.path_history_js)
+        self.assertNotIn("canvas.style.height", self.path_history_js)
+
+    def test_mobile_voice_timeline_canvas_has_bounded_height(self):
+        self.assertIn("#voice-timeline-section:not(.maximized) #voice-timeline-canvas-wrap", self.dashboard_css)
+        self.assertNotIn("#voice-timeline-section {\n    min-height: 24rem;", self.dashboard_css)
+
     def test_voice_toggle_button_has_only_four_labels(self):
         self.assertIn("'Voice Off'", self.voice_js)
         self.assertIn("'Voice On'", self.voice_js)

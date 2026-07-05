@@ -53,6 +53,7 @@ class VoiceConfig:
     wake_word_enabled: bool = False
     wake_word_model_path: str = DEFAULT_WAKE_MODEL_PATH
     wake_threshold: float = 0.5
+    wake_rms_gate_min: int = 50
     wake_debounce_secs: float = 2.0
     wake_chime_path: str = DEFAULT_WAKE_CHIME_PATH
     session_end_chime_path: str = DEFAULT_SESSION_END_CHIME_PATH
@@ -99,6 +100,7 @@ class VoiceConfig:
             wake_word_enabled=bool(values.get("wake_word_enabled", defaults.wake_word_enabled)),
             wake_word_model_path=str(values.get("wake_word_model_path", defaults.wake_word_model_path)),
             wake_threshold=float(values.get("wake_threshold", defaults.wake_threshold)),
+            wake_rms_gate_min=int(values.get("wake_rms_gate_min", defaults.wake_rms_gate_min)),
             wake_debounce_secs=float(values.get("wake_debounce_secs", defaults.wake_debounce_secs)),
             wake_chime_path=str(values.get("wake_chime_path", defaults.wake_chime_path)),
             session_end_chime_path=str(
@@ -122,6 +124,8 @@ class VoiceConfig:
             raise VoiceConfigError(f"openai_model must be one of: {', '.join(OPENAI_MODEL_CHOICES)}")
         if self.wake_threshold < 0.0 or self.wake_threshold > 1.0:
             raise VoiceConfigError("wake_threshold must be between 0 and 1")
+        if self.wake_rms_gate_min < 0:
+            raise VoiceConfigError("wake_rms_gate_min must be >= 0")
         if self.wake_debounce_secs < 0.0:
             raise VoiceConfigError("wake_debounce_secs must be >= 0")
         if self.session_idle_secs < 0.0:
@@ -166,6 +170,15 @@ VOICE_FIELDS = (
         "min": 0.0,
         "max": 1.0,
         "step": 0.05,
+    },
+    {
+        "key": "wake_rms_gate_min",
+        "label": "Wake RMS gate",
+        "type": "number",
+        "help": "Skip wake-word inference when mic RMS is below this. 0 disables the gate.",
+        "min": 0,
+        "max": 5000,
+        "step": 10,
     },
     {
         "key": "wake_debounce_secs",

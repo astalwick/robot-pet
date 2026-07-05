@@ -84,6 +84,12 @@ class VoiceConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(VoiceConfigError, "wake_threshold"):
             VoiceConfig.from_dict({"wake_threshold": 1.5})
 
+    def test_wake_rms_gate_defaults_and_validation(self):
+        self.assertEqual(VoiceConfig().wake_rms_gate_min, 50)
+        self.assertEqual(VoiceConfig.from_dict({"wake_rms_gate_min": 0}).wake_rms_gate_min, 0)
+        with self.assertRaisesRegex(VoiceConfigError, "wake_rms_gate_min"):
+            VoiceConfig.from_dict({"wake_rms_gate_min": -1})
+
     def test_wake_config_round_trip(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "voice.json")

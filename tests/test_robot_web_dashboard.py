@@ -263,6 +263,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("enabled", keys)
         self.assertIn("wake_word_enabled", keys)
         self.assertIn("wake_threshold", keys)
+        self.assertIn("wake_rms_gate_min", keys)
         self.assertIn("wake_chime_path", keys)
         self.assertIn("input_device", keys)
         self.assertIn("output_device", keys)
@@ -286,6 +287,8 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("enabled", payload["values"])
         self.assertIn("wake_word_enabled", payload["values"])
         self.assertIn("wake_threshold", payload["values"])
+        self.assertIn("wake_rms_gate_min", payload["values"])
+        self.assertEqual(payload["values"]["wake_rms_gate_min"], 50)
         self.assertIn("input_device", payload["values"])
         self.assertIn("openai_model", payload["values"])
         self.assertIn("vad_silence_threshold_secs", payload["values"])
@@ -298,6 +301,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             "enabled": True,
             "wake_word_enabled": True,
             "wake_threshold": 0.42,
+            "wake_rms_gate_min": 80,
             "input_device": "hw:1,0",
             "output_device": "plughw:1,0",
             "capture_channel_index": 0,
@@ -315,6 +319,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(saved["enabled"])
         self.assertTrue(saved["wake_word_enabled"])
         self.assertEqual(saved["wake_threshold"], 0.42)
+        self.assertEqual(saved["wake_rms_gate_min"], 80)
         self.assertEqual(saved["input_device"], "hw:1,0")
         self.assertEqual(saved["output_device"], "plughw:1,0")
         self.assertEqual(saved["capture_channel_index"], 0)

@@ -12,6 +12,13 @@ from drivers.respeaker import MIC_BLOCKSIZE
 FRAME_SAMPLES = MIC_BLOCKSIZE
 
 
+def pcm16_rms(frame: bytes) -> int:
+    samples = np.frombuffer(frame, dtype=np.int16)
+    if len(samples) == 0:
+        return 0
+    return int(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
+
+
 def ensure_feature_models() -> None:
     import openwakeword
     from openwakeword.utils import download_models
@@ -23,13 +30,21 @@ def ensure_feature_models() -> None:
 
 
 class WakeWordDetector:
-    def __init__(self, model_path: str, threshold: float = 0.5, debounce_secs: float = 2.0) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        threshold: float = 0.5,
+        debounce_secs: float = 2.0,
+        rms_gate_min: int = 0,
+    ) -> None:
         self.model_path = model_path
         self.threshold = threshold
         self.debounce_secs = debounce_secs
+        self.rms_gate_min = rms_gate_min
         self._model = None
         self._wake_name: str | None = None
         self.last_score = 0.0
+        self.last_rms = 0
         self.fire_count = 0
         self.last_fire_at = 0.0
         self.last_predict_seconds = 0.0
@@ -70,6 +85,11 @@ class WakeWordDetector:
         return score
 
     def check(self, frame: bytes, *, now: float | None = None) -> bool:
+        self.last_rms = pcm16_rms(frame)
+        if self.rms_gate_min > 0 and self.last_rms < self.rms_gate_min:
+            self.last_score = 0.0
+            self.last_predict_seconds = 0.0
+            return False
         score = self.score(frame)
         if score < self.threshold:
             return False

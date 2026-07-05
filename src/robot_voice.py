@@ -443,10 +443,11 @@ class RobotVoiceService:
             return False
 
         log.info(
-            "starting orchestrator: wake=%s model=%s threshold=%.2f chime=%s idle=%.1fs",
+            "starting orchestrator: wake=%s model=%s threshold=%.2f rms_gate=%s chime=%s idle=%.1fs",
             config.wake_word_enabled,
             config.wake_word_model_path,
             config.wake_threshold,
+            config.wake_rms_gate_min if config.wake_rms_gate_min > 0 else "off",
             config.wake_chime_path,
             config.session_idle_secs,
         )
@@ -494,6 +495,7 @@ class RobotVoiceService:
                 config.wake_word_model_path,
                 threshold=config.wake_threshold,
                 debounce_secs=config.wake_debounce_secs,
+                rms_gate_min=config.wake_rms_gate_min,
             )
             wake_name = detector.load()
             log.info("wake model loaded: key=%r", wake_name)

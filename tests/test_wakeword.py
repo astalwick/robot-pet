@@ -19,8 +19,10 @@ def pcm16(values):
 class FakeWakeModel:
     def __init__(self, score: float) -> None:
         self.score = score
+        self.predict_calls = 0
 
     def predict(self, _frame):
+        self.predict_calls += 1
         return {"hey_bloop": self.score}
 
 
@@ -51,6 +53,27 @@ class WakeWordDetectorTest(unittest.TestCase):
         detector = self.make_detector(0.9)
 
         self.assertEqual(detector.score(pcm16([0] * 64)), 0.0)
+
+    def test_rms_gate_skips_predict_on_quiet_frames(self):
+        detector = self.make_detector(0.8, threshold=0.5)
+        detector.rms_gate_min = 50
+        silent = pcm16([0] * MIC_BLOCKSIZE)
+        loud = pcm16([1000] * MIC_BLOCKSIZE)
+
+        self.assertFalse(detector.check(silent, now=10.0))
+        self.assertEqual(detector._model.predict_calls, 0)
+        self.assertEqual(detector.last_rms, 0)
+
+        self.assertTrue(detector.check(loud, now=10.0))
+        self.assertEqual(detector._model.predict_calls, 1)
+
+    def test_rms_gate_zero_disables_gate(self):
+        detector = self.make_detector(0.8, threshold=0.5)
+        detector.rms_gate_min = 0
+        silent = pcm16([0] * MIC_BLOCKSIZE)
+
+        self.assertTrue(detector.check(silent, now=10.0))
+        self.assertEqual(detector._model.predict_calls, 1)
 
 
 class WakeChimePlaybackTest(unittest.IsolatedAsyncioTestCase):

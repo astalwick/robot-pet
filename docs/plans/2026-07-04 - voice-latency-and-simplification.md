@@ -27,7 +27,7 @@ dependency notes.
 | 4 | Small bug sweep: scan, latency stats, output latency | S | ★★ | none |
 | 5 | Dead code removal + move schemas out of assistant.py | M | ★★★ | none (before 6) |
 | 6 | Extract handle_scribe_events into a class | L | ★★★★ | 2, 5 |
-| 7 | Faster barge-in gate + decouple from telemetry sampler | S–M | ★★★ | none (easier after 6) |
+| 7 | Faster barge-in gate + decouple from telemetry sampler (now a bug fix: "stop" ignored) | S–M | ★★★★★ | none (easier after 6) |
 | 8 | Instant playback duck on local speech | — | — | **discussion first — do not implement** |
 
 Explicitly out of scope (decided 2026-07-04): persistent multi-context TTS
@@ -344,9 +344,25 @@ commit" by looking at a method list.
 
 ## Stage 7 — Faster barge-in gate + decouple it from the telemetry sampler
 
-**Effort S–M / Value ★★★.** Two coupled changes. Keeps transcript-confirmed
-cancellation exactly as-is — this only makes the *existing* RMS gate react
-sooner and unhooks it from the dashboard sampler.
+**Effort S–M / Value ★★★★★ — upgraded from a responsiveness improvement to a
+correctness fix by a field incident (2026-07-04).** Keeps
+transcript-confirmed cancellation exactly as-is — this makes the *existing*
+RMS path see all the audio and unhooks it from the dashboard sampler.
+
+**The incident:** during playback, Arlen said "Okay, stop." and "Okay, stop
+please." repeatedly; Scribe transcribed all of it cleanly, the timeline
+shows three `barge_in_considered` events, and all three were rejected —
+playback powered on. Root cause: the explicit-interrupt path in
+`barge_in_decision` requires `mic_rms >= user_active_rms_threshold` (100),
+but the `mic_rms` it receives is sampled through a keyhole (see background
+below): one `audio_activity` event per 0.35s, each seeing only ~130ms of
+audio (one 80ms chunk + up to 50ms of `mic_peak` since the 20Hz sampler
+reset). A ~300ms softly-spoken "stop" can fall entirely in the ~60% blind
+window, so `last_local_speech_rms` stays at silence levels, no
+recent/utterance barge-in record is noted, and the decision rejects with
+`low_rms` — while the STT upload gate, which evaluates **every** chunk
+against the same 100 threshold, was simultaneously uploading that same
+speech to Scribe. Same mic, same threshold, opposite conclusions.
 
 Background: mic chunks are 1280 samples / 80ms (`MIC_BLOCKSIZE`,
 `src/drivers/respeaker.py:16`). The Scribe uploader emits an
@@ -357,9 +373,9 @@ line 280). The barge-in gate needs RMS ≥ threshold *sustained* 350ms
 decisions actually read (`decide_barge_in_during_playback`,
 assistant.py:852) — is only refreshed by `publish_barge_in_state`
 (assistant.py:1286) when an `audio_activity` event arrives. Net: worst-case
-detection is ~0.35s throttle + 0.35s sustain ≈ 700ms of talking before the
-gate opens. Meanwhile `_sample_timeline` (`src/robot_voice.py:909`) *also*
-calls `refresh_barge_in_gate` at 20Hz as a side effect of drawing the
+gate detection is ~0.35s throttle + 0.35s sustain ≈ 700ms of talking before
+the gate opens. Meanwhile `_sample_timeline` (`src/robot_voice.py:909`)
+*also* calls `refresh_barge_in_gate` at 20Hz as a side effect of drawing the
 dashboard — telemetry code that is load-bearing for conversation behavior.
 
 Steps:
@@ -384,17 +400,38 @@ Steps:
    existed to catch peaks between throttled events. With per-chunk events
    the chunk RMS is the real signal — drop the `mic_peak` term (verify no
    test pins it).
-5. Re-check `update_scribe_upload_gate` and the wake-word RMS gate are
-   untouched — this stage is about the *barge-in* gate only.
+5. **Harden the note-records condition with `scribe_gate_open`** (from the
+   incident). In the `audio_activity` handler, barge-in evidence is only
+   recorded when `state.last_local_speech_rms >= policy.user_active_rms_threshold
+   or state.gate_open` (assistant.py:1985) — it ignores
+   `levels.scribe_gate_open`. That produced the absurd state where the
+   system was actively uploading the user's speech to STT while refusing to
+   record that speech as barge-in evidence. Add `or levels.scribe_gate_open`
+   to the condition so `note_utterance_barge_in_audio` /
+   `note_recent_barge_in_audio` fire whenever the STT path considers the
+   user to be speaking. (Per-chunk events already make the recorded
+   `mic_rms` values honest; this closes the remaining gap where a transcript
+   arrives with no record noted at all.)
+6. Re-check `update_scribe_upload_gate` and the wake-word RMS gate are
+   untouched — this stage is about the *barge-in* gate only. The Scribe
+   upload gate keeps its own per-chunk evaluation; nothing here may add a
+   throttle in front of it.
 
 Tests: `tests.test_voice_core` barge-in tests (grep `barge_in`) — some may
 encode the 0.35s cadence or feed synthetic `audio_activity` events; update
 cadence assumptions, keep behavioral assertions. `tests.test_robot_voice`
-for the sampler change.
+for the sampler change. **Add a regression test reproducing the incident**:
+playback active, `audio_activity` events with low RMS but
+`scribe_gate_open=True` (or a single ≥100-RMS chunk followed by silence
+chunks, as per-chunk events now deliver), then a partial "Okay, stop
+please." — assert the barge-in is accepted with reason
+`explicit_interrupt` and playback is cancelled.
 
-Done when: with the robot speaking, sustained speech opens the gate in
-~350–450ms (was ~700ms) — observable in the timeline gate row — and
-`_sample_timeline` no longer mutates gate state.
+Done when: the regression test passes — a transcribed "stop" during
+playback cancels playback even when spoken softly; with the robot speaking,
+sustained non-explicit speech opens the gate in ~350–450ms (was ~700ms) —
+observable in the timeline gate row — and `_sample_timeline` no longer
+mutates gate state.
 
 ---
 
@@ -424,6 +461,15 @@ Agenda for that discussion:
    half-ducked sentence replay or continue?
 4. **DoA gating.** The DoA angle could reject "speech" from the direction
    of a known noise source (TV) — worth it, or speculative generality?
+5. **Does a clean transcript need RMS corroboration at all?** (Raised by
+   the 2026-07-04 "stop ignored" incident.) When Scribe delivers a
+   non-echo transcript containing an explicit interrupt word during
+   playback, its neural VAD + ASR already concluded this was real speech —
+   arguably stronger evidence than any instantaneous RMS snapshot. The
+   `mic_rms >= user_active_rms_threshold` guard on the explicit path exists
+   to reject playback bleed, but hardware AEC plus the echo check already
+   cover that. Stage 7 makes the RMS values honest; this question is
+   whether the explicit path should drop the RMS precondition entirely.
 
 Prerequisites if/when green-lit: Stage 7 (gate plumbing), realistically
 Stage 6 (this adds a playback state to the turn machine).

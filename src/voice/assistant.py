@@ -711,6 +711,835 @@ async def _speak_progress_default(
     await speak_with_eleven_flash(text_chunks, elevenlabs_api_key, voice_id, playback_event, speaking_event)
 
 
+class TurnOrchestrator:
+    """Owns one voice session's turn state and consumes its scribe-event queue."""
+
+    def __init__(
+        self,
+        scribe_events: asyncio.Queue[dict[str, object]],
+        openai_client: Any,
+        elevenlabs_api_key: str,
+        voice_state: VoiceState,
+        stop_event: asyncio.Event,
+        system_prompt: str | Callable[[], str],
+        policy: TurnPolicy = DEFAULT_TURN_POLICY,
+        audio_levels: AudioLevels | None = None,
+        conversation_history: ConversationHistory | None = None,
+        on_status: Callable[[dict[str, object]], None] | None = None,
+        on_event: Callable[[dict[str, object]], None] | None = None,
+        assistant_runner: Callable[..., Any] = run_assistant_turn,
+        goal_runner: Callable[..., Any] | None = None,
+        motion_intent_caller: Callable[..., Any] | None = None,
+        session_end_caller: Callable[[], Any] | None = None,
+        camera_snapshot_caller: Callable[[], bytes] | None = None,
+        stop_playback_now: Callable[[], Any] | None = None,
+        robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
+        face_me_caller: Callable[[], dict[str, Any]] | None = None,
+        speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+        progress_speaker: Callable[..., Any] | None = None,
+        character_prose: str | Callable[[], str] | None = None,
+        openai_model: str = OPENAI_MODEL,
+    ) -> None:
+        self.scribe_events = scribe_events
+        self.openai_client = openai_client
+        self.elevenlabs_api_key = elevenlabs_api_key
+        self.voice_state = voice_state
+        self.stop_event = stop_event
+        self.system_prompt = system_prompt
+        self.policy = policy
+        self.on_status = on_status
+        self.on_event = on_event
+        self.assistant_runner = assistant_runner
+        self.goal_runner = goal_runner
+        self.motion_intent_caller = motion_intent_caller
+        self.session_end_caller = session_end_caller
+        self.camera_snapshot_caller = camera_snapshot_caller
+        self.stop_playback_now = stop_playback_now
+        self.robot_inspection_caller = robot_inspection_caller
+        self.face_me_caller = face_me_caller
+        self.speaker_direction_caller = speaker_direction_caller
+        self.progress_speaker = progress_speaker
+        self.character_prose = character_prose
+        self.openai_model = openai_model
+        self.state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
+        self.history = conversation_history if conversation_history is not None else ConversationHistory()
+        self.levels = audio_levels if audio_levels is not None else AudioLevels()
+        self.recent_assistant_text = ""
+        self.recent_assistant_echo_until = 0.0
+        self.hearing_on = False
+        self.thinking_on = False
+        self.user_speech_on = False
+
+    def current_system_prompt(self) -> str:
+        return self.system_prompt() if callable(self.system_prompt) else self.system_prompt
+
+    def current_character_prose(self) -> str:
+        if self.character_prose is None:
+            return ""
+        return self.character_prose() if callable(self.character_prose) else self.character_prose
+
+    def note_user_speech(self) -> None:
+        if self.user_speech_on:
+            return
+        self.user_speech_on = True
+        self.emit("phase", name="user_speech", on=True)
+
+    def end_user_speech(self) -> None:
+        if not self.user_speech_on:
+            return
+        self.user_speech_on = False
+        self.emit("phase", name="user_speech", on=False)
+
+    def status(self, **values: object) -> None:
+        new_status = values.get("status")
+        if (
+            "assistant_working" not in values
+            and self.state.active_turn is None
+            and self.state.active_goal is None
+            and self.state.progress is None
+        ):
+            values["assistant_working"] = False
+        if self.on_status:
+            self.on_status(values)
+        if not self.on_event or "status" not in values:
+            return
+        if new_status not in {"hearing", "thinking", "listening"}:
+            return
+        new_hearing = new_status == "hearing"
+        new_thinking = new_status == "thinking"
+        if new_hearing != self.hearing_on:
+            self.hearing_on = new_hearing
+            self.emit("phase", name="hearing", on=self.hearing_on)
+        if new_thinking != self.thinking_on:
+            self.thinking_on = new_thinking
+            self.emit("phase", name="thinking", on=self.thinking_on)
+
+    def emit(self, kind: str, **payload: object) -> None:
+        if not self.on_event:
+            return
+        event = {"type": kind, "t": time.monotonic(), **payload}
+        self.on_event(event)
+
+    def publish_barge_in_state(self, now: float, mic_rms: int | None = None) -> None:
+        mic = self.state.last_local_speech_rms if mic_rms is None else mic_rms
+        assistant_speaking = bool(self.current_playback())
+        _, self.state.gate_open, self.state.gate_threshold_rms, self.state.gate_last_reason = refresh_barge_in_gate(
+            self.levels,
+            now,
+            self.policy,
+            assistant_speaking,
+            mic,
+        )
+        playback_rms = effective_playback_rms(self.levels, now)
+        self.status(
+            **barge_in_telemetry(
+                self.policy,
+                mic,
+                playback_rms,
+                self.state.gate_threshold_rms,
+                self.state.gate_open,
+                self.state.gate_last_reason,
+            )
+        )
+
+    def report_barge_in(self, source: str, outcome: BargeInOutcome) -> None:
+        self.state.gate_last_reason = outcome.reason
+        self.emit(
+            "barge_in_considered",
+            source=source,
+            accepted=outcome.accepted,
+            reason=outcome.reason,
+            mic=outcome.mic_rms,
+            playback=outcome.playback_rms,
+            threshold=self.policy.barge_in_min_rms,
+        )
+        self.status(
+            **barge_in_telemetry(
+                self.policy,
+                outcome.mic_rms,
+                outcome.playback_rms,
+                self.policy.barge_in_min_rms,
+                outcome.gate_open,
+                outcome.reason,
+            )
+        )
+
+    def publish_barge_in_event(self, source: str, reason: str) -> None:
+        self.state.barge_in_event_count += 1
+        self.status(
+            barge_in_event_count=self.state.barge_in_event_count,
+            barge_in_last_event=f"{source}: {reason}",
+        )
+        self.emit("barge_in_fired", source=source, reason=reason)
+
+    def publish_barge_in_hearing(self, source: str) -> None:
+        if self.state.barge_in_hearing_reported:
+            return
+        self.state.barge_in_hearing_reported = True
+        self.publish_barge_in_event(source, "hearing")
+
+    def trigger_stop_playback_now(self) -> None:
+        if not self.stop_playback_now:
+            return
+        try:
+            result = self.stop_playback_now()
+        except Exception:
+            log.exception("stop playback failed")
+            return
+        if asyncio.iscoroutine(result):
+            task = asyncio.create_task(result)
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
+    async def cancel_active_turn(self, reason: str) -> None:
+        turn = self.state.active_turn
+        self.state.active_turn = None
+        if turn and (turn.is_active() or (turn.playback_release_task and not turn.playback_release_task.done())):
+            was_speaking = turn.is_speaking()
+            self.emit("turn_cancel", turn_id=turn.turn_id, reason=reason, was_speaking=was_speaking)
+            if reason == "continuation_retraction" and was_speaking:
+                self.state.false_starts += 1
+                self.status(false_starts=self.state.false_starts)
+            streamed = turn.assistant_streamed_text().strip()
+            if streamed:
+                self.emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
+            # If the turn actually reached the speaker, record what it said so
+            # history reflects reality — even on barge-in/cancel. Must read
+            # playback_event before turn.cancel() clears it.
+            if streamed and turn.playback_event.is_set() and not turn.history_committed:
+                turn.assistant_text = streamed
+                self.recent_assistant_text = streamed
+                self.recent_assistant_echo_until = asyncio.get_running_loop().time() + self.policy.assistant_echo_memory_secs
+                if reason != "continuation_retraction":
+                    self.history.append_exchange(turn.committed_text or turn.prompt, streamed)
+                turn.history_committed = True
+            if self.stop_playback_now and turn.is_playing_back():
+                self.trigger_stop_playback_now()
+            await turn.cancel(reason)
+
+    async def cancel_unconfirmed_speculation(self, turn: ActiveTurn) -> None:
+        await asyncio.sleep(self.policy.speculative_no_commit_timeout_secs)
+        if self.state.active_turn is turn and turn.speculative and not turn.playback_event.is_set():
+            turn.playback_release_task = None
+            await self.cancel_active_turn("no_commit")
+            self.status(status="listening", assistant_working=False, partial_transcript=None)
+
+    async def release_committed_playback(self, turn: ActiveTurn) -> None:
+        await asyncio.sleep(self.policy.commit_playback_delay_secs)
+        while self.state.active_turn is turn and not turn.playback_event.is_set():
+            quiet_remaining_secs = self.policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), self.state.last_local_speech_at)
+            if quiet_remaining_secs <= 0:
+                turn.open_playback()
+                await self.maybe_commit_history(turn)
+                return
+            await asyncio.sleep(quiet_remaining_secs)
+
+    async def maybe_commit_history(self, turn: ActiveTurn) -> None:
+        # A speculative turn that actually spoke (playback opened) still belongs
+        # in history even if no commit ever confirmed it — we record it once the
+        # turn finishes, using its triggering partial as the user text.
+        if (
+            self.state.active_turn is not turn
+            or turn.history_committed
+            or not turn.playback_event.is_set()
+            or not turn.task.done()
+        ):
+            return
+        try:
+            assistant_text = turn.task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log.exception("assistant turn failed: %s", exc)
+            self.status(status="error", assistant_working=False, last_error=str(exc))
+            return
+        if isinstance(assistant_text, AgentGoalRequest):
+            # A goal handoff is recorded only when the goal finishes, not here.
+            return
+        turn.assistant_text = assistant_text
+        self.recent_assistant_text = assistant_text
+        self.recent_assistant_echo_until = asyncio.get_running_loop().time() + self.policy.assistant_echo_memory_secs
+        self.history.append_exchange(turn.committed_text or turn.prompt, assistant_text)
+        turn.history_committed = True
+        if assistant_text:
+            self.emit("assistant", turn_id=turn.turn_id, text=assistant_text)
+        self.status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=assistant_text)
+
+    def completed_goal_request(self, turn: ActiveTurn) -> AgentGoalRequest | None:
+        if not turn.task.done():
+            return None
+        try:
+            result = turn.task.result()
+        except (asyncio.CancelledError, Exception):
+            return None
+        return result if isinstance(result, AgentGoalRequest) else None
+
+    async def maybe_finish_silent_turn(self, turn: ActiveTurn) -> None:
+        if (
+            self.state.active_turn is not turn
+            or turn.history_committed
+            or turn.playback_event.is_set()
+            or not turn.task.done()
+        ):
+            return
+        try:
+            assistant_text = turn.task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            self.state.active_turn = None
+            await cancel_task(turn.playback_release_task)
+            turn.playback_release_task = None
+            log.exception("assistant turn failed: %s", exc)
+            self.status(status="error", assistant_working=False, last_error=str(exc))
+            return
+        if isinstance(assistant_text, AgentGoalRequest) or assistant_text.strip():
+            return
+        self.state.active_turn = None
+        await cancel_task(turn.playback_release_task)
+        turn.playback_release_task = None
+        self.status(status="listening", assistant_speaking=False, assistant_working=False)
+
+    async def cancel_active_goal(self, reason: str) -> None:
+        goal = self.state.active_goal
+        self.state.active_goal = None
+        if goal is None:
+            return
+        goal.terminal_reason = "cancelled"
+        goal.stop_event.set()
+        self.emit("goal_cancel", goal=goal.goal, reason=reason)
+        log.info("goal cancelled: reason=%s goal=%r", reason, goal.goal)
+        await cancel_task(goal.task)
+
+    def current_playback(self) -> ActiveTurn | ProgressSpeaker | None:
+        if self.state.active_turn and self.state.active_turn.is_playing_back():
+            return self.state.active_turn
+        if self.state.progress and self.state.progress.is_playing_back():
+            return self.state.progress
+        return None
+
+    async def cancel_current_playback(self, reason: str) -> None:
+        if self.state.progress and self.state.progress.is_playing_back():
+            await self.cancel_active_goal(reason)
+        else:
+            await self.cancel_active_turn(reason)
+
+    async def speak_progress(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        progress = ProgressSpeaker(text=text)
+        progress.playback_event.set()
+        progress.speaking_event.set()
+        self.state.progress = progress
+        self.emit("goal_speech", text=text)
+        self.status(status="speaking", assistant_speaking=True, assistant_working=True)
+
+        async def text_stream() -> AsyncIterator[str]:
+            yield text
+
+        speaker = self.progress_speaker or _speak_progress_default
+        try:
+            await speaker(
+                text_stream(),
+                self.elevenlabs_api_key,
+                self.voice_state.current_voice_id,
+                progress.playback_event,
+                progress.speaking_event,
+            )
+        except asyncio.CancelledError:
+            self.trigger_stop_playback_now()
+            raise
+        finally:
+            if self.state.progress is progress:
+                self.state.progress = None
+            progress.playback_event.clear()
+            progress.speaking_event.clear()
+
+        # Narration played to completion (a cancel re-raises above and skips this).
+        # Record what we just said so a delayed STT echo of this line is suppressed
+        # even after state.progress clears and the goal keeps working.
+        self.recent_assistant_text = text
+        self.recent_assistant_echo_until = asyncio.get_running_loop().time() + self.policy.assistant_echo_memory_secs
+
+        # The narration ended but the goal keeps working. The session speaker flips
+        # status back to listening when speech stops, so restore thinking here or the
+        # idle timer would treat an active goal as an idle session.
+        if self.state.active_goal is not None:
+            self.status(status="thinking", assistant_speaking=False, assistant_working=True)
+
+    async def begin_goal_handoff(self, turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
+        # The normal turn is finished and is handing off to an iterative goal. Drop
+        # it as the active turn so it is not treated as a speaking turn, and surface
+        # the handoff. We do not commit history here — the goal records its own
+        # result when it reaches a terminal state.
+        streamed = turn.assistant_streamed_text().strip()
+        if streamed:
+            self.recent_assistant_text = streamed
+            self.recent_assistant_echo_until = asyncio.get_running_loop().time() + self.policy.assistant_echo_memory_secs
+        if self.state.active_turn is turn:
+            self.state.active_turn = None
+        self.emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)
+        log.info("goal handoff received: %s", goal_request.goal)
+        if self.goal_runner is None:
+            self.status(status="listening", assistant_speaking=False, assistant_working=False)
+            return
+        await self.cancel_active_goal("superseded")
+        goal = ActiveGoal(
+            goal=goal_request.goal,
+            user_text=turn.committed_text or turn.prompt,
+            stop_event=asyncio.Event(),
+            started_at=asyncio.get_running_loop().time(),
+        )
+
+        async def run_goal() -> str:
+            return await self.goal_runner(
+                goal=goal.goal,
+                stop_event=goal.stop_event,
+                openai_client=self.openai_client,
+                openai_model=self.openai_model,
+                voice_state=self.voice_state,
+                motion_intent_caller=self.motion_intent_caller,
+                camera_snapshot_caller=self.camera_snapshot_caller,
+                robot_inspection_caller=self.robot_inspection_caller,
+                face_me_caller=self.face_me_caller,
+                speaker_direction_caller=self.speaker_direction_caller,
+                speak_progress=self.speak_progress,
+                is_speaking=lambda: self.current_playback() is not None,
+                on_event=self.on_event,
+                character_prose=self.current_character_prose(),
+                preamble=goal_request.preamble,
+            )
+
+        goal.task = asyncio.create_task(run_goal())
+        goal.task.add_done_callback(
+            lambda _done, g=goal: self.scribe_events.put_nowait({"type": "goal_task_done", "goal": g})
+        )
+        self.state.active_goal = goal
+        self.emit("goal_start", goal=goal.goal)
+        self.status(status="thinking", assistant_working=True)
+
+    async def finish_goal(self, goal: ActiveGoal) -> None:
+        if self.state.active_goal is not goal or goal.task is None:
+            return
+        self.state.active_goal = None
+        try:
+            final_text = goal.task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log.exception("goal task failed: %s", exc)
+            self.status(status="error", assistant_working=False, last_error=str(exc))
+            return
+        final_text = (final_text or "").strip()
+        goal.final_text = final_text
+        goal.terminal_reason = "done"
+        if final_text:
+            self.history.append_exchange(goal.user_text, final_text)
+            self.recent_assistant_text = final_text
+            self.recent_assistant_echo_until = asyncio.get_running_loop().time() + self.policy.assistant_echo_memory_secs
+            self.emit("assistant", text=final_text)
+        self.emit("goal_done", goal=goal.goal, text=final_text)
+        self.status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=final_text)
+
+    async def start_turn(self, prompt: str, speculative: bool) -> None:
+        await self.cancel_active_turn("new_turn")
+        self.state.barge_in_hearing_reported = False
+        reset_recent_barge_in_audio(self.state)
+        reset_utterance_barge_in_audio(self.state)
+        self.state.next_turn_id += 1
+        new_turn_id = self.state.next_turn_id
+        playback_event = asyncio.Event()
+        speaking_event = asyncio.Event()
+        assistant_streamed_chunks: list[str] = []
+        first_token_emitted = False
+
+        def on_assistant_chunk(chunk: str) -> None:
+            nonlocal first_token_emitted
+            assistant_streamed_chunks.append(chunk)
+            if not first_token_emitted:
+                first_token_emitted = True
+                self.emit("turn_first_token", turn_id=new_turn_id)
+
+        openai_input = self.history.input_for(prompt, self.current_system_prompt())
+
+        async def run_turn() -> str:
+            return await asyncio.wait_for(
+                self.assistant_runner(
+                    new_turn_id,
+                    openai_input,
+                    playback_event,
+                    speaking_event,
+                    self.openai_client,
+                    self.elevenlabs_api_key,
+                    self.voice_state,
+                    on_assistant_chunk=on_assistant_chunk,
+                    motion_intent_caller=self.motion_intent_caller,
+                    session_end_caller=self.session_end_caller,
+                    camera_snapshot_caller=self.camera_snapshot_caller,
+                    robot_inspection_caller=self.robot_inspection_caller,
+                    face_me_caller=self.face_me_caller,
+                    speaker_direction_caller=self.speaker_direction_caller,
+                    openai_model=self.openai_model,
+                    on_event=self.on_event,
+                ),
+                timeout=ASSISTANT_TURN_TIMEOUT_SECS,
+            )
+
+        task = asyncio.create_task(run_turn())
+        turn = ActiveTurn(
+            turn_id=new_turn_id,
+            prompt=prompt,
+            speculative=speculative,
+            task=task,
+            playback_event=playback_event,
+            speaking_event=speaking_event,
+            assistant_streamed_chunks=assistant_streamed_chunks,
+            delay_playback=not speculative,
+        )
+        task.add_done_callback(lambda _task, completed_turn=turn: self.scribe_events.put_nowait({"type": "assistant_done", "turn": completed_turn}))
+        self.state.active_turn = turn
+        self.emit("turn_start", turn_id=new_turn_id, speculative=speculative, prompt=prompt)
+        if not speculative:
+            self.emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
+        self.status(status="thinking", assistant_speaking=False, assistant_working=True)
+        if speculative:
+            turn.playback_release_task = asyncio.create_task(self.cancel_unconfirmed_speculation(turn))
+        else:
+            turn.playback_release_task = asyncio.create_task(self.release_committed_playback(turn))
+
+    async def start_after_stable_partial(self, text: str) -> None:
+        await asyncio.sleep(self.policy.speculative_partial_delay_secs)
+        while True:
+            should_start, _reason = self.policy.speculation_decision(text)
+            if not should_start:
+                return
+            quiet_remaining_secs = self.policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), self.state.last_local_speech_at)
+            if quiet_remaining_secs > 0:
+                await asyncio.sleep(quiet_remaining_secs)
+                continue
+            if self.state.active_turn and self.policy.transcript_matches(text, self.state.active_turn.prompt):
+                return
+            await self.start_turn(text, speculative=True)
+            return
+
+    def consider_playback_barge_in(
+        self,
+        source: str,
+        text: str,
+        now: float,
+        playback: ActiveTurn | ProgressSpeaker,
+    ) -> BargeInOutcome:
+        playback.mark_speech_started(now)
+        self.publish_barge_in_state(now)
+        outcome = decide_barge_in_during_playback(text, now, playback, self.state, self.levels, self.policy)
+        self.report_barge_in(source, outcome)
+        return outcome
+
+    def continuation_retraction_eligible(self, turn: ActiveTurn, text: str, now: float) -> bool:
+        return (
+            not self.policy.has_explicit_interrupt(text)
+            and turn.playback_opened_at is not None
+            and now - turn.playback_opened_at <= self.policy.continuation_grace_secs
+            and len(re.findall(r"\S+", text)) >= self.policy.continuation_min_words
+        )
+
+    async def retract_continuation(self, turn: ActiveTurn, fragment_text: str, now: float) -> None:
+        first_half = turn.committed_text or turn.prompt
+        self.state.utterance_prefix = f"{self.state.utterance_prefix} {first_half}".strip()
+        self.state.utterance_prefix_deadline = now + 10.0
+        self.emit("false_start", turn_id=turn.turn_id, text=fragment_text)
+        await self.cancel_active_turn("continuation_retraction")
+        self.status(status="hearing", partial_transcript=fragment_text)
+        await cancel_task(self.state.debounce_task)
+        self.state.debounce_task = asyncio.create_task(
+            self.start_after_stable_partial(f"{self.state.utterance_prefix} {fragment_text}")
+        )
+
+    async def handle_partial(self, text: str) -> None:
+        now = asyncio.get_running_loop().time()
+        normalized_partial = self.policy.normalized_transcript(text)
+        if (
+            normalized_partial
+            and normalized_partial == self.state.last_partial_text
+            and self.state.local_audio_seq == self.state.last_partial_audio_seq
+        ):
+            return
+        self.state.last_partial_text = normalized_partial
+        self.state.last_partial_audio_seq = self.state.local_audio_seq
+        self.emit("partial", text=text)
+        self.note_user_speech()
+        if self.is_recent_assistant_echo(text, now):
+            await cancel_task(self.state.debounce_task)
+            self.state.debounce_task = None
+            self.emit("echo_suppressed", source="partial", text=text)
+            self.status(status="listening")
+            return
+
+        active_turn = self.state.active_turn
+        playback = self.current_playback()
+        if playback:
+            if (
+                playback is self.state.active_turn
+                and self.continuation_retraction_eligible(playback, text, now)
+            ):
+                await self.retract_continuation(playback, text, now)
+                return
+            outcome = self.consider_playback_barge_in("partial", text, now, playback)
+            if outcome.accepted:
+                self.publish_barge_in_hearing("stt")
+                self.status(status="hearing", partial_transcript=text)
+                self.publish_barge_in_event("partial", outcome.reason)
+                await self.cancel_current_playback("barge_in")
+                await cancel_task(self.state.debounce_task)
+                self.state.debounce_task = None
+                if outcome.reason == "explicit_interrupt":
+                    self.state.utterance_prefix = ""
+                    self.status(status="listening", partial_transcript=None)
+                else:
+                    self.state.debounce_task = asyncio.create_task(self.start_after_stable_partial(text))
+            else:
+                self.emit("barge_in_rejected", source="partial", reason=outcome.reason, text=text)
+                self.status(status="speaking", assistant_speaking=True, partial_transcript=None)
+            return
+
+        if self.policy.has_explicit_interrupt(text):
+            self.state.utterance_prefix = ""
+        elif self.state.utterance_prefix and now < self.state.utterance_prefix_deadline:
+            text = f"{self.state.utterance_prefix} {text}"
+        elif self.state.utterance_prefix:
+            self.state.utterance_prefix = ""
+
+        self.status(status="hearing", partial_transcript=text)
+
+        if active_turn and active_turn.speculative and text != active_turn.prompt and self.policy.transcript_matches(text, active_turn.prompt):
+            if self.policy.should_replace_speculative_prompt(text, active_turn.prompt):
+                await self.start_turn(text, speculative=True)
+            return
+
+        if (
+            active_turn
+            and not active_turn.speculative
+            and not active_turn.playback_event.is_set()
+            and not active_turn.is_speaking()
+            and self.policy.normalized_transcript(text) != self.policy.normalized_transcript(active_turn.prompt)
+        ):
+            first_half = active_turn.committed_text or active_turn.prompt
+            self.state.utterance_prefix = f"{self.state.utterance_prefix} {first_half}".strip()
+            self.state.utterance_prefix_deadline = now + 10.0
+            await self.cancel_active_turn("commit_continuation")
+            await cancel_task(self.state.debounce_task)
+            self.state.debounce_task = asyncio.create_task(
+                self.start_after_stable_partial(f"{self.state.utterance_prefix} {text}")
+            )
+            return
+
+        await cancel_task(self.state.debounce_task)
+        self.state.debounce_task = asyncio.create_task(self.start_after_stable_partial(text))
+
+    async def handle_commit(self, text: str) -> None:
+        await cancel_task(self.state.debounce_task)
+        self.state.debounce_task = None
+        now = asyncio.get_running_loop().time()
+        self.emit("commit", text=text)
+        self.end_user_speech()
+        try:
+            if is_end_session_request(text, self.policy):
+                if self.state.active_goal is not None:
+                    await self.cancel_active_goal("committed_speech")
+                self.state.utterance_prefix = ""
+                self.status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                if self.session_end_caller:
+                    self.session_end_caller()
+                return
+            if self.is_recent_assistant_echo(text, now):
+                self.emit("echo_suppressed", source="commit", text=text)
+                self.status(status="listening")
+                return
+
+            raw_commit = text
+
+            if self.policy.has_explicit_interrupt(text):
+                self.state.utterance_prefix = ""
+            elif self.state.utterance_prefix and now < self.state.utterance_prefix_deadline:
+                text = f"{self.state.utterance_prefix} {text}"
+                self.state.utterance_prefix = ""
+            elif self.state.utterance_prefix:
+                self.state.utterance_prefix = ""
+
+            should_start_from_commit, commit_reason = self.policy.commit_decision(text)
+            self.emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
+
+            if self.state.active_goal is not None:
+                await self.cancel_active_goal("committed_speech")
+                if should_start_from_commit and not self.policy.has_explicit_interrupt(text):
+                    self.status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+                    await self.start_turn(text, speculative=False)
+                else:
+                    self.status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                return
+
+            active_turn = self.state.active_turn
+            if (
+                active_turn
+                and active_turn.is_playing_back()
+                and not self.policy.has_explicit_interrupt(raw_commit)
+                and self.continuation_retraction_eligible(active_turn, text, now)
+            ):
+                first_half = active_turn.committed_text or active_turn.prompt
+                stitched = f"{first_half} {text}".strip()
+                self.emit("false_start", turn_id=active_turn.turn_id, text=text)
+                await self.cancel_active_turn("continuation_retraction")
+                self.status(status="hearing", partial_transcript=text)
+                if should_start_from_commit:
+                    self.status(status="thinking", partial_transcript=None, last_committed_transcript=stitched)
+                    await self.start_turn(stitched, speculative=False)
+                else:
+                    self.status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                return
+            if (
+                active_turn
+                and active_turn.is_playing_back()
+                and (self.policy.has_explicit_interrupt(text) or not self.policy.transcript_matches(text, active_turn.prompt))
+            ):
+                outcome = self.consider_playback_barge_in("commit", text, now, active_turn)
+                if not outcome.accepted:
+                    self.emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
+                    log.info(
+                        "commit rejected during playback: reason=%s text=%r",
+                        outcome.reason,
+                        text,
+                    )
+                    return
+
+                self.publish_barge_in_hearing("stt")
+                self.publish_barge_in_event("commit", outcome.reason)
+                await self.cancel_active_turn("barge_in_commit")
+                if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
+                    self.state.utterance_prefix = ""
+                    self.status(status="listening", partial_transcript=None, last_committed_transcript=text)
+                    return
+                self.status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+                await self.start_turn(text, speculative=False)
+                return
+
+            self.status(status="thinking", partial_transcript=None, last_committed_transcript=text)
+
+            if active_turn and not active_turn.speculative and not active_turn.playback_event.is_set():
+                if self.policy.normalized_transcript(text) == self.policy.normalized_transcript(active_turn.prompt):
+                    active_turn.committed_text = text
+                    active_turn.prompt = text
+                    await self.maybe_commit_history(active_turn)
+                    return
+                if active_turn.is_speaking():
+                    return
+                if not should_start_from_commit:
+                    return
+                stitched = f"{active_turn.committed_text or active_turn.prompt} {text}".strip()
+                await self.cancel_active_turn("commit_continuation")
+                await self.start_turn(stitched, speculative=False)
+                return
+
+            if active_turn and active_turn.is_active():
+                if self.policy.transcript_matches(text, active_turn.prompt):
+                    await active_turn.confirm(text)
+                    self.emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
+                    await self.maybe_commit_history(active_turn)
+                else:
+                    if not should_start_from_commit:
+                        return
+                    await self.cancel_active_turn("commit_mismatch")
+                    await self.start_turn(text, speculative=False)
+            elif active_turn and self.policy.transcript_matches(text, active_turn.prompt):
+                await active_turn.confirm(text)
+                self.emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
+                await self.maybe_commit_history(active_turn)
+            else:
+                if not should_start_from_commit:
+                    return
+                await self.start_turn(text, speculative=False)
+        finally:
+            reset_utterance_barge_in_audio(self.state)
+
+    def is_recent_assistant_echo(self, text: str, now: float) -> bool:
+        if self.policy.has_explicit_interrupt(text):
+            return False
+        assistant_text = ""
+        if self.state.active_turn is not None:
+            assistant_text = self.state.active_turn.assistant_streamed_text()
+        elif self.state.progress is not None:
+            assistant_text = self.state.progress.assistant_streamed_text()
+        if self.recent_assistant_text and now <= self.recent_assistant_echo_until:
+            assistant_text = f"{assistant_text} {self.recent_assistant_text}".strip()
+        return bool(assistant_text and self.policy.matches_assistant_echo(text, assistant_text))
+
+    async def run(self) -> None:
+        try:
+            while not self.stop_event.is_set():
+                event = await self.scribe_events.get()
+                event_type = str(event["type"])
+                if event_type == "assistant_done":
+                    turn = event["turn"]
+                    goal_request = self.completed_goal_request(turn)
+                    if goal_request is not None:
+                        await self.begin_goal_handoff(turn, goal_request)
+                    else:
+                        await self.maybe_commit_history(turn)
+                        await self.maybe_finish_silent_turn(turn)
+                    continue
+
+                if event_type == "goal_task_done":
+                    await self.finish_goal(event["goal"])
+                    continue
+
+                text = str(event.get("text", ""))
+
+                if event_type == "audio_activity":
+                    now = asyncio.get_running_loop().time()
+                    self.state.last_local_speech_rms = max(int(event.get("rms", 0)), self.levels.mic_peak)
+                    heard_local_audio = False
+                    if self.state.last_local_speech_rms >= self.policy.user_active_rms_threshold:
+                        self.state.last_local_speech_at = now
+                        self.note_user_speech()
+                        heard_local_audio = True
+                    elif self.levels.scribe_gate_open:
+                        self.note_user_speech()
+                        heard_local_audio = True
+                    elif (
+                        self.user_speech_on
+                        and now - self.state.last_local_speech_at > self.policy.local_speech_window_secs
+                    ):
+                        self.end_user_speech()
+                        if (
+                            self.hearing_on
+                            and (self.state.active_turn is None or not self.state.active_turn.is_active())
+                            and self.state.active_goal is None
+                            and self.state.progress is None
+                        ):
+                            self.status(status="listening", partial_transcript=None)
+                    if heard_local_audio:
+                        self.state.local_audio_seq += 1
+                    self.levels.mic_rms = self.state.last_local_speech_rms
+                    self.publish_barge_in_state(now, self.state.last_local_speech_rms)
+                    if self.current_playback():
+                        if self.state.last_local_speech_rms >= self.policy.user_active_rms_threshold or self.state.gate_open:
+                            note_utterance_barge_in_audio(self.state, now)
+                            note_recent_barge_in_audio(self.state, now, self.policy)
+                    continue
+
+                if event_type == "partial":
+                    await self.handle_partial(text)
+                    continue
+
+                if event_type == "commit":
+                    await self.handle_commit(text)
+        finally:
+            await cancel_task(self.state.debounce_task)
+            if self.state.active_turn:
+                await self.state.active_turn.cancel("shutdown")
+            if self.state.active_goal:
+                await self.cancel_active_goal("shutdown")
+
+
 async def handle_scribe_events(
     scribe_events: asyncio.Queue[dict[str, object]],
     openai_client: Any,
@@ -736,786 +1565,28 @@ async def handle_scribe_events(
     character_prose: str | Callable[[], str] | None = None,
     openai_model: str = OPENAI_MODEL,
 ) -> None:
-    state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
-    history = conversation_history if conversation_history is not None else ConversationHistory()
-    levels = audio_levels if audio_levels is not None else AudioLevels()
-    recent_assistant_text = ""
-    recent_assistant_echo_until = 0.0
-    hearing_on = False
-    thinking_on = False
-    user_speech_on = False
-
-    def current_system_prompt() -> str:
-        return system_prompt() if callable(system_prompt) else system_prompt
-
-    def current_character_prose() -> str:
-        if character_prose is None:
-            return ""
-        return character_prose() if callable(character_prose) else character_prose
-
-    def note_user_speech() -> None:
-        nonlocal user_speech_on
-        if user_speech_on:
-            return
-        user_speech_on = True
-        emit("phase", name="user_speech", on=True)
-
-    def end_user_speech() -> None:
-        nonlocal user_speech_on
-        if not user_speech_on:
-            return
-        user_speech_on = False
-        emit("phase", name="user_speech", on=False)
-
-    def status(**values: object) -> None:
-        nonlocal hearing_on, thinking_on
-        new_status = values.get("status")
-        if (
-            "assistant_working" not in values
-            and state.active_turn is None
-            and state.active_goal is None
-            and state.progress is None
-        ):
-            values["assistant_working"] = False
-        if on_status:
-            on_status(values)
-        if not on_event or "status" not in values:
-            return
-        if new_status not in {"hearing", "thinking", "listening"}:
-            return
-        new_hearing = new_status == "hearing"
-        new_thinking = new_status == "thinking"
-        if new_hearing != hearing_on:
-            hearing_on = new_hearing
-            emit("phase", name="hearing", on=hearing_on)
-        if new_thinking != thinking_on:
-            thinking_on = new_thinking
-            emit("phase", name="thinking", on=thinking_on)
-
-    def emit(kind: str, **payload: object) -> None:
-        if not on_event:
-            return
-        event = {"type": kind, "t": time.monotonic(), **payload}
-        on_event(event)
-
-    def publish_barge_in_state(now: float, mic_rms: int | None = None) -> None:
-        mic = state.last_local_speech_rms if mic_rms is None else mic_rms
-        assistant_speaking = bool(current_playback())
-        _, state.gate_open, state.gate_threshold_rms, state.gate_last_reason = refresh_barge_in_gate(
-            levels,
-            now,
-            policy,
-            assistant_speaking,
-            mic,
-        )
-        playback_rms = effective_playback_rms(levels, now)
-        status(
-            **barge_in_telemetry(
-                policy,
-                mic,
-                playback_rms,
-                state.gate_threshold_rms,
-                state.gate_open,
-                state.gate_last_reason,
-            )
-        )
-
-    def report_barge_in(source: str, outcome: BargeInOutcome) -> None:
-        state.gate_last_reason = outcome.reason
-        emit(
-            "barge_in_considered",
-            source=source,
-            accepted=outcome.accepted,
-            reason=outcome.reason,
-            mic=outcome.mic_rms,
-            playback=outcome.playback_rms,
-            threshold=policy.barge_in_min_rms,
-        )
-        status(
-            **barge_in_telemetry(
-                policy,
-                outcome.mic_rms,
-                outcome.playback_rms,
-                policy.barge_in_min_rms,
-                outcome.gate_open,
-                outcome.reason,
-            )
-        )
-
-    def publish_barge_in_event(source: str, reason: str) -> None:
-        state.barge_in_event_count += 1
-        status(
-            barge_in_event_count=state.barge_in_event_count,
-            barge_in_last_event=f"{source}: {reason}",
-        )
-        emit("barge_in_fired", source=source, reason=reason)
-
-    def publish_barge_in_hearing(source: str) -> None:
-        if state.barge_in_hearing_reported:
-            return
-        state.barge_in_hearing_reported = True
-        publish_barge_in_event(source, "hearing")
-
-    def trigger_stop_playback_now() -> None:
-        if not stop_playback_now:
-            return
-        try:
-            result = stop_playback_now()
-        except Exception:
-            log.exception("stop playback failed")
-            return
-        if asyncio.iscoroutine(result):
-            task = asyncio.create_task(result)
-            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
-
-    async def cancel_active_turn(reason: str) -> None:
-        nonlocal recent_assistant_text, recent_assistant_echo_until
-        turn = state.active_turn
-        state.active_turn = None
-        if turn and (turn.is_active() or (turn.playback_release_task and not turn.playback_release_task.done())):
-            was_speaking = turn.is_speaking()
-            emit("turn_cancel", turn_id=turn.turn_id, reason=reason, was_speaking=was_speaking)
-            if reason == "continuation_retraction" and was_speaking:
-                state.false_starts += 1
-                status(false_starts=state.false_starts)
-            streamed = turn.assistant_streamed_text().strip()
-            if streamed:
-                emit("assistant", turn_id=turn.turn_id, text=streamed, cancelled=True)
-            # If the turn actually reached the speaker, record what it said so
-            # history reflects reality — even on barge-in/cancel. Must read
-            # playback_event before turn.cancel() clears it.
-            if streamed and turn.playback_event.is_set() and not turn.history_committed:
-                turn.assistant_text = streamed
-                recent_assistant_text = streamed
-                recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-                if reason != "continuation_retraction":
-                    history.append_exchange(turn.committed_text or turn.prompt, streamed)
-                turn.history_committed = True
-            if stop_playback_now and turn.is_playing_back():
-                trigger_stop_playback_now()
-            await turn.cancel(reason)
-
-    async def cancel_unconfirmed_speculation(turn: ActiveTurn) -> None:
-        await asyncio.sleep(policy.speculative_no_commit_timeout_secs)
-        if state.active_turn is turn and turn.speculative and not turn.playback_event.is_set():
-            turn.playback_release_task = None
-            await cancel_active_turn("no_commit")
-            status(status="listening", assistant_working=False, partial_transcript=None)
-
-    async def release_committed_playback(turn: ActiveTurn) -> None:
-        await asyncio.sleep(policy.commit_playback_delay_secs)
-        while state.active_turn is turn and not turn.playback_event.is_set():
-            quiet_remaining_secs = policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), state.last_local_speech_at)
-            if quiet_remaining_secs <= 0:
-                turn.open_playback()
-                await maybe_commit_history(turn)
-                return
-            await asyncio.sleep(quiet_remaining_secs)
-
-    async def maybe_commit_history(turn: ActiveTurn) -> None:
-        nonlocal recent_assistant_text, recent_assistant_echo_until
-        # A speculative turn that actually spoke (playback opened) still belongs
-        # in history even if no commit ever confirmed it — we record it once the
-        # turn finishes, using its triggering partial as the user text.
-        if (
-            state.active_turn is not turn
-            or turn.history_committed
-            or not turn.playback_event.is_set()
-            or not turn.task.done()
-        ):
-            return
-        try:
-            assistant_text = turn.task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            log.exception("assistant turn failed: %s", exc)
-            status(status="error", assistant_working=False, last_error=str(exc))
-            return
-        if isinstance(assistant_text, AgentGoalRequest):
-            # A goal handoff is recorded only when the goal finishes, not here.
-            return
-        turn.assistant_text = assistant_text
-        recent_assistant_text = assistant_text
-        recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-        history.append_exchange(turn.committed_text or turn.prompt, assistant_text)
-        turn.history_committed = True
-        if assistant_text:
-            emit("assistant", turn_id=turn.turn_id, text=assistant_text)
-        status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=assistant_text)
-
-    def completed_goal_request(turn: ActiveTurn) -> AgentGoalRequest | None:
-        if not turn.task.done():
-            return None
-        try:
-            result = turn.task.result()
-        except (asyncio.CancelledError, Exception):
-            return None
-        return result if isinstance(result, AgentGoalRequest) else None
-
-    async def maybe_finish_silent_turn(turn: ActiveTurn) -> None:
-        if (
-            state.active_turn is not turn
-            or turn.history_committed
-            or turn.playback_event.is_set()
-            or not turn.task.done()
-        ):
-            return
-        try:
-            assistant_text = turn.task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            state.active_turn = None
-            await cancel_task(turn.playback_release_task)
-            turn.playback_release_task = None
-            log.exception("assistant turn failed: %s", exc)
-            status(status="error", assistant_working=False, last_error=str(exc))
-            return
-        if isinstance(assistant_text, AgentGoalRequest) or assistant_text.strip():
-            return
-        state.active_turn = None
-        await cancel_task(turn.playback_release_task)
-        turn.playback_release_task = None
-        status(status="listening", assistant_speaking=False, assistant_working=False)
-
-    async def cancel_active_goal(reason: str) -> None:
-        goal = state.active_goal
-        state.active_goal = None
-        if goal is None:
-            return
-        goal.terminal_reason = "cancelled"
-        goal.stop_event.set()
-        emit("goal_cancel", goal=goal.goal, reason=reason)
-        log.info("goal cancelled: reason=%s goal=%r", reason, goal.goal)
-        await cancel_task(goal.task)
-
-    def current_playback() -> ActiveTurn | ProgressSpeaker | None:
-        if state.active_turn and state.active_turn.is_playing_back():
-            return state.active_turn
-        if state.progress and state.progress.is_playing_back():
-            return state.progress
-        return None
-
-    async def cancel_current_playback(reason: str) -> None:
-        if state.progress and state.progress.is_playing_back():
-            await cancel_active_goal(reason)
-        else:
-            await cancel_active_turn(reason)
-
-    async def speak_progress(text: str) -> None:
-        nonlocal recent_assistant_text, recent_assistant_echo_until
-        text = (text or "").strip()
-        if not text:
-            return
-        progress = ProgressSpeaker(text=text)
-        progress.playback_event.set()
-        progress.speaking_event.set()
-        state.progress = progress
-        emit("goal_speech", text=text)
-        status(status="speaking", assistant_speaking=True, assistant_working=True)
-
-        async def text_stream() -> AsyncIterator[str]:
-            yield text
-
-        speaker = progress_speaker or _speak_progress_default
-        try:
-            await speaker(
-                text_stream(),
-                elevenlabs_api_key,
-                voice_state.current_voice_id,
-                progress.playback_event,
-                progress.speaking_event,
-            )
-        except asyncio.CancelledError:
-            trigger_stop_playback_now()
-            raise
-        finally:
-            if state.progress is progress:
-                state.progress = None
-            progress.playback_event.clear()
-            progress.speaking_event.clear()
-
-        # Narration played to completion (a cancel re-raises above and skips this).
-        # Record what we just said so a delayed STT echo of this line is suppressed
-        # even after state.progress clears and the goal keeps working.
-        recent_assistant_text = text
-        recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-
-        # The narration ended but the goal keeps working. The session speaker flips
-        # status back to listening when speech stops, so restore thinking here or the
-        # idle timer would treat an active goal as an idle session.
-        if state.active_goal is not None:
-            status(status="thinking", assistant_speaking=False, assistant_working=True)
-
-    async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
-        nonlocal recent_assistant_text, recent_assistant_echo_until
-        # The normal turn is finished and is handing off to an iterative goal. Drop
-        # it as the active turn so it is not treated as a speaking turn, and surface
-        # the handoff. We do not commit history here — the goal records its own
-        # result when it reaches a terminal state.
-        streamed = turn.assistant_streamed_text().strip()
-        if streamed:
-            recent_assistant_text = streamed
-            recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-        if state.active_turn is turn:
-            state.active_turn = None
-        emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)
-        log.info("goal handoff received: %s", goal_request.goal)
-        if goal_runner is None:
-            status(status="listening", assistant_speaking=False, assistant_working=False)
-            return
-        await cancel_active_goal("superseded")
-        goal = ActiveGoal(
-            goal=goal_request.goal,
-            user_text=turn.committed_text or turn.prompt,
-            stop_event=asyncio.Event(),
-            started_at=asyncio.get_running_loop().time(),
-        )
-
-        async def run_goal() -> str:
-            return await goal_runner(
-                goal=goal.goal,
-                stop_event=goal.stop_event,
-                openai_client=openai_client,
-                openai_model=openai_model,
-                voice_state=voice_state,
-                motion_intent_caller=motion_intent_caller,
-                camera_snapshot_caller=camera_snapshot_caller,
-                robot_inspection_caller=robot_inspection_caller,
-                face_me_caller=face_me_caller,
-                speaker_direction_caller=speaker_direction_caller,
-                speak_progress=speak_progress,
-                is_speaking=lambda: current_playback() is not None,
-                on_event=on_event,
-                character_prose=current_character_prose(),
-                preamble=goal_request.preamble,
-            )
-
-        goal.task = asyncio.create_task(run_goal())
-        goal.task.add_done_callback(
-            lambda _done, g=goal: scribe_events.put_nowait({"type": "goal_task_done", "goal": g})
-        )
-        state.active_goal = goal
-        emit("goal_start", goal=goal.goal)
-        status(status="thinking", assistant_working=True)
-
-    async def finish_goal(goal: ActiveGoal) -> None:
-        nonlocal recent_assistant_text, recent_assistant_echo_until
-        if state.active_goal is not goal or goal.task is None:
-            return
-        state.active_goal = None
-        try:
-            final_text = goal.task.result()
-        except asyncio.CancelledError:
-            return
-        except Exception as exc:
-            log.exception("goal task failed: %s", exc)
-            status(status="error", assistant_working=False, last_error=str(exc))
-            return
-        final_text = (final_text or "").strip()
-        goal.final_text = final_text
-        goal.terminal_reason = "done"
-        if final_text:
-            history.append_exchange(goal.user_text, final_text)
-            recent_assistant_text = final_text
-            recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
-            emit("assistant", text=final_text)
-        emit("goal_done", goal=goal.goal, text=final_text)
-        status(status="listening", assistant_speaking=False, assistant_working=False, last_assistant_text=final_text)
-
-    async def start_turn(prompt: str, speculative: bool) -> None:
-        await cancel_active_turn("new_turn")
-        state.barge_in_hearing_reported = False
-        reset_recent_barge_in_audio(state)
-        reset_utterance_barge_in_audio(state)
-        state.next_turn_id += 1
-        new_turn_id = state.next_turn_id
-        playback_event = asyncio.Event()
-        speaking_event = asyncio.Event()
-        assistant_streamed_chunks: list[str] = []
-        first_token_emitted = False
-
-        def on_assistant_chunk(chunk: str) -> None:
-            nonlocal first_token_emitted
-            assistant_streamed_chunks.append(chunk)
-            if not first_token_emitted:
-                first_token_emitted = True
-                emit("turn_first_token", turn_id=new_turn_id)
-
-        openai_input = history.input_for(prompt, current_system_prompt())
-
-        async def run_turn() -> str:
-            return await asyncio.wait_for(
-                assistant_runner(
-                    new_turn_id,
-                    openai_input,
-                    playback_event,
-                    speaking_event,
-                    openai_client,
-                    elevenlabs_api_key,
-                    voice_state,
-                    on_assistant_chunk=on_assistant_chunk,
-                    motion_intent_caller=motion_intent_caller,
-                    session_end_caller=session_end_caller,
-                    camera_snapshot_caller=camera_snapshot_caller,
-                    robot_inspection_caller=robot_inspection_caller,
-                    face_me_caller=face_me_caller,
-                    speaker_direction_caller=speaker_direction_caller,
-                    openai_model=openai_model,
-                    on_event=on_event,
-                ),
-                timeout=ASSISTANT_TURN_TIMEOUT_SECS,
-            )
-
-        task = asyncio.create_task(run_turn())
-        turn = ActiveTurn(
-            turn_id=new_turn_id,
-            prompt=prompt,
-            speculative=speculative,
-            task=task,
-            playback_event=playback_event,
-            speaking_event=speaking_event,
-            assistant_streamed_chunks=assistant_streamed_chunks,
-            delay_playback=not speculative,
-        )
-        task.add_done_callback(lambda _task, completed_turn=turn: scribe_events.put_nowait({"type": "assistant_done", "turn": completed_turn}))
-        state.active_turn = turn
-        emit("turn_start", turn_id=new_turn_id, speculative=speculative, prompt=prompt)
-        if not speculative:
-            emit("turn_committed", turn_id=new_turn_id, from_speculative=False)
-        status(status="thinking", assistant_speaking=False, assistant_working=True)
-        if speculative:
-            turn.playback_release_task = asyncio.create_task(cancel_unconfirmed_speculation(turn))
-        else:
-            turn.playback_release_task = asyncio.create_task(release_committed_playback(turn))
-
-    async def start_after_stable_partial(text: str) -> None:
-        await asyncio.sleep(policy.speculative_partial_delay_secs)
-        while True:
-            should_start, _reason = policy.speculation_decision(text)
-            if not should_start:
-                return
-            quiet_remaining_secs = policy.local_quiet_remaining_secs(asyncio.get_running_loop().time(), state.last_local_speech_at)
-            if quiet_remaining_secs > 0:
-                await asyncio.sleep(quiet_remaining_secs)
-                continue
-            if state.active_turn and policy.transcript_matches(text, state.active_turn.prompt):
-                return
-            await start_turn(text, speculative=True)
-            return
-
-    def consider_playback_barge_in(
-        source: str,
-        text: str,
-        now: float,
-        playback: ActiveTurn | ProgressSpeaker,
-    ) -> BargeInOutcome:
-        playback.mark_speech_started(now)
-        publish_barge_in_state(now)
-        outcome = decide_barge_in_during_playback(text, now, playback, state, levels, policy)
-        report_barge_in(source, outcome)
-        return outcome
-
-    def continuation_retraction_eligible(turn: ActiveTurn, text: str, now: float) -> bool:
-        return (
-            not policy.has_explicit_interrupt(text)
-            and turn.playback_opened_at is not None
-            and now - turn.playback_opened_at <= policy.continuation_grace_secs
-            and len(re.findall(r"\S+", text)) >= policy.continuation_min_words
-        )
-
-    async def retract_continuation(turn: ActiveTurn, fragment_text: str, now: float) -> None:
-        first_half = turn.committed_text or turn.prompt
-        state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
-        state.utterance_prefix_deadline = now + 10.0
-        emit("false_start", turn_id=turn.turn_id, text=fragment_text)
-        await cancel_active_turn("continuation_retraction")
-        status(status="hearing", partial_transcript=fragment_text)
-        await cancel_task(state.debounce_task)
-        state.debounce_task = asyncio.create_task(
-            start_after_stable_partial(f"{state.utterance_prefix} {fragment_text}")
-        )
-
-    async def handle_partial(text: str) -> None:
-        now = asyncio.get_running_loop().time()
-        normalized_partial = policy.normalized_transcript(text)
-        if (
-            normalized_partial
-            and normalized_partial == state.last_partial_text
-            and state.local_audio_seq == state.last_partial_audio_seq
-        ):
-            return
-        state.last_partial_text = normalized_partial
-        state.last_partial_audio_seq = state.local_audio_seq
-        emit("partial", text=text)
-        note_user_speech()
-        if is_recent_assistant_echo(text, now):
-            await cancel_task(state.debounce_task)
-            state.debounce_task = None
-            emit("echo_suppressed", source="partial", text=text)
-            status(status="listening")
-            return
-
-        active_turn = state.active_turn
-        playback = current_playback()
-        if playback:
-            if (
-                playback is state.active_turn
-                and continuation_retraction_eligible(playback, text, now)
-            ):
-                await retract_continuation(playback, text, now)
-                return
-            outcome = consider_playback_barge_in("partial", text, now, playback)
-            if outcome.accepted:
-                publish_barge_in_hearing("stt")
-                status(status="hearing", partial_transcript=text)
-                publish_barge_in_event("partial", outcome.reason)
-                await cancel_current_playback("barge_in")
-                await cancel_task(state.debounce_task)
-                state.debounce_task = None
-                if outcome.reason == "explicit_interrupt":
-                    state.utterance_prefix = ""
-                    status(status="listening", partial_transcript=None)
-                else:
-                    state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
-            else:
-                emit("barge_in_rejected", source="partial", reason=outcome.reason, text=text)
-                status(status="speaking", assistant_speaking=True, partial_transcript=None)
-            return
-
-        if policy.has_explicit_interrupt(text):
-            state.utterance_prefix = ""
-        elif state.utterance_prefix and now < state.utterance_prefix_deadline:
-            text = f"{state.utterance_prefix} {text}"
-        elif state.utterance_prefix:
-            state.utterance_prefix = ""
-
-        status(status="hearing", partial_transcript=text)
-
-        if active_turn and active_turn.speculative and text != active_turn.prompt and policy.transcript_matches(text, active_turn.prompt):
-            if policy.should_replace_speculative_prompt(text, active_turn.prompt):
-                await start_turn(text, speculative=True)
-            return
-
-        if (
-            active_turn
-            and not active_turn.speculative
-            and not active_turn.playback_event.is_set()
-            and not active_turn.is_speaking()
-            and policy.normalized_transcript(text) != policy.normalized_transcript(active_turn.prompt)
-        ):
-            first_half = active_turn.committed_text or active_turn.prompt
-            state.utterance_prefix = f"{state.utterance_prefix} {first_half}".strip()
-            state.utterance_prefix_deadline = now + 10.0
-            await cancel_active_turn("commit_continuation")
-            await cancel_task(state.debounce_task)
-            state.debounce_task = asyncio.create_task(
-                start_after_stable_partial(f"{state.utterance_prefix} {text}")
-            )
-            return
-
-        await cancel_task(state.debounce_task)
-        state.debounce_task = asyncio.create_task(start_after_stable_partial(text))
-
-    async def handle_commit(text: str) -> None:
-        await cancel_task(state.debounce_task)
-        state.debounce_task = None
-        now = asyncio.get_running_loop().time()
-        emit("commit", text=text)
-        end_user_speech()
-        try:
-            if is_end_session_request(text, policy):
-                if state.active_goal is not None:
-                    await cancel_active_goal("committed_speech")
-                state.utterance_prefix = ""
-                status(status="listening", partial_transcript=None, last_committed_transcript=text)
-                if session_end_caller:
-                    session_end_caller()
-                return
-            if is_recent_assistant_echo(text, now):
-                emit("echo_suppressed", source="commit", text=text)
-                status(status="listening")
-                return
-
-            raw_commit = text
-
-            if policy.has_explicit_interrupt(text):
-                state.utterance_prefix = ""
-            elif state.utterance_prefix and now < state.utterance_prefix_deadline:
-                text = f"{state.utterance_prefix} {text}"
-                state.utterance_prefix = ""
-            elif state.utterance_prefix:
-                state.utterance_prefix = ""
-
-            should_start_from_commit, commit_reason = policy.commit_decision(text)
-            emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
-
-            if state.active_goal is not None:
-                await cancel_active_goal("committed_speech")
-                if should_start_from_commit and not policy.has_explicit_interrupt(text):
-                    status(status="thinking", partial_transcript=None, last_committed_transcript=text)
-                    await start_turn(text, speculative=False)
-                else:
-                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
-                return
-
-            active_turn = state.active_turn
-            if (
-                active_turn
-                and active_turn.is_playing_back()
-                and not policy.has_explicit_interrupt(raw_commit)
-                and continuation_retraction_eligible(active_turn, text, now)
-            ):
-                first_half = active_turn.committed_text or active_turn.prompt
-                stitched = f"{first_half} {text}".strip()
-                emit("false_start", turn_id=active_turn.turn_id, text=text)
-                await cancel_active_turn("continuation_retraction")
-                status(status="hearing", partial_transcript=text)
-                if should_start_from_commit:
-                    status(status="thinking", partial_transcript=None, last_committed_transcript=stitched)
-                    await start_turn(stitched, speculative=False)
-                else:
-                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
-                return
-            if (
-                active_turn
-                and active_turn.is_playing_back()
-                and (policy.has_explicit_interrupt(text) or not policy.transcript_matches(text, active_turn.prompt))
-            ):
-                outcome = consider_playback_barge_in("commit", text, now, active_turn)
-                if not outcome.accepted:
-                    emit("commit_rejected", source="commit", reason=outcome.reason, text=text)
-                    log.info(
-                        "commit rejected during playback: reason=%s text=%r",
-                        outcome.reason,
-                        text,
-                    )
-                    return
-
-                publish_barge_in_hearing("stt")
-                publish_barge_in_event("commit", outcome.reason)
-                await cancel_active_turn("barge_in_commit")
-                if outcome.reason == "explicit_interrupt" or not should_start_from_commit:
-                    state.utterance_prefix = ""
-                    status(status="listening", partial_transcript=None, last_committed_transcript=text)
-                    return
-                status(status="thinking", partial_transcript=None, last_committed_transcript=text)
-                await start_turn(text, speculative=False)
-                return
-
-            status(status="thinking", partial_transcript=None, last_committed_transcript=text)
-
-            if active_turn and not active_turn.speculative and not active_turn.playback_event.is_set():
-                if policy.normalized_transcript(text) == policy.normalized_transcript(active_turn.prompt):
-                    active_turn.committed_text = text
-                    active_turn.prompt = text
-                    await maybe_commit_history(active_turn)
-                    return
-                if active_turn.is_speaking():
-                    return
-                if not should_start_from_commit:
-                    return
-                stitched = f"{active_turn.committed_text or active_turn.prompt} {text}".strip()
-                await cancel_active_turn("commit_continuation")
-                await start_turn(stitched, speculative=False)
-                return
-
-            if active_turn and active_turn.is_active():
-                if policy.transcript_matches(text, active_turn.prompt):
-                    await active_turn.confirm(text)
-                    emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
-                    await maybe_commit_history(active_turn)
-                else:
-                    if not should_start_from_commit:
-                        return
-                    await cancel_active_turn("commit_mismatch")
-                    await start_turn(text, speculative=False)
-            elif active_turn and policy.transcript_matches(text, active_turn.prompt):
-                await active_turn.confirm(text)
-                emit("turn_committed", turn_id=active_turn.turn_id, from_speculative=True)
-                await maybe_commit_history(active_turn)
-            else:
-                if not should_start_from_commit:
-                    return
-                await start_turn(text, speculative=False)
-        finally:
-            reset_utterance_barge_in_audio(state)
-
-    def is_recent_assistant_echo(text: str, now: float) -> bool:
-        if policy.has_explicit_interrupt(text):
-            return False
-        assistant_text = ""
-        if state.active_turn is not None:
-            assistant_text = state.active_turn.assistant_streamed_text()
-        elif state.progress is not None:
-            assistant_text = state.progress.assistant_streamed_text()
-        if recent_assistant_text and now <= recent_assistant_echo_until:
-            assistant_text = f"{assistant_text} {recent_assistant_text}".strip()
-        return bool(assistant_text and policy.matches_assistant_echo(text, assistant_text))
-
-    try:
-        while not stop_event.is_set():
-            event = await scribe_events.get()
-            event_type = str(event["type"])
-            if event_type == "assistant_done":
-                turn = event["turn"]
-                goal_request = completed_goal_request(turn)
-                if goal_request is not None:
-                    await begin_goal_handoff(turn, goal_request)
-                else:
-                    await maybe_commit_history(turn)
-                    await maybe_finish_silent_turn(turn)
-                continue
-
-            if event_type == "goal_task_done":
-                await finish_goal(event["goal"])
-                continue
-
-            text = str(event.get("text", ""))
-
-            if event_type == "audio_activity":
-                now = asyncio.get_running_loop().time()
-                state.last_local_speech_rms = max(int(event.get("rms", 0)), levels.mic_peak)
-                heard_local_audio = False
-                if state.last_local_speech_rms >= policy.user_active_rms_threshold:
-                    state.last_local_speech_at = now
-                    note_user_speech()
-                    heard_local_audio = True
-                elif levels.scribe_gate_open:
-                    note_user_speech()
-                    heard_local_audio = True
-                elif (
-                    user_speech_on
-                    and now - state.last_local_speech_at > policy.local_speech_window_secs
-                ):
-                    end_user_speech()
-                    if (
-                        hearing_on
-                        and (state.active_turn is None or not state.active_turn.is_active())
-                        and state.active_goal is None
-                        and state.progress is None
-                    ):
-                        status(status="listening", partial_transcript=None)
-                if heard_local_audio:
-                    state.local_audio_seq += 1
-                levels.mic_rms = state.last_local_speech_rms
-                publish_barge_in_state(now, state.last_local_speech_rms)
-                if current_playback():
-                    if state.last_local_speech_rms >= policy.user_active_rms_threshold or state.gate_open:
-                        note_utterance_barge_in_audio(state, now)
-                        note_recent_barge_in_audio(state, now, policy)
-                continue
-
-            if event_type == "partial":
-                await handle_partial(text)
-                continue
-
-            if event_type == "commit":
-                await handle_commit(text)
-    finally:
-        await cancel_task(state.debounce_task)
-        if state.active_turn:
-            await state.active_turn.cancel("shutdown")
-        if state.active_goal:
-            await cancel_active_goal("shutdown")
+    await TurnOrchestrator(
+        scribe_events,
+        openai_client,
+        elevenlabs_api_key,
+        voice_state,
+        stop_event,
+        system_prompt,
+        policy=policy,
+        audio_levels=audio_levels,
+        conversation_history=conversation_history,
+        on_status=on_status,
+        on_event=on_event,
+        assistant_runner=assistant_runner,
+        goal_runner=goal_runner,
+        motion_intent_caller=motion_intent_caller,
+        session_end_caller=session_end_caller,
+        camera_snapshot_caller=camera_snapshot_caller,
+        stop_playback_now=stop_playback_now,
+        robot_inspection_caller=robot_inspection_caller,
+        face_me_caller=face_me_caller,
+        speaker_direction_caller=speaker_direction_caller,
+        progress_speaker=progress_speaker,
+        character_prose=character_prose,
+        openai_model=openai_model,
+    ).run()

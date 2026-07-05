@@ -53,6 +53,7 @@ TIMELINE_MAX_STATE_EVENTS = 200
 TIMELINE_MAX_PARTIAL_EVENTS = 400
 ACTIVATE_FAILURE_BACKOFF_SECS = 2.0
 WAKE_BUFFER_SECS = 2.0
+WAKE_HANDOFF_TAIL_SECS = 0.5
 DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
 FACE_ME_MOTION_TIMEOUT_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
@@ -62,6 +63,11 @@ VOICE_ARMED = "armed"
 VOICE_ACTIVE = "active"
 
 log = setup_logging("robot-voice")
+
+
+def wake_handoff_audio(wake_buffer: deque[bytes], sample_rate: int) -> list[bytes]:
+    tail_frames = max(1, round(WAKE_HANDOFF_TAIL_SECS * sample_rate / MIC_BLOCKSIZE))
+    return list(wake_buffer)[-tail_frames:]
 
 
 class TimelineBuffer:
@@ -741,7 +747,7 @@ class RobotVoiceService:
                 continue
             # Activate first so the session (and Scribe pre-open) come up behind the
             # chime, hiding the connect latency. The orchestrator runs in its own task.
-            self._wake_audio = list(wake_buffer)
+            self._wake_audio = wake_handoff_audio(wake_buffer, config.sample_rate)
             self._wake_event.set()
             try:
                 await audio.play_wav(config.wake_chime_path)

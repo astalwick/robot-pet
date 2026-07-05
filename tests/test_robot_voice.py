@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import robot_voice
-from robot_voice import RobotVoiceService, TimelineBuffer
+from robot_voice import RobotVoiceService, TimelineBuffer, wake_handoff_audio
 from config.voice import load_voice_config
 from drivers.respeaker import DoAReading
 from voice.assistant import AudioLevels
@@ -21,6 +21,12 @@ from voice.turn_policy import TurnPolicy
 
 
 class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
+    def test_wake_handoff_audio_keeps_only_recent_tail(self):
+        frames = [bytes([idx]) * 2560 for idx in range(10)]
+
+        self.assertEqual(wake_handoff_audio(robot_voice.deque(frames), 16000), frames[-6:])
+        self.assertEqual(wake_handoff_audio(robot_voice.deque(frames[:3]), 16000), frames[:3])
+
     async def test_disabled_config_does_not_start_orchestrator(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = os.path.join(tmpdir, "voice.json")

@@ -24,7 +24,7 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
     def test_wake_handoff_audio_keeps_only_recent_tail(self):
         frames = [bytes([idx]) * 2560 for idx in range(10)]
 
-        self.assertEqual(wake_handoff_audio(robot_voice.deque(frames), 16000), frames[-6:])
+        self.assertEqual(wake_handoff_audio(robot_voice.deque(frames), 16000), frames[-4:])
         self.assertEqual(wake_handoff_audio(robot_voice.deque(frames[:3]), 16000), frames[:3])
 
     async def test_disabled_config_does_not_start_orchestrator(self):

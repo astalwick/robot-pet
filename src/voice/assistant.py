@@ -342,10 +342,12 @@ class TurnRuntimeState:
     gate_last_reason: str = "assistant_not_speaking"
     recent_barge_in_mic_rms: int = 0
     recent_barge_in_gate_open: bool = False
+    recent_barge_in_scribe_gate_open: bool = False
     recent_barge_in_gate_reason: str = "assistant_not_speaking"
     recent_barge_in_audio_at: float = 0.0
     utterance_barge_in_mic_rms: int = 0
     utterance_barge_in_gate_open: bool = False
+    utterance_barge_in_scribe_gate_open: bool = False
     utterance_barge_in_gate_reason: str = "assistant_not_speaking"
     utterance_barge_in_audio_at: float = 0.0
     local_audio_seq: int = 0
@@ -361,6 +363,7 @@ class TurnRuntimeState:
 def reset_recent_barge_in_audio(state: TurnRuntimeState) -> None:
     state.recent_barge_in_mic_rms = 0
     state.recent_barge_in_gate_open = False
+    state.recent_barge_in_scribe_gate_open = False
     state.recent_barge_in_gate_reason = "assistant_not_speaking"
     state.recent_barge_in_audio_at = 0.0
 
@@ -368,27 +371,44 @@ def reset_recent_barge_in_audio(state: TurnRuntimeState) -> None:
 def reset_utterance_barge_in_audio(state: TurnRuntimeState) -> None:
     state.utterance_barge_in_mic_rms = 0
     state.utterance_barge_in_gate_open = False
+    state.utterance_barge_in_scribe_gate_open = False
     state.utterance_barge_in_gate_reason = "assistant_not_speaking"
     state.utterance_barge_in_audio_at = 0.0
 
 
-def note_utterance_barge_in_audio(state: TurnRuntimeState, now: float) -> None:
+def note_utterance_barge_in_audio(
+    state: TurnRuntimeState,
+    now: float,
+    *,
+    scribe_gate_open: bool = False,
+) -> None:
     if state.last_local_speech_rms > state.utterance_barge_in_mic_rms:
         state.utterance_barge_in_mic_rms = state.last_local_speech_rms
     if state.gate_open:
         state.utterance_barge_in_gate_open = True
+    if scribe_gate_open:
+        state.utterance_barge_in_scribe_gate_open = True
     state.utterance_barge_in_gate_reason = state.gate_last_reason
     state.utterance_barge_in_audio_at = now
 
 
-def note_recent_barge_in_audio(state: TurnRuntimeState, now: float, policy: TurnPolicy) -> None:
+def note_recent_barge_in_audio(
+    state: TurnRuntimeState,
+    now: float,
+    policy: TurnPolicy,
+    *,
+    scribe_gate_open: bool = False,
+) -> None:
     fresh = now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs
     if not fresh or state.last_local_speech_rms > state.recent_barge_in_mic_rms:
         state.recent_barge_in_mic_rms = state.last_local_speech_rms
     if not fresh:
         state.recent_barge_in_gate_open = False
+        state.recent_barge_in_scribe_gate_open = False
     if state.gate_open:
         state.recent_barge_in_gate_open = True
+    if scribe_gate_open:
+        state.recent_barge_in_scribe_gate_open = True
     state.recent_barge_in_gate_reason = state.gate_last_reason
     state.recent_barge_in_audio_at = now
 
@@ -413,20 +433,24 @@ def decide_barge_in_during_playback(
     mic_rms = state.last_local_speech_rms
     gate_open = state.gate_open
     gate_reason = state.gate_last_reason
+    scribe_gate_open = levels.scribe_gate_open
     if now - state.recent_barge_in_audio_at <= policy.local_speech_window_secs:
         mic_rms = state.recent_barge_in_mic_rms
         gate_open = state.recent_barge_in_gate_open
         gate_reason = state.recent_barge_in_gate_reason
+        scribe_gate_open = state.recent_barge_in_scribe_gate_open
     elif state.utterance_barge_in_audio_at > 0:
         mic_rms = state.utterance_barge_in_mic_rms
         gate_open = state.utterance_barge_in_gate_open
         gate_reason = state.utterance_barge_in_gate_reason
+        scribe_gate_open = state.utterance_barge_in_scribe_gate_open
+    decision_mic_rms = None if scribe_gate_open and policy.has_explicit_interrupt(text) else mic_rms
     accepted, reason = policy.barge_in_decision(
         text,
         assistant_speaking=True,
         gate_open=gate_open,
         assistant_speech_elapsed_secs=active_turn.speech_elapsed_secs(now),
-        mic_rms=mic_rms,
+        mic_rms=decision_mic_rms,
         gate_reason=gate_reason,
         assistant_text=active_turn.assistant_streamed_text(),
     )
@@ -1535,8 +1559,17 @@ class TurnOrchestrator:
                             or self.state.gate_open
                             or self.levels.scribe_gate_open
                         ):
-                            note_utterance_barge_in_audio(self.state, now)
-                            note_recent_barge_in_audio(self.state, now, self.policy)
+                            note_utterance_barge_in_audio(
+                                self.state,
+                                now,
+                                scribe_gate_open=self.levels.scribe_gate_open,
+                            )
+                            note_recent_barge_in_audio(
+                                self.state,
+                                now,
+                                self.policy,
+                                scribe_gate_open=self.levels.scribe_gate_open,
+                            )
                     continue
 
                 if event_type == "partial":

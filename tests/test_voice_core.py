@@ -313,6 +313,8 @@ class TurnPolicyTest(unittest.TestCase):
 
             self.assertGreater(orchestrator.state.recent_barge_in_audio_at, 0)
             self.assertGreater(orchestrator.state.utterance_barge_in_audio_at, 0)
+            self.assertTrue(orchestrator.state.recent_barge_in_scribe_gate_open)
+            self.assertTrue(orchestrator.state.utterance_barge_in_scribe_gate_open)
 
             stop_event.set()
             run_task.cancel()
@@ -422,6 +424,33 @@ class DecideBargeInDuringPlaybackTest(unittest.TestCase):
         self.assertTrue(outcome.accepted)
         self.assertEqual(outcome.reason, "explicit_interrupt")
 
+    def test_explicit_interrupt_accepts_recent_scribe_gate_evidence(self):
+        policy = TurnPolicy(barge_in_min_rms=700, local_speech_window_secs=1.0)
+        state = TurnRuntimeState(
+            last_local_speech_rms=0,
+            gate_open=False,
+            gate_last_reason="low_rms",
+            recent_barge_in_mic_rms=0,
+            recent_barge_in_gate_open=False,
+            recent_barge_in_scribe_gate_open=True,
+            recent_barge_in_gate_reason="low_rms",
+            recent_barge_in_audio_at=9.5,
+        )
+
+        outcome = decide_barge_in_during_playback(
+            "okay stop please",
+            now=10.0,
+            active_turn=self._fake_turn(),
+            state=state,
+            levels=AudioLevels(),
+            policy=policy,
+        )
+
+        self.assertTrue(outcome.accepted)
+        self.assertEqual(outcome.reason, "explicit_interrupt")
+        self.assertEqual(outcome.mic_rms, 0)
+        self.assertFalse(outcome.gate_open)
+
     def test_assistant_echo_is_rejected(self):
         policy = TurnPolicy(barge_in_min_rms=500)
         state = TurnRuntimeState(
@@ -448,6 +477,7 @@ class BargeInAudioMemoryTest(unittest.TestCase):
         state = TurnRuntimeState(
             recent_barge_in_mic_rms=900,
             recent_barge_in_gate_open=True,
+            recent_barge_in_scribe_gate_open=True,
             recent_barge_in_gate_reason="substantial_partial",
             recent_barge_in_audio_at=3.0,
         )
@@ -456,6 +486,7 @@ class BargeInAudioMemoryTest(unittest.TestCase):
 
         self.assertEqual(state.recent_barge_in_mic_rms, 0)
         self.assertFalse(state.recent_barge_in_gate_open)
+        self.assertFalse(state.recent_barge_in_scribe_gate_open)
         self.assertEqual(state.recent_barge_in_gate_reason, "assistant_not_speaking")
         self.assertEqual(state.recent_barge_in_audio_at, 0.0)
 
@@ -463,6 +494,7 @@ class BargeInAudioMemoryTest(unittest.TestCase):
         state = TurnRuntimeState(
             utterance_barge_in_mic_rms=900,
             utterance_barge_in_gate_open=True,
+            utterance_barge_in_scribe_gate_open=True,
             utterance_barge_in_gate_reason="substantial_partial",
             utterance_barge_in_audio_at=3.0,
         )
@@ -471,6 +503,7 @@ class BargeInAudioMemoryTest(unittest.TestCase):
 
         self.assertEqual(state.utterance_barge_in_mic_rms, 0)
         self.assertFalse(state.utterance_barge_in_gate_open)
+        self.assertFalse(state.utterance_barge_in_scribe_gate_open)
         self.assertEqual(state.utterance_barge_in_gate_reason, "assistant_not_speaking")
         self.assertEqual(state.utterance_barge_in_audio_at, 0.0)
 
@@ -2991,6 +3024,71 @@ class AssistantStreamingTest(unittest.TestCase):
                 any(
                     status.get("barge_in_event_count") == 2
                     and status.get("barge_in_last_event") == "commit: explicit_interrupt"
+                    for status in statuses
+                )
+            )
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_soft_scribe_gate_interrupt_during_tts_can_cancel(self):
+        async def run():
+            started_inputs = []
+            cancelled = []
+            statuses = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            levels = AudioLevels(scribe_gate_open=True)
+
+            async def fake_run_assistant_turn(
+                turn_id,
+                openai_input,
+                playback_event,
+                speaking_event,
+                openai_client,
+                elevenlabs_api_key,
+                voice_state,
+                on_assistant_chunk=None,
+                **kwargs,
+            ):
+                started_inputs.append(openai_input)
+                playback_event.set()
+                speaking_event.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(openai_input[-1]["content"])
+                    raise
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    audio_levels=levels,
+                    assistant_runner=fake_run_assistant_turn,
+                    on_status=statuses.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Tell me something"})
+            await asyncio.sleep(0.05)
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await scribe_events.put({"type": "partial", "text": "Okay stop please"})
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(len(started_inputs), 1)
+            self.assertEqual(cancelled, ["Tell me something"])
+            self.assertTrue(
+                any(
+                    status.get("barge_in_last_event") == "partial: explicit_interrupt"
                     for status in statuses
                 )
             )

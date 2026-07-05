@@ -39,7 +39,7 @@ class VoiceConfig:
     alternate_voice_id: str | None = None
     personality: str = "default"
     openai_model: str = DEFAULT_OPENAI_MODEL
-    vad_silence_threshold_secs: float = 1.0
+    vad_silence_threshold_secs: float = 0.7
     barge_in_enabled: bool = True
     barge_in_min_words: int = 3
     barge_in_min_chars: int = 12

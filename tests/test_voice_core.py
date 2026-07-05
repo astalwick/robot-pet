@@ -809,7 +809,7 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_stream_openai_words_suppresses_text_from_tool_calling_response(self):
+    def test_stream_openai_words_yields_text_from_tool_calling_response(self):
         async def run():
             class FakeResponses:
                 def __init__(self):
@@ -853,7 +853,8 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            self.assertEqual(chunks, ["I see you."])
+            self.assertEqual(chunks, ["Let me check.", "I see you."])
+            self.assertEqual(len(fake_responses.calls), 2)
 
         asyncio.run(run())
 
@@ -1003,7 +1004,7 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_stream_openai_words_start_goal_carries_co_emitted_text_as_preamble(self):
+    def test_stream_openai_words_start_goal_yields_co_emitted_text_first(self):
         async def run():
             class FakeResponses:
                 def __init__(self):
@@ -1041,10 +1042,8 @@ class AssistantStreamingTest(unittest.TestCase):
                 )
             ]
 
-            # Text emitted alongside start_goal rides along as the goal's preamble,
-            # so the handoff opens with a spoken acknowledgement.
             self.assertEqual(
-                chunks, [AgentGoalRequest(goal="find the ball", preamble="On it.")]
+                chunks, ["On it.", AgentGoalRequest(goal="find the ball", preamble="")]
             )
             self.assertEqual(len(fake_responses.calls), 1)
 
@@ -1227,7 +1226,7 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(text, "Bye.")
             self.assertEqual(order, ["tts_start", "tts:Bye.", "tts_done"])
             self.assertEqual(ended, [True])
-            self.assertEqual(len(fake_responses.calls), 2)
+            self.assertEqual(len(fake_responses.calls), 1)
 
         asyncio.run(run())
 
@@ -1279,6 +1278,59 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(result, AgentGoalRequest(goal="patrol the room"))
             # A pure handoff never opens the TTS/playback path.
             self.assertEqual(spoken, [])
+
+        asyncio.run(run())
+
+    def test_run_assistant_turn_start_goal_after_text_speaks_text(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    events = [
+                        SimpleNamespace(type="response.output_text.delta", delta="On it."),
+                        SimpleNamespace(
+                            type="response.output_item.done",
+                            item=SimpleNamespace(
+                                type="function_call",
+                                name=START_GOAL_TOOL_NAME,
+                                call_id="call_goal",
+                                arguments=json.dumps({"goal": "find the ball"}),
+                            ),
+                        ),
+                        SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                    ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            spoken = []
+
+            async def fake_speaker(text_chunks, *args, **kwargs):
+                async for chunk in text_chunks:
+                    if isinstance(chunk, str):
+                        spoken.append(chunk)
+
+            fake_responses = FakeResponses()
+            result = await run_assistant_turn(
+                1,
+                [{"role": "user", "content": "Find the ball."}],
+                asyncio.Event(),
+                asyncio.Event(),
+                SimpleNamespace(responses=fake_responses),
+                "key",
+                VoiceState("test-voice"),
+                tts_speaker=fake_speaker,
+            )
+
+            self.assertEqual(result, AgentGoalRequest(goal="find the ball", preamble=""))
+            self.assertEqual(spoken, ["On it."])
+            self.assertEqual(len(fake_responses.calls), 1)
 
         asyncio.run(run())
 
@@ -1801,6 +1853,65 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertTrue(any(event["type"] == "echo_suppressed" for event in events))
             self.assertFalse(any(event["type"] == "goal_cancel" for event in events))
             self.assertEqual(prompts, ["Patrol the room."])
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_delayed_echo_of_goal_handoff_acknowledgement_is_suppressed_mid_goal(self):
+        async def run():
+            events = []
+            history = ConversationHistory()
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            goal_started = asyncio.Event()
+            prompts = []
+
+            async def fake_run_assistant_turn(
+                turn_id, openai_input, playback_event, speaking_event,
+                openai_client, elevenlabs_api_key, voice_state, on_assistant_chunk=None, **kwargs,
+            ):
+                prompts.append(openai_input[-1]["content"])
+                if on_assistant_chunk:
+                    on_assistant_chunk("Okay, I am on it.")
+                return AgentGoalRequest(goal="find the ball")
+
+            async def fake_goal_runner(*, goal, stop_event, **kwargs):
+                goal_started.set()
+                await stop_event.wait()
+                return "I found it."
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=history,
+                    assistant_runner=fake_run_assistant_turn,
+                    goal_runner=fake_goal_runner,
+                    on_event=events.append,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Find the ball."})
+            await asyncio.wait_for(goal_started.wait(), 1.0)
+
+            await scribe_events.put({"type": "commit", "text": "Okay, I am on it."})
+            for _ in range(50):
+                if any(event["type"] == "echo_suppressed" for event in events):
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(any(event["type"] == "echo_suppressed" for event in events))
+            self.assertFalse(any(event["type"] == "goal_cancel" for event in events))
+            self.assertEqual(prompts, ["Find the ball."])
 
             stop_event.set()
             handler_task.cancel()

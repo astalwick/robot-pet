@@ -618,9 +618,8 @@ class AgentGoalRequest:
     """
 
     goal: str
-    # Any text the assistant produced alongside the start_goal call (e.g. "On it.").
-    # The goal runner speaks it as the opening acknowledgement so the handoff is not
-    # silent until the goal's first narration.
+    # Optional opening acknowledgement for callers that hand a goal directly to the
+    # runner. The normal assistant stream speaks start_goal-adjacent text itself.
     preamble: str = ""
 
 
@@ -928,7 +927,6 @@ async def stream_openai_words(
     )
 
     while True:
-        response_text_chunks: list[str] = []
         create_kwargs: dict[str, Any] = {
             "model": openai_model,
             "input": response_input,
@@ -969,7 +967,8 @@ async def stream_openai_words(
 
                 word_buffer.extend(pieces)
                 while len(word_buffer) >= 3:
-                    response_text_chunks.append("".join(word_buffer[:3]))
+                    text_streamed = True
+                    yield "".join(word_buffer[:3])
                     del word_buffer[:3]
                 continue
 
@@ -991,13 +990,11 @@ async def stream_openai_words(
             word_buffer.append(pending)
             pending = ""
         if word_buffer:
-            response_text_chunks.append("".join(word_buffer))
+            text_streamed = True
+            yield "".join(word_buffer)
             word_buffer.clear()
 
         if not function_calls:
-            for chunk in response_text_chunks:
-                text_streamed = True
-                yield chunk
             return
 
         tool_outputs: list[dict[str, str]] = []
@@ -1010,14 +1007,13 @@ async def stream_openai_words(
             )
             log.info("tool call: %s args=%s", call.name, call.arguments)
 
-            # A goal handoff ends this turn: yield the request and stop. Any text the
-            # model produced alongside the call rides along as the goal's opening
-            # acknowledgement, so the handoff is not silent until the first narration.
+            # A goal handoff ends this turn. Any text produced alongside the call
+            # was already yielded into the normal TTS path.
             if call.name == START_GOAL_TOOL_NAME:
                 log.info("goal handoff: %s", call.arguments.get("goal", ""))
                 yield AgentGoalRequest(
                     goal=str(call.arguments.get("goal", "")).strip(),
-                    preamble="".join(response_text_chunks).strip(),
+                    preamble="",
                 )
                 return
 
@@ -1534,10 +1530,15 @@ async def handle_scribe_events(
             status(status="thinking", assistant_speaking=False, assistant_working=True)
 
     async def begin_goal_handoff(turn: ActiveTurn, goal_request: AgentGoalRequest) -> None:
+        nonlocal recent_assistant_text, recent_assistant_echo_until
         # The normal turn is finished and is handing off to an iterative goal. Drop
         # it as the active turn so it is not treated as a speaking turn, and surface
         # the handoff. We do not commit history here — the goal records its own
         # result when it reaches a terminal state.
+        streamed = turn.assistant_streamed_text().strip()
+        if streamed:
+            recent_assistant_text = streamed
+            recent_assistant_echo_until = asyncio.get_running_loop().time() + policy.assistant_echo_memory_secs
         if state.active_turn is turn:
             state.active_turn = None
         emit("goal_handoff", turn_id=turn.turn_id, goal=goal_request.goal)

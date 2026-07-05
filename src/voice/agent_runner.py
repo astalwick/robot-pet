@@ -351,9 +351,8 @@ async def run_agent_goal(
     empty_responses = 0
     pose = GoalPose()
 
-    # The acknowledgement the assistant spoke alongside start_goal plays here, riding
-    # the same narration lifecycle so it overlaps the first model call and is
-    # cancelled cleanly on exit instead of blocking the first tool.
+    # Direct goal callers can provide an opening acknowledgement here. The normal
+    # assistant path already speaks any text produced alongside start_goal.
     launch_narration(preamble)
 
     try:

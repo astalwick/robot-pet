@@ -901,7 +901,15 @@ async def stream_openai_words(
     openai_model: str = OPENAI_MODEL,
     on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> AsyncIterator[str | VoiceSwitch | AgentGoalRequest]:
-    from voice.tools import ASSISTANT_TOOLS, RobotToolCall, VoiceToolContext, dispatch_tool, parse_tool_arguments
+    from voice.tools import (
+        ASSISTANT_TOOLS,
+        POST_MOTION_CAMERA_TOOLS,
+        RobotToolCall,
+        VoiceToolContext,
+        attach_motion_observation,
+        dispatch_tool,
+        parse_tool_arguments,
+    )
 
     pending = ""
     word_buffer: list[str] = []
@@ -1053,6 +1061,9 @@ async def stream_openai_words(
                         "duration_ms": round((finished_at - started_at) * 1000),
                     }
                 )
+
+            if call.name in POST_MOTION_CAMERA_TOOLS:
+                result = await attach_motion_observation(call, result.output, tool_context)
 
             tool_outputs.append(
                 {

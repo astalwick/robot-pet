@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from lib.log import setup_logging
 from voice.camera_overlay import annotate_snapshot
 from voice.model_frames import save_model_frame
 from voice.assistant import (
@@ -42,6 +43,7 @@ from voice.assistant import (
     STOP_TOOL,
     STOP_TOOL_NAME,
     TURN_TOOL,
+    TURN_TOOL_NAME,
     VoiceState,
     WEB_SEARCH_TOOL,
     check_health_snapshot,
@@ -50,6 +52,8 @@ from voice.assistant import (
     forward_sensors_sentence,
 )
 
+
+log = setup_logging("robot-voice")
 
 # The camera is a wide-angle Pi Camera 3, so a coarse step still overlaps coverage
 # between snapshots. A full 360 scan is four snapshots, not a fine sweep.
@@ -63,6 +67,7 @@ SCAN_MAX_DEGREES = 360.0
 
 
 INSPECT_SPEAKER_DIRECTION_TOOL_NAME = "inspect_speaker_direction"
+POST_MOTION_CAMERA_TOOLS = frozenset({MOVE_TOOL_NAME, TURN_TOOL_NAME, FACE_ME_TOOL_NAME})
 
 
 INSPECT_SPEAKER_DIRECTION_TOOL = {
@@ -185,6 +190,121 @@ async def _forward_clearances(context: VoiceToolContext) -> dict[str, float | No
     except Exception:
         return None
     return None
+
+
+def encoder_stall_hint(distance_meters: float | None = None) -> str:
+    snag = (
+        "Your wheels stalled but no front sensor tripped. You are probably snagged on "
+        "something beside your body at wheel height, like a doorframe edge or a furniture leg."
+    )
+    if isinstance(distance_meters, (int, float)) and distance_meters < 0:
+        return f"{snag} Drive forward straight to free yourself. Do not turn in place while snagged."
+    return f"{snag} Back up straight to free yourself. Do not turn in place while snagged."
+
+
+def safety_blocked_hint(blocked_by: str) -> str | None:
+    reason = blocked_by.lower()
+    if "cliff" in reason:
+        return "A cliff sensor tripped. Back away from the edge before anything else."
+    if "right" in reason:
+        return (
+            "You are blocked on the right side. Back up 0.2 to 0.3 meters to create "
+            "clearance before turning; turning in place will sweep your right corner into the obstacle."
+        )
+    if "left" in reason:
+        return (
+            "You are blocked on the left side. Back up 0.2 to 0.3 meters to create "
+            "clearance before turning; turning in place will sweep your left corner into the obstacle."
+        )
+    if "center" in reason:
+        return "Blocked straight ahead. Back up, then pick a direction with more clearance."
+    return None
+
+
+def motion_camera_caption(tool: str, arguments: dict[str, Any], output: dict[str, Any], pose_line: str = "") -> str:
+    blocked = output.get("error") == "safety_blocked"
+    stalled = output.get("error") == "encoder_no_progress"
+    if tool == MOVE_TOOL_NAME:
+        traveled = output.get("traveled_m")
+        if isinstance(traveled, (int, float)):
+            direction = "forward" if traveled >= 0 else "backward"
+            action = f"moving {abs(traveled):.2f} meters {direction}"
+        else:
+            distance = arguments.get("distance_meters")
+            if isinstance(distance, (int, float)):
+                direction = "forward" if distance >= 0 else "backward"
+                action = f"moving {abs(distance):.2f} meters {direction}"
+            else:
+                action = "moving"
+    elif tool == TURN_TOOL_NAME:
+        turn_degrees = output.get("measured_degrees", arguments.get("degrees"))
+        if isinstance(turn_degrees, (int, float)) and turn_degrees != 0:
+            side = "left" if turn_degrees > 0 else "right"
+            action = f"turning {abs(turn_degrees):.0f} degrees {side}"
+        else:
+            action = "turning"
+    elif tool == FACE_ME_TOOL_NAME:
+        action = "facing you"
+    else:
+        action = tool
+    caption = f"Camera view after {action}{' (blocked)' if blocked else ' (stalled)' if stalled else ''}."
+    if pose_line:
+        caption = f"{caption} {pose_line}"
+    return caption
+
+
+async def attach_motion_observation(
+    call: RobotToolCall,
+    output: dict[str, Any],
+    context: VoiceToolContext,
+    pose_text: str = "",
+) -> RobotToolResult:
+    enriched = dict(output)
+    surroundings: dict[str, Any] | None = None
+    if context.robot_inspection_caller is not None:
+        try:
+            snapshot = await asyncio.to_thread(context.robot_inspection_caller)
+            surroundings = check_surroundings_snapshot(snapshot)
+            if surroundings.get("ok"):
+                enriched["surroundings"] = surroundings
+        except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
+            log.warning("motion surroundings fetch failed: %s", exc)
+
+    if enriched.get("error") == "safety_blocked":
+        blocked_by = enriched.get("blocked_by")
+        if isinstance(blocked_by, str):
+            hint = safety_blocked_hint(blocked_by)
+            if hint is not None:
+                enriched["hint"] = hint
+    elif enriched.get("error") == "encoder_no_progress":
+        distance = call.arguments.get("distance_meters") if call.name == MOVE_TOOL_NAME else None
+        enriched["hint"] = encoder_stall_hint(distance)
+
+    image_parts = None
+    clearances = forward_clearances(surroundings)
+    if context.camera_snapshot_caller is not None:
+        try:
+            jpeg = await asyncio.to_thread(context.camera_snapshot_caller)
+            caption = motion_camera_caption(call.name, call.arguments, enriched, pose_text)
+            if clearances:
+                caption += forward_sensors_sentence(clearances)
+            jpeg = annotate_snapshot(jpeg, clearances)
+            save_model_frame(jpeg, f"motion-{call.name}", caption)
+            data_url = f"data:image/jpeg;base64,{base64.b64encode(jpeg).decode('ascii')}"
+            image_parts = [
+                {"type": "input_text", "text": caption},
+                {"type": "input_image", "image_url": data_url},
+            ]
+        except Exception as exc:  # noqa: BLE001 -- camera HTTP failures vary
+            log.warning("motion camera fetch failed: %s", exc)
+
+    return RobotToolResult(
+        name=call.name,
+        call_id=call.call_id,
+        ok=enriched.get("ok") is not False,
+        output=enriched,
+        image_parts=image_parts,
+    )
 
 
 async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResult:

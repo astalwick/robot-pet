@@ -41,6 +41,7 @@ from voice.tools import (
     RobotToolCall,
     VoiceToolContext,
     agent_observation,
+    attach_motion_observation,
     dispatch_tool,
     parse_tool_arguments,
 )
@@ -748,6 +749,63 @@ class AssistantStreamingTest(unittest.TestCase):
             tool_output = json.loads(fake_responses.calls[1]["input"][0]["output"])
             self.assertEqual(tool_output["battery"]["status"], "ok")
             self.assertNotIn("sensors", tool_output)
+
+        asyncio.run(run())
+
+    def test_stream_openai_words_attaches_camera_after_motion(self):
+        async def run():
+            class FakeResponses:
+                def __init__(self):
+                    self.calls = []
+
+                async def create(self, **kwargs):
+                    self.calls.append(kwargs)
+                    if len(self.calls) == 1:
+                        events = [
+                            SimpleNamespace(
+                                type="response.output_item.done",
+                                item=SimpleNamespace(
+                                    type="function_call",
+                                    name=MOVE_TOOL_NAME,
+                                    call_id="call_move",
+                                    arguments=json.dumps({"distance_meters": 0.5}),
+                                ),
+                            ),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_1")),
+                        ]
+                    else:
+                        events = [
+                            SimpleNamespace(type="response.output_text.delta", delta="I moved."),
+                            SimpleNamespace(type="response.completed", response=SimpleNamespace(id="resp_2")),
+                        ]
+
+                    async def stream():
+                        for event in events:
+                            yield event
+
+                    return stream()
+
+            fake_responses = FakeResponses()
+            chunks = [
+                chunk
+                async for chunk in stream_openai_words(
+                    [{"role": "user", "content": "Move forward."}],
+                    SimpleNamespace(responses=fake_responses),
+                    VoiceState("test-voice"),
+                    motion_intent_caller=lambda _name, **_kwargs: {"ok": True, "traveled_m": 0.5},
+                    camera_snapshot_caller=lambda: b"jpeg-bytes",
+                )
+            ]
+
+            self.assertEqual(chunks, ["I moved."])
+            follow_up = fake_responses.calls[1]["input"]
+            tool_output = json.loads(follow_up[0]["output"])
+            self.assertEqual(tool_output["traveled_m"], 0.5)
+            image_message = next(item for item in follow_up if isinstance(item.get("content"), list))
+            text_parts = [part for part in image_message["content"] if part.get("type") == "input_text"]
+            image_parts = [part for part in image_message["content"] if part.get("type") == "input_image"]
+            self.assertIn("Camera view after moving 0.50 meters forward.", text_parts[0]["text"])
+            self.assertTrue(image_parts[0]["image_url"].startswith("data:image/jpeg;base64,"))
 
         asyncio.run(run())
 
@@ -4577,6 +4635,52 @@ class RobotToolDispatchTest(unittest.TestCase):
             result = await dispatch_tool(self._call(MOVE_TOOL_NAME), context)
             self.assertFalse(result.ok)
             self.assertEqual(result.output, {"ok": False, "error": "motion_caller_missing"})
+
+        asyncio.run(run())
+
+    def test_attach_motion_observation_adds_hint_surroundings_and_camera(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+                robot_inspection_caller=lambda: {
+                    "sources": {
+                        "gamepad_teleop": {"stale": False},
+                        "sensors": {"stale": False},
+                    },
+                    "sensors": {
+                        "status": "ok",
+                        "readings": [
+                            {
+                                "name": "front_right",
+                                "role": "forward",
+                                "distance_mm": 120,
+                                "stop_below_mm": 150,
+                                "ok": True,
+                            }
+                        ],
+                    },
+                },
+            )
+            result = await attach_motion_observation(
+                self._call(MOVE_TOOL_NAME, arguments={"distance_meters": 0.5}),
+                {
+                    "ok": False,
+                    "error": "safety_blocked",
+                    "traveled_m": 0.31,
+                    "blocked_by": "front_right_obstacle",
+                },
+                context,
+                "Position: moved 0.3 forward.",
+            )
+
+            self.assertFalse(result.ok)
+            self.assertTrue(result.output["surroundings"]["sensors"]["available"])
+            self.assertIn("right side", result.output["hint"])
+            self.assertEqual(result.image_parts[0]["type"], "input_text")
+            self.assertIn("(blocked)", result.image_parts[0]["text"])
+            self.assertIn("Position:", result.image_parts[0]["text"])
+            self.assertEqual(result.image_parts[1]["type"], "input_image")
 
         asyncio.run(run())
 

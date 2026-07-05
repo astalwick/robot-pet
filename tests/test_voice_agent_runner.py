@@ -851,7 +851,8 @@ class MotionObservationTest(unittest.TestCase):
         self.assertIn("Position:", follow_up[1]["content"])
 
     def test_encoder_stall_gets_hint_action_log_and_caption(self):
-        from voice.agent_runner import ENCODER_STALL_HINT, GoalPose, _action_log_line, motion_camera_caption
+        from voice.agent_runner import GoalPose, _action_log_line
+        from voice.tools import encoder_stall_hint, motion_camera_caption
 
         line = _action_log_line(
             "move",
@@ -886,13 +887,13 @@ class MotionObservationTest(unittest.TestCase):
         )
 
         tool_output = json.loads(openai.responses.calls[1]["input"][0]["output"])
-        self.assertEqual(tool_output["hint"], ENCODER_STALL_HINT)
+        self.assertEqual(tool_output["hint"], encoder_stall_hint())
         pose = GoalPose()
         pose.record_motion("move", {"distance_meters": 0.5}, tool_output)
         self.assertIn("stalled at 0.10", pose.recent_actions[0])
 
     def test_backward_encoder_stall_hint_advises_forward(self):
-        from voice.agent_runner import encoder_stall_hint
+        from voice.tools import encoder_stall_hint
 
         hint = encoder_stall_hint(-0.3)
         self.assertIn("Drive forward straight", hint)

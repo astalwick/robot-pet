@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,9 @@ import numpy as np
 from drivers.respeaker import MIC_BLOCKSIZE
 
 FRAME_SAMPLES = MIC_BLOCKSIZE
+RMS_GATE_PREROLL_FRAMES = 6
+RMS_GATE_HANGOVER_FRAMES = 9
+MODEL_PRIME_FRAMES = 5
 
 
 def pcm16_rms(frame: bytes) -> int:
@@ -48,6 +52,8 @@ class WakeWordDetector:
         self.fire_count = 0
         self.last_fire_at = 0.0
         self.last_predict_seconds = 0.0
+        self._rms_gate_preroll: deque[bytes] = deque(maxlen=RMS_GATE_PREROLL_FRAMES)
+        self._rms_gate_hangover_frames = 0
 
     def load(self) -> str:
         from openwakeword.model import Model
@@ -61,6 +67,7 @@ class WakeWordDetector:
         if len(names) != 1:
             raise RuntimeError(f"Expected one wake model, got {names}")
         self._wake_name = names[0]
+        self._prime_model()
         return self._wake_name
 
     def reset(self) -> None:
@@ -70,7 +77,19 @@ class WakeWordDetector:
         # debounce window so the session-end chime tail can't fire a wake either.
         if self._model is not None:
             self._model.reset()
+            self._prime_model()
+        self._rms_gate_preroll.clear()
+        self._rms_gate_hangover_frames = 0
         self.last_fire_at = time.monotonic()
+
+    def _prime_model(self) -> None:
+        if self._model is None or self._wake_name is None:
+            return
+        silence = np.zeros(FRAME_SAMPLES, dtype=np.int16)
+        for _ in range(MODEL_PRIME_FRAMES):
+            self._model.predict(silence)
+        self.last_score = 0.0
+        self.last_predict_seconds = 0.0
 
     def score(self, frame: bytes) -> float:
         if self._model is None or self._wake_name is None:
@@ -86,11 +105,24 @@ class WakeWordDetector:
 
     def check(self, frame: bytes, *, now: float | None = None) -> bool:
         self.last_rms = pcm16_rms(frame)
-        if self.rms_gate_min > 0 and self.last_rms < self.rms_gate_min:
-            self.last_score = 0.0
-            self.last_predict_seconds = 0.0
-            return False
-        score = self.score(frame)
+        if self.rms_gate_min <= 0:
+            score = self.score(frame)
+        else:
+            if len(frame) != FRAME_SAMPLES * 2:
+                score = self.score(frame)
+            elif self.last_rms >= self.rms_gate_min:
+                frames = [*self._rms_gate_preroll, frame] if self._rms_gate_hangover_frames <= 0 else [frame]
+                self._rms_gate_preroll.clear()
+                self._rms_gate_hangover_frames = RMS_GATE_HANGOVER_FRAMES
+                score = self._score_frames(frames)
+            elif self._rms_gate_hangover_frames > 0:
+                self._rms_gate_hangover_frames -= 1
+                score = self.score(frame)
+            else:
+                self._rms_gate_preroll.append(frame)
+                self.last_score = 0.0
+                self.last_predict_seconds = 0.0
+                return False
         if score < self.threshold:
             return False
         when = time.monotonic() if now is None else now
@@ -99,3 +131,13 @@ class WakeWordDetector:
         self.last_fire_at = when
         self.fire_count += 1
         return True
+
+    def _score_frames(self, frames: list[bytes]) -> float:
+        peak_score = 0.0
+        total_predict_seconds = 0.0
+        for frame in frames:
+            peak_score = max(peak_score, self.score(frame))
+            total_predict_seconds += self.last_predict_seconds
+        self.last_score = peak_score
+        self.last_predict_seconds = total_predict_seconds
+        return peak_score

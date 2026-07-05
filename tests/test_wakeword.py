@@ -20,9 +20,11 @@ class FakeWakeModel:
     def __init__(self, score: float) -> None:
         self.score = score
         self.predict_calls = 0
+        self.frames: list[object] = []
 
-    def predict(self, _frame):
+    def predict(self, frame):
         self.predict_calls += 1
+        self.frames.append(frame)
         return {"hey_bloop": self.score}
 
 
@@ -65,7 +67,32 @@ class WakeWordDetectorTest(unittest.TestCase):
         self.assertEqual(detector.last_rms, 0)
 
         self.assertTrue(detector.check(loud, now=10.0))
-        self.assertEqual(detector._model.predict_calls, 1)
+        self.assertEqual(detector._model.predict_calls, 2)
+
+    def test_rms_gate_replays_preroll_when_audio_starts(self):
+        detector = self.make_detector(0.8, threshold=0.5)
+        detector.rms_gate_min = 50
+        silent = pcm16([0] * MIC_BLOCKSIZE)
+        loud = pcm16([1000] * MIC_BLOCKSIZE)
+
+        self.assertFalse(detector.check(silent, now=10.0))
+        self.assertFalse(detector.check(silent, now=10.1))
+        self.assertFalse(detector.check(silent, now=10.2))
+        self.assertTrue(detector.check(loud, now=10.3))
+
+        self.assertEqual(detector._model.predict_calls, 4)
+
+    def test_rms_gate_hangover_keeps_predicting_after_audio_drops(self):
+        detector = self.make_detector(0.1, threshold=0.5)
+        detector.rms_gate_min = 50
+        silent = pcm16([0] * MIC_BLOCKSIZE)
+        loud = pcm16([1000] * MIC_BLOCKSIZE)
+
+        self.assertFalse(detector.check(loud, now=10.0))
+        calls_after_loud = detector._model.predict_calls
+        self.assertFalse(detector.check(silent, now=10.1))
+
+        self.assertEqual(detector._model.predict_calls, calls_after_loud + 1)
 
     def test_rms_gate_zero_disables_gate(self):
         detector = self.make_detector(0.8, threshold=0.5)

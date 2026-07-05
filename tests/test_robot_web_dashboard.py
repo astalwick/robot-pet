@@ -839,6 +839,11 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("#voice-timeline-section.maximized .voice-timeline-toggle", self.dashboard_css)
         self.assertIn("bindOn('voice-timeline-toggle-button', 'click', onVoiceToggle)", self.voice_js)
 
+    def test_voice_timeline_hides_turn_stats_and_model_frames_until_maximized(self):
+        self.assertIn("#voice-turn-stats,\n#model-frames-panel", self.dashboard_css)
+        self.assertIn("#voice-timeline-section.maximized #voice-turn-stats", self.dashboard_css)
+        self.assertIn("#voice-timeline-section.maximized #model-frames-panel", self.dashboard_css)
+
     def test_voice_toggle_button_has_only_four_labels(self):
         self.assertIn("'Voice Off'", self.voice_js)
         self.assertIn("'Voice On'", self.voice_js)

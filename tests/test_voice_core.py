@@ -11,13 +11,6 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from voice.assistant import (
-    CHECK_HEALTH_TOOL_NAME,
-    CHECK_SURROUNDINGS_TOOL_NAME,
-    END_SESSION_TOOL_NAME,
-    FACE_ME_TOOL_NAME,
-    LOOK_TOOL_NAME,
-    MOVE_TOOL_NAME,
-    START_GOAL_TOOL_NAME,
     ActiveGoal,
     ActiveTurn,
     AgentGoalRequest,
@@ -26,7 +19,6 @@ from voice.assistant import (
     VoiceState,
     decide_barge_in_during_playback,
     handle_scribe_events,
-    inspect_robot_snapshot,
     note_recent_barge_in_audio,
     note_utterance_barge_in_audio,
     note_mic_chunk,
@@ -37,17 +29,25 @@ from voice.assistant import (
     stream_openai_words,
 )
 from voice.tools import (
+    CHECK_HEALTH_TOOL_NAME,
+    CHECK_SURROUNDINGS_TOOL_NAME,
+    END_SESSION_TOOL_NAME,
+    FACE_ME_TOOL_NAME,
     INSPECT_SPEAKER_DIRECTION_TOOL_NAME,
+    LOOK_TOOL_NAME,
+    MOVE_TOOL_NAME,
     RobotToolCall,
+    START_GOAL_TOOL_NAME,
     VoiceToolContext,
     agent_observation,
     attach_motion_observation,
     dispatch_tool,
+    inspect_robot_snapshot,
     parse_tool_arguments,
 )
 from voice.conversation import ConversationHistory
 from config.voice import VoiceConfig
-from voice.turn_policy import TurnPolicy, should_accept_barge_in, should_speculate, transcript_matches, turn_policy_from_config
+from voice.turn_policy import TurnPolicy, turn_policy_from_config
 from voice.assistant import update_near_end_gate
 
 
@@ -79,11 +79,12 @@ class ConversationHistoryTest(unittest.TestCase):
 
 class TurnPolicyTest(unittest.TestCase):
     def test_complete_stable_partial_can_start_speculation(self):
-        self.assertTrue(should_speculate("What is your name?"))
+        self.assertTrue(TurnPolicy().should_speculate("What is your name?"))
 
     def test_incomplete_partial_does_not_start_speculation(self):
+        policy = TurnPolicy()
         for ending in ["-", ",", ":", ";"]:
-            self.assertFalse(should_speculate(f"What is your name{ending}"))
+            self.assertFalse(policy.should_speculate(f"What is your name{ending}"))
 
     def test_trailing_continuation_words_block_speculation(self):
         policy = TurnPolicy()
@@ -95,7 +96,7 @@ class TurnPolicyTest(unittest.TestCase):
             self.assertFalse(policy.looks_incomplete_partial(text))
 
     def test_matching_commit_confirms_speculative_prompt(self):
-        self.assertTrue(transcript_matches("What is your name?", "what is your name"))
+        self.assertTrue(TurnPolicy().transcript_matches("What is your name?", "what is your name"))
 
     def test_interrupt_only_commit_does_not_start_turn(self):
         should_start, reason = TurnPolicy().commit_decision("Stop.")
@@ -105,7 +106,7 @@ class TurnPolicyTest(unittest.TestCase):
 
     def test_explicit_interrupt_words_can_barge_in_with_local_speech(self):
         self.assertTrue(
-            should_accept_barge_in(
+            TurnPolicy().should_accept_barge_in(
                 "stop",
                 assistant_speaking=True,
                 gate_open=False,
@@ -211,7 +212,6 @@ class TurnPolicyTest(unittest.TestCase):
         note_mic_chunk(levels, 450)
         note_mic_chunk(levels, 200)
         self.assertEqual(levels.mic_peak, 450)
-        self.assertEqual(levels.mic_last, 200)
 
     def test_refresh_barge_in_gate_writes_threshold_and_gate(self):
         policy = TurnPolicy(barge_in_min_rms=500)

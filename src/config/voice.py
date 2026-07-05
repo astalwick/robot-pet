@@ -36,7 +36,6 @@ class VoiceConfig:
     input_gain: float = 1.0
     output_gain: float = 1.0
     voice_id: str | None = None
-    alternate_voice_id: str | None = None
     personality: str = "default"
     openai_model: str = DEFAULT_OPENAI_MODEL
     vad_silence_threshold_secs: float = 0.7
@@ -73,7 +72,6 @@ class VoiceConfig:
             input_gain=clamp(float(values.get("input_gain", defaults.input_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             output_gain=clamp(float(values.get("output_gain", defaults.output_gain)), MIN_AUDIO_GAIN, MAX_AUDIO_GAIN),
             voice_id=optional_string(values.get("voice_id", defaults.voice_id)),
-            alternate_voice_id=optional_string(values.get("alternate_voice_id", defaults.alternate_voice_id)),
             personality=str(values.get("personality", defaults.personality)).strip() or defaults.personality,
             openai_model=str(values.get("openai_model", defaults.openai_model)).strip() or defaults.openai_model,
             vad_silence_threshold_secs=float(

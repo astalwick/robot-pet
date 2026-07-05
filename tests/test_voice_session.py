@@ -81,7 +81,7 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
 
     def test_card_voice_drives_initial_voice_state(self):
         session = VoiceSession(
-            VoiceConfig(personality="scientist", voice_id="default-voice-id", alternate_voice_id="alt-voice-id"),
+            VoiceConfig(personality="scientist", voice_id="default-voice-id"),
             "test-elevenlabs-key",
             object(),
             lambda _update: None,
@@ -90,7 +90,6 @@ class VoiceSessionPersonalityTest(unittest.TestCase):
         )
 
         self.assertEqual(session.voice_state.default_voice_id, "scientist-voice")
-        self.assertEqual(session.voice_state.alternate_voice_id, "alt-voice-id")
         self.assertEqual(session.voice_state.current_voice_id, "scientist-voice")
 
     def test_start_wires_run_agent_goal_as_goal_runner(self):

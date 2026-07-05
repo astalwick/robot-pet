@@ -11,7 +11,6 @@ from drivers.respeaker import ReSpeakerAudio
 from lib.log import setup_logging
 from voice.agent_runner import run_agent_goal
 from voice.assistant import (
-    ALTERNATE_VOICE_ID,
     DEFAULT_VOICE_ID,
     AudioLevels,
     VoiceState,
@@ -83,7 +82,6 @@ class VoiceSession:
         self.character_prose = prose
         self.voice_state = VoiceState(
             default_voice_id=voice_id,
-            alternate_voice_id=config.alternate_voice_id or ALTERNATE_VOICE_ID,
             current_voice_id=voice_id,
         )
         log.info("personality: %s", self.personality_name)

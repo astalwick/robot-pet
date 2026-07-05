@@ -32,17 +32,17 @@ from typing import Any
 from lib.log import setup_logging
 from voice.assistant import (
     CONFIG_DIR,
-    FACE_ME_TOOL_NAME,
-    MOVE_TOOL_NAME,
     OPENAI_CREATE_RETRY_DELAY_SECS,
     SHARED_ROBOT_GUIDANCE,
-    TURN_TOOL_NAME,
     VoiceState,
 )
 from voice.tools import (
     AGENT_TOOLS,
+    FACE_ME_TOOL_NAME,
+    MOVE_TOOL_NAME,
     POST_MOTION_CAMERA_TOOLS,
     RobotToolCall,
+    TURN_TOOL_NAME,
     VoiceToolContext,
     attach_motion_observation,
     dispatch_tool,

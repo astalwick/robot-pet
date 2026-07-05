@@ -22,38 +22,248 @@ from typing import Any
 from lib.log import setup_logging
 from voice.camera_overlay import annotate_snapshot
 from voice.model_frames import save_model_frame
-from voice.assistant import (
-    CHECK_HEALTH_TOOL,
-    CHECK_HEALTH_TOOL_NAME,
-    CHECK_SURROUNDINGS_TOOL,
-    CHECK_SURROUNDINGS_TOOL_NAME,
-    END_SESSION_TOOL,
-    END_SESSION_TOOL_NAME,
-    EXPRESS_TOOL,
-    FACE_ME_TOOL,
-    FACE_ME_TOOL_NAME,
-    LOOK_TOOL,
-    LOOK_TOOL_NAME,
-    MOTION_TOOL_NAMES,
-    MOVE_TOOL,
-    MOVE_TOOL_NAME,
-    SCAN_TOOL,
-    SCAN_TOOL_NAME,
-    START_GOAL_TOOL,
-    STOP_TOOL,
-    STOP_TOOL_NAME,
-    TURN_TOOL,
-    TURN_TOOL_NAME,
-    VoiceState,
-    WEB_SEARCH_TOOL,
-    check_health_snapshot,
-    check_surroundings_snapshot,
-    forward_clearances,
-    forward_sensors_sentence,
-)
 
 
 log = setup_logging("robot-voice")
+
+END_SESSION_TOOL_NAME = "end_session"
+EXPRESS_TOOL_NAME = "express"
+MOVE_TOOL_NAME = "move"
+TURN_TOOL_NAME = "turn"
+STOP_TOOL_NAME = "stop"
+SCAN_TOOL_NAME = "scan"
+LOOK_TOOL_NAME = "look"
+CHECK_HEALTH_TOOL_NAME = "check_health"
+CHECK_SURROUNDINGS_TOOL_NAME = "check_surroundings"
+FACE_ME_TOOL_NAME = "face_me"
+START_GOAL_TOOL_NAME = "start_goal"
+MOTION_TOOL_NAMES = (EXPRESS_TOOL_NAME, MOVE_TOOL_NAME, TURN_TOOL_NAME)
+
+
+EXPRESS_TOOL = {
+    "type": "function",
+    "name": EXPRESS_TOOL_NAME,
+    "description": (
+        "Express an emotion with a short body motion. The robot only has wheels, so every "
+        "expression is a movement in place: 'wiggle' is a small playful left-right sway, "
+        "'spin' is an excited full turn, and 'shake' is a quick back-and-forth like saying no. "
+        "Pick the kind that best fits the feeling."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["wiggle", "spin", "shake"],
+                "description": "Which expression to perform.",
+            },
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+MOVE_TOOL = {
+    "type": "function",
+    "name": MOVE_TOOL_NAME,
+    "description": (
+        "Drive the robot straight by distance. The distance_meters argument is signed: "
+        "positive values drive forward, negative values drive backward."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "distance_meters": {
+                "type": "number",
+                "description": (
+                    "Approximate distance to drive: positive forward, negative backward."
+                ),
+            },
+        },
+        "required": ["distance_meters"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+TURN_TOOL = {
+    "type": "function",
+    "name": TURN_TOOL_NAME,
+    "description": (
+        "Turn the robot in place by a number of degrees. The degrees argument is "
+        "signed: positive degrees turn the robot to its left, negative degrees turn "
+        "it to its right. Magnitude can be from 1 up to 360 degrees."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "degrees": {
+                "type": "number",
+                "description": "How far to turn: positive for left, negative for right, 1 to 360 degrees.",
+            },
+        },
+        "required": ["degrees"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+STOP_TOOL = {
+    "type": "function",
+    "name": STOP_TOOL_NAME,
+    "description": (
+        "Immediately stop the robot's motion. Use this the moment the user says to stop, "
+        "halt, or wait. It cancels any move, turn, or expression already in progress."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+SCAN_TOOL = {
+    "type": "function",
+    "name": SCAN_TOOL_NAME,
+    "description": (
+        "Look around by sweeping a requested number of degrees and returning observations, "
+        "then facing the starting direction again. Use this when you need to survey more "
+        "than what is directly ahead. Each image includes a degree ruler along the bottom "
+        "(L20 means turn left 20 degrees; R20 means turn right with degrees=-20), fixed "
+        "corridor lines at half a meter and one meter ahead, and an orange SENSED corridor "
+        "pair at the nearest forward sensor distance."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "degrees": {
+                "type": "number",
+                "description": "Total degrees to sweep, from a small arc up to 360 (a full turn). Pass 360 to look all the way around.",
+            },
+        },
+        "required": ["degrees"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+END_SESSION_TOOL = {
+    "type": "function",
+    "name": END_SESSION_TOOL_NAME,
+    "description": (
+        "End the active listening session and return to wake-word-only mode. "
+        "Use when the user is done talking for now."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+LOOK_TOOL = {
+    "type": "function",
+    "name": LOOK_TOOL_NAME,
+    "description": (
+        "Look forward from the robot camera so you can answer questions about what the robot "
+        "sees right now. The image includes a degree ruler along the bottom (L20 means turn "
+        "left 20 degrees; R20 means turn right with degrees=-20), fixed corridor lines at "
+        "half a meter and one meter ahead, and an orange SENSED corridor pair at the nearest "
+        "forward sensor distance."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CHECK_HEALTH_TOOL = {
+    "type": "function",
+    "name": CHECK_HEALTH_TOOL_NAME,
+    "description": (
+        "Check the robot's own body health: motor battery, Pi UPS battery, motor rail, drive "
+        "and safety state, and computer health. Use this for questions about how the robot is "
+        "doing, its power, or whether its motors are ready."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CHECK_SURROUNDINGS_TOOL = {
+    "type": "function",
+    "name": CHECK_SURROUNDINGS_TOOL_NAME,
+    "description": (
+        "Check what is around the robot right now: distance sensor readings and how many faces "
+        "are in view. This is a fast perceptual check; use it to tell whether something is close "
+        "or whether anyone is nearby."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+FACE_ME_TOOL = {
+    "type": "function",
+    "name": FACE_ME_TOOL_NAME,
+    "description": (
+        "Turn the robot to face whoever is speaking, based on the most recent direction "
+        "the voice came from. Use this when the user asks the robot to look at them or face them."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+START_GOAL_TOOL = {
+    "type": "function",
+    "name": START_GOAL_TOOL_NAME,
+    "description": (
+        "Start an iterative goal when the user asks for something that may require "
+        "repeated tool use, observation, searching, checking progress, or working for "
+        "more than one step."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"goal": {"type": "string"}},
+        "required": ["goal"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+WEB_SEARCH_TOOL = {"type": "web_search"}
 
 # The camera is a wide-angle Pi Camera 3, so a coarse step still overlaps coverage
 # between snapshots. A full 360 scan is four snapshots, not a fine sweep.
@@ -114,6 +324,215 @@ ASSISTANT_TOOLS = [tool for tool, on_assistant_turn, _goal in ROBOT_TOOLS if on_
 AGENT_TOOLS = [tool for tool, _assistant, in_goal_runner in ROBOT_TOOLS if in_goal_runner]
 
 
+def _telemetry_value_available(snapshot: dict[str, Any], source: str, value: object) -> bool:
+    sources = snapshot.get("sources") or {}
+    return (sources.get(source) or {}).get("stale") is False and isinstance(value, dict)
+
+
+def _motion_value_available(snapshot: dict[str, Any], value: object) -> bool:
+    """Motion owns battery and drive now; fall back to gamepad_teleop for old snapshots."""
+    sources = snapshot.get("sources") or {}
+    motion_source = sources.get("robot_motion") or {}
+    if motion_source.get("last_seen") is not None or motion_source.get("stale") is False:
+        return motion_source.get("stale") is False and isinstance(value, dict)
+    return _telemetry_value_available(snapshot, "gamepad_teleop", value)
+
+
+def _motor_battery_available(snapshot: dict[str, Any], battery: object) -> bool:
+    if isinstance(battery, dict) and battery.get("stale") is True:
+        return True
+    return _motion_value_available(snapshot, battery)
+
+
+def _interpret_sensor_reading(reading: dict[str, Any]) -> dict[str, Any]:
+    role = reading.get("role")
+    name = reading.get("name")
+    ok = reading.get("ok")
+    distance_mm = reading.get("distance_mm")
+
+    if role == "forward" and ok and distance_mm is None:
+        # The driver reports a valid measurement with no distance when nothing
+        # is within range: infinite clearance, not a failure.
+        return {"name": name, "role": "forward", "status": "no_object_in_range"}
+
+    if role == "forward" and ok and distance_mm is not None:
+        stop_below_mm = reading.get("stop_below_mm")
+        tripped = stop_below_mm is not None and distance_mm < stop_below_mm
+        return {
+            "name": name,
+            "role": "forward",
+            "clearance_m": round(distance_mm / 1000, 2),
+            "stops_below_m": round(stop_below_mm / 1000, 2) if stop_below_mm is not None else None,
+            "tripped": tripped,
+        }
+
+    if role == "cliff" and ok and distance_mm is not None:
+        trip_above_mm = reading.get("trip_above_mm")
+        cliff_detected = trip_above_mm is not None and distance_mm > trip_above_mm
+        return {
+            "name": name,
+            "role": "cliff",
+            "status": "cliff_detected" if cliff_detected else "floor_normal",
+        }
+
+    result: dict[str, Any] = {
+        "name": name,
+        "distance_mm": distance_mm,
+        "ok": ok,
+    }
+    if role is not None:
+        result["role"] = role
+    return result
+
+
+def forward_clearances(surroundings: dict[str, Any] | None) -> dict[str, float | None]:
+    clearances = {"left": None, "center": None, "right": None}
+    if not surroundings or not surroundings.get("ok"):
+        return clearances
+    sensors = surroundings.get("sensors") or {}
+    for reading in sensors.get("readings") or []:
+        if not isinstance(reading, dict) or reading.get("role") != "forward":
+            continue
+        name = (reading.get("name") or "").lower()
+        clearance = reading.get("clearance_m")
+        if reading.get("status") == "no_object_in_range":
+            slot = math.inf
+        elif clearance is None or reading.get("ok") is False:
+            slot = None
+        else:
+            slot = float(clearance)
+        if "left" in name:
+            clearances["left"] = slot
+        elif "right" in name:
+            clearances["right"] = slot
+        elif "center" in name:
+            clearances["center"] = slot
+    return clearances
+
+
+def forward_sensors_sentence(clearances: dict[str, float | None]) -> str:
+    if not any(value is not None for value in clearances.values()):
+        return ""
+    parts: list[str] = []
+    for label in ("left", "center", "right"):
+        value = clearances.get(label)
+        if value is None:
+            parts.append(f"{label} unavailable")
+        elif math.isinf(value):
+            parts.append(f"{label} clear beyond range")
+        else:
+            parts.append(f"{label} {value:.2f} meters")
+    return f" Forward sensors: {', '.join(parts)}."
+
+
+def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if snapshot is None:
+        return {"ok": False, "error": "telemetry_unavailable"}
+
+    battery = snapshot.get("motor_battery")
+    pi_battery = snapshot.get("pi_battery")
+    drive = snapshot.get("drive_status")
+    motor_rail = snapshot.get("motor_rail")
+    sensors = snapshot.get("sensors")
+    vision = snapshot.get("vision")
+    pi = snapshot.get("pi")
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "battery": {"available": False},
+        "pi_battery": {"available": False},
+        "drive": {"available": False},
+        "motor_rail": {"available": False},
+        "sensors": {"available": False},
+        "vision": {"available": False},
+        "pi": {"available": False},
+    }
+
+    if _motor_battery_available(snapshot, battery):
+        result["battery"] = {
+            "available": True,
+            "status": battery.get("status"),
+            "pack_voltage": battery.get("pack_voltage"),
+            "cell_voltage": battery.get("cell_voltage"),
+            "percent_estimate": battery.get("percent_estimate"),
+            "chemistry": battery.get("chemistry"),
+            "cell_count": battery.get("cell_count"),
+            "capacity_mah": battery.get("capacity_mah"),
+            "stale": battery.get("stale", False),
+            "stale_reason": battery.get("stale_reason"),
+            "cached_at": battery.get("cached_at"),
+        }
+    if _telemetry_value_available(snapshot, "pi_battery", pi_battery):
+        result["pi_battery"] = {
+            "available": True,
+            "status": pi_battery.get("status"),
+            "pack_voltage": pi_battery.get("pack_voltage"),
+            "percent": pi_battery.get("percent"),
+            "current_amps": pi_battery.get("current_amps"),
+            "power_state": pi_battery.get("power_state"),
+            "runtime_minutes": pi_battery.get("runtime_minutes"),
+            "warning_voltage": pi_battery.get("warning_voltage"),
+            "shutdown_voltage": pi_battery.get("shutdown_voltage"),
+            "shutdown_pending": pi_battery.get("shutdown_pending"),
+        }
+    if _motion_value_available(snapshot, drive):
+        result["drive"] = {
+            "available": True,
+            "state": drive.get("state"),
+            "stop_reason": drive.get("stop_reason"),
+            "safety_blocked": drive.get("safety_blocked"),
+            "safety_reason": drive.get("safety_reason"),
+            "roboclaw_ready": drive.get("roboclaw_ready"),
+        }
+    if _telemetry_value_available(snapshot, "motor_rail", motor_rail):
+        result["motor_rail"] = {
+            "available": True,
+            "state": motor_rail.get("state"),
+            "reason": motor_rail.get("reason"),
+            "last_pack_voltage": motor_rail.get("last_pack_voltage"),
+        }
+    if _telemetry_value_available(snapshot, "sensors", sensors):
+        result["sensors"] = {
+            "available": True,
+            "status": sensors.get("status"),
+            "readings": [
+                _interpret_sensor_reading(reading)
+                for reading in sensors.get("readings") or []
+                if isinstance(reading, dict)
+            ],
+        }
+    if _telemetry_value_available(snapshot, "vision", vision):
+        result["vision"] = {
+            "available": True,
+            "status": vision.get("status"),
+            "face_count": len(vision.get("faces") or []),
+        }
+    if _telemetry_value_available(snapshot, "system", pi):
+        result["pi"] = {
+            "available": True,
+            "uptime_seconds": pi.get("uptime_seconds"),
+            "load_1m": pi.get("load_1m"),
+            "soc_temp_c": pi.get("soc_temp_c"),
+            "disk_used_percent": pi.get("disk_used_percent"),
+            "throttled_flags": pi.get("throttled_flags"),
+        }
+    return result
+
+
+def check_health_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    full = inspect_robot_snapshot(snapshot)
+    if not full.get("ok"):
+        return full
+    return {key: full[key] for key in ("ok", "battery", "pi_battery", "drive", "motor_rail", "pi")}
+
+
+def check_surroundings_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    full = inspect_robot_snapshot(snapshot)
+    if not full.get("ok"):
+        return full
+    return {key: full[key] for key in ("ok", "sensors", "vision")}
+
+
 @dataclass
 class RobotToolCall:
     name: str
@@ -143,7 +562,7 @@ class AgentObservation:
 
 @dataclass
 class VoiceToolContext:
-    voice_state: VoiceState
+    voice_state: Any
     motion_intent_caller: Callable[..., Any] | None = None
     camera_snapshot_caller: Callable[[], bytes] | None = None
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None

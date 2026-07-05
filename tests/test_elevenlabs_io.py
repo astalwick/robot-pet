@@ -11,7 +11,6 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from voice.assistant import VoiceSwitch
 from voice.elevenlabs_io import speak_with_eleven_flash, stream_audio_to_scribe
 from voice.usage import UsageTotals
 
@@ -226,36 +225,6 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, 2)
         self.assertTrue(sockets[0].closed)
         self.assertEqual(json.loads(sockets[1].sent[1]), {"text": "hello"})
-
-    async def test_tts_switch_voice_reopens_socket(self):
-        sockets = [
-            FakeWebsocket([json.dumps({"isFinal": True})]),
-            FakeWebsocket([json.dumps({"isFinal": True})]),
-        ]
-        connected_urls = []
-
-        async def connect(url, **_kwargs):
-            connected_urls.append(url)
-            return sockets[len(connected_urls) - 1]
-
-        fake_websockets = types.SimpleNamespace(
-            connect=connect,
-            exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
-        )
-
-        async def switching_chunks():
-            yield "hello"
-            yield VoiceSwitch("voice-456", "alternate")
-            yield "there"
-
-        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
-            await speak_with_eleven_flash(switching_chunks(), "key", "voice-123", asyncio.Event(), asyncio.Event())
-
-        self.assertIn("/voice-123/", connected_urls[0])
-        self.assertIn("/voice-456/", connected_urls[1])
-        self.assertEqual(json.loads(sockets[0].sent[-1]), {"text": ""})
-        self.assertTrue(sockets[0].closed)
-
 
 # --- Speech-triggered Scribe streaming ---------------------------------------
 

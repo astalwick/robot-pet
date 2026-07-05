@@ -105,7 +105,7 @@ class VoiceConfigTest(unittest.TestCase):
             save_voice_config(config, path)
             self.assertEqual(load_voice_config(path), config)
 
-    def test_voice_id_fields_are_preserved(self):
+    def test_voice_id_field_is_preserved_and_legacy_alternate_is_ignored(self):
         config = VoiceConfig.from_dict(
             {
                 "voice_id": "legacy-voice",
@@ -115,9 +115,8 @@ class VoiceConfigTest(unittest.TestCase):
         )
         self.assertEqual(config.personality, "stoic")
         self.assertEqual(config.voice_id, "legacy-voice")
-        self.assertEqual(config.alternate_voice_id, "legacy-alt")
         self.assertEqual(config.to_dict()["voice_id"], "legacy-voice")
-        self.assertEqual(config.to_dict()["alternate_voice_id"], "legacy-alt")
+        self.assertNotIn("alternate_voice_id", config.to_dict())
 
     def test_explicit_interrupt_words_parse_from_config_string(self):
         from voice.turn_policy import turn_policy_from_config

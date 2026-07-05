@@ -13,7 +13,7 @@ from voice.camera_overlay import (
     annotate_snapshot,
     nearest_forward_clearance_m,
 )
-from voice.assistant import forward_clearances, forward_sensors_sentence
+from voice.tools import forward_clearances, forward_sensors_sentence
 
 try:
     import cv2

@@ -251,38 +251,9 @@ def turn_policy_from_config(config: VoiceConfig) -> TurnPolicy:
     )
 
 
-def normalized_transcript(text: str) -> str:
-    return DEFAULT_TURN_POLICY.normalized_transcript(text)
-
-
-def transcript_matches(left: str, right: str) -> bool:
-    return DEFAULT_TURN_POLICY.transcript_matches(left, right)
-
-
-def should_speculate(text: str) -> bool:
-    return DEFAULT_TURN_POLICY.should_speculate(text)
-
-
 def pcm16_rms(chunk: bytes) -> int:
     samples = np.frombuffer(chunk, dtype=np.int16)
     if samples.size == 0:
         return 0
     return int(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
 
-
-def should_accept_barge_in(
-    text: str,
-    assistant_speaking: bool,
-    gate_open: bool,
-    assistant_speech_elapsed_secs: float | None = None,
-    mic_rms: int | None = None,
-    gate_reason: str = "not_sustained",
-) -> bool:
-    return DEFAULT_TURN_POLICY.should_accept_barge_in(
-        text,
-        assistant_speaking,
-        gate_open,
-        assistant_speech_elapsed_secs,
-        mic_rms,
-        gate_reason,
-    )

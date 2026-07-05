@@ -15,7 +15,6 @@ from urllib.parse import urlencode
 
 from lib.log import setup_logging
 from voice.assistant import AudioLevels
-from voice.assistant import VoiceSwitch
 from voice.assistant import note_mic_chunk
 from voice.turn_policy import DEFAULT_TURN_POLICY, USER_ACTIVE_RMS_THRESHOLD, pcm16_rms
 
@@ -376,7 +375,7 @@ async def stream_audio_to_scribe(
 
 
 async def speak_with_eleven_flash(
-    text_chunks: AsyncIterator[str | VoiceSwitch],
+    text_chunks: AsyncIterator[str],
     elevenlabs_api_key: str,
     voice_id: str,
     playback_event: asyncio.Event,
@@ -391,7 +390,6 @@ async def speak_with_eleven_flash(
     ws = None
     play_task: asyncio.Task[None] | None = None
     prewarm_task: asyncio.Task | None = None
-    current_voice_id = voice_id
     audio_profile_count = 0
 
     async def write_audio(audio: bytes) -> None:
@@ -495,7 +493,7 @@ async def speak_with_eleven_flash(
     def prewarm_voice_socket() -> None:
         nonlocal prewarm_task
         if ws is None and prewarm_task is None:
-            prewarm_task = asyncio.create_task(open_voice_socket(current_voice_id))
+            prewarm_task = asyncio.create_task(open_voice_socket(voice_id))
 
     async def cancel_prewarm_socket() -> None:
         nonlocal prewarm_task
@@ -519,11 +517,11 @@ async def speak_with_eleven_flash(
                     play_task = asyncio.create_task(play_audio(ws))
                 except Exception as exc:
                     log.warning("elevenlabs tts prewarm failed; retrying: %s", exc)
-                    await start_voice_socket(current_voice_id)
+                    await start_voice_socket(voice_id)
                 finally:
                     prewarm_task = None
             else:
-                await start_voice_socket(current_voice_id)
+                await start_voice_socket(voice_id)
 
     async def send_text_chunk(chunk: str) -> None:
         nonlocal ws
@@ -567,12 +565,6 @@ async def speak_with_eleven_flash(
     try:
         prewarm_voice_socket()
         async for chunk in text_chunks:
-            if isinstance(chunk, VoiceSwitch):
-                await finish_voice_socket()
-                current_voice_id = chunk.voice_id
-                prewarm_voice_socket()
-                continue
-
             if usage is not None:
                 usage.tts_characters += len(chunk)
             await send_text_chunk(chunk)

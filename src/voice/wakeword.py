@@ -9,19 +9,12 @@ from pathlib import Path
 import numpy as np
 
 from drivers.respeaker import MIC_BLOCKSIZE
+from voice.turn_policy import pcm16_rms
 
 FRAME_SAMPLES = MIC_BLOCKSIZE
 RMS_GATE_PREROLL_FRAMES = 6
 RMS_GATE_HANGOVER_FRAMES = 9
 MODEL_PRIME_FRAMES = 5
-
-
-def pcm16_rms(frame: bytes) -> int:
-    samples = np.frombuffer(frame, dtype=np.int16)
-    if len(samples) == 0:
-        return 0
-    return int(np.sqrt(np.mean(samples.astype(np.float64) ** 2)))
-
 
 def ensure_feature_models() -> None:
     import openwakeword

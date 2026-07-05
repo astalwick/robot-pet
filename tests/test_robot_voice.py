@@ -437,7 +437,13 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_sample_timeline_zeros_stale_playback_rms(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
-        levels = AudioLevels(mic_peak=321, playback_rms=900, playback_at=0.0)
+        levels = AudioLevels(
+            mic_peak=321,
+            playback_rms=900,
+            playback_at=0.0,
+            threshold_rms=123,
+            gate_open=True,
+        )
         service.session = types.SimpleNamespace(audio_levels=levels, policy=TurnPolicy())
 
         with (
@@ -449,7 +455,10 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(service.timeline.levels[-1][1], 321)
         self.assertEqual(service.timeline.levels[-1][2], 0)
+        self.assertEqual(service.timeline.levels[-1][3], 123)
+        self.assertEqual(service.timeline.levels[-1][4], 1)
         self.assertEqual(levels.mic_peak, 0)
+        self.assertTrue(levels.gate_open)
 
 
 class TimelineBufferTest(unittest.TestCase):

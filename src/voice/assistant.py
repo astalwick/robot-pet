@@ -43,6 +43,7 @@ SHARED_ROBOT_GUIDANCE = SHARED_ROBOT_GUIDANCE_PATH.read_text().strip()
 PLAYBACK_RMS_STALE_SECS = 0.25
 ASSISTANT_TURN_TIMEOUT_SECS = 120.0
 OPENAI_CREATE_RETRY_DELAY_SECS = 0.2
+BARGE_IN_TELEMETRY_INTERVAL_SECS = 0.35
 END_SESSION_UTTERANCES = {
     "bye",
     "goodbye",
@@ -766,6 +767,7 @@ class TurnOrchestrator:
         self.levels = audio_levels if audio_levels is not None else AudioLevels()
         self.recent_assistant_text = ""
         self.recent_assistant_echo_until = 0.0
+        self.barge_in_telemetry_published_at: float | None = None
         self.hearing_on = False
         self.thinking_on = False
         self.user_speech_on = False
@@ -820,7 +822,7 @@ class TurnOrchestrator:
         event = {"type": kind, "t": time.monotonic(), **payload}
         self.on_event(event)
 
-    def publish_barge_in_state(self, now: float, mic_rms: int | None = None) -> None:
+    def publish_barge_in_state(self, now: float, mic_rms: int | None = None, *, force: bool = False) -> None:
         mic = self.state.last_local_speech_rms if mic_rms is None else mic_rms
         assistant_speaking = bool(self.current_playback())
         _, self.state.gate_open, self.state.gate_threshold_rms, self.state.gate_last_reason = refresh_barge_in_gate(
@@ -830,6 +832,13 @@ class TurnOrchestrator:
             assistant_speaking,
             mic,
         )
+        if (
+            not force
+            and self.barge_in_telemetry_published_at is not None
+            and now - self.barge_in_telemetry_published_at < BARGE_IN_TELEMETRY_INTERVAL_SECS
+        ):
+            return
+        self.barge_in_telemetry_published_at = now
         playback_rms = effective_playback_rms(self.levels, now)
         self.status(
             **barge_in_telemetry(
@@ -1230,7 +1239,7 @@ class TurnOrchestrator:
         playback: ActiveTurn | ProgressSpeaker,
     ) -> BargeInOutcome:
         playback.mark_speech_started(now)
-        self.publish_barge_in_state(now)
+        self.publish_barge_in_state(now, force=True)
         outcome = decide_barge_in_during_playback(text, now, playback, self.state, self.levels, self.policy)
         self.report_barge_in(source, outcome)
         return outcome
@@ -1495,7 +1504,7 @@ class TurnOrchestrator:
 
                 if event_type == "audio_activity":
                     now = asyncio.get_running_loop().time()
-                    self.state.last_local_speech_rms = max(int(event.get("rms", 0)), self.levels.mic_peak)
+                    self.state.last_local_speech_rms = int(event.get("rms", 0))
                     heard_local_audio = False
                     if self.state.last_local_speech_rms >= self.policy.user_active_rms_threshold:
                         self.state.last_local_speech_at = now
@@ -1521,7 +1530,11 @@ class TurnOrchestrator:
                     self.levels.mic_rms = self.state.last_local_speech_rms
                     self.publish_barge_in_state(now, self.state.last_local_speech_rms)
                     if self.current_playback():
-                        if self.state.last_local_speech_rms >= self.policy.user_active_rms_threshold or self.state.gate_open:
+                        if (
+                            self.state.last_local_speech_rms >= self.policy.user_active_rms_threshold
+                            or self.state.gate_open
+                            or self.levels.scribe_gate_open
+                        ):
                             note_utterance_barge_in_audio(self.state, now)
                             note_recent_barge_in_audio(self.state, now, self.policy)
                     continue

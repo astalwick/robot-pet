@@ -381,7 +381,10 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         await self.finish(task)
 
         self.assertEqual(socket.sent, [])
-        self.assertIn("audio_activity", [event["type"] for event in self.drain_events()])
+        self.assertEqual(
+            [event["type"] for event in self.drain_events()],
+            ["audio_activity", "audio_activity", "audio_activity"],
+        )
 
     async def test_preopen_attempts_connect(self):
         connector = Connector([FakeScribe()])

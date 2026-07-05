@@ -31,7 +31,7 @@ from telemetry.paths import (
 )
 from telemetry.messages import encode_json_line
 from telemetry.socket_client import publish_message, read_telemetry_snapshot
-from voice.assistant import effective_playback_rms, refresh_barge_in_gate
+from voice.assistant import effective_playback_rms
 from voice.doa import (
     ALREADY_FACING_TOLERANCE_DEGREES,
     STABLE_CACHE_MAX_AGE_SECONDS,
@@ -923,14 +923,6 @@ class RobotVoiceService:
             now = time.monotonic()
             mic = levels.mic_peak
             levels.mic_peak = 0
-            assistant_speaking = bool(self.status.get("assistant_speaking"))
-            refresh_barge_in_gate(
-                levels,
-                now,
-                session.policy,
-                assistant_speaking,
-                mic,
-            )
             playback_rms = effective_playback_rms(levels, now)
             self.timeline.add_sample(
                 now,

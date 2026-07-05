@@ -29,7 +29,6 @@ SCRIBE_VAD_SILENCE_THRESHOLD_SECS = 1.0
 SCRIBE_VAD_THRESHOLD = 0.6
 SCRIBE_MIN_SPEECH_DURATION_MS = 200
 SCRIBE_MIN_SILENCE_DURATION_MS = 300
-LOCAL_SPEECH_LOG_INTERVAL_SECS = 0.35
 MIC_SCRIBE_SEND_RMS_MIN = USER_ACTIVE_RMS_THRESHOLD
 MIC_SCRIBE_GATE_HOLD_SECS = 1
 SCRIBE_RECONNECT_BASE_SECS = 0.2
@@ -144,7 +143,6 @@ async def stream_audio_to_scribe(
     pre_roll: deque[bytes] = deque()
     preroll_frames: int | None = None
     last_above_at: float | None = None
-    last_activity_log_at = 0.0
     tail_secs_left = 0.0
     commit_wait_secs_left = 0.0
     hold_secs_left = 0.0
@@ -278,9 +276,7 @@ async def stream_audio_to_scribe(
             if audio_levels is not None:
                 note_mic_chunk(audio_levels, rms)
                 audio_levels.scribe_gate_open = gate_open
-            if now - last_activity_log_at >= LOCAL_SPEECH_LOG_INTERVAL_SECS:
-                await scribe_events.put({"type": "audio_activity", "rms": rms})
-                last_activity_log_at = now
+            await scribe_events.put({"type": "audio_activity", "rms": rms})
             if preroll_frames is None:
                 preroll_frames = max(1, round(SCRIBE_PREROLL_SECS / max(chunk_secs, 1e-6)))
                 # Seed with wake audio, widening the window so it survives until the

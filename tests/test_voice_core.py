@@ -16,6 +16,7 @@ from voice.assistant import (
     AgentGoalRequest,
     AudioLevels,
     TurnRuntimeState,
+    TurnOrchestrator,
     VoiceState,
     decide_barge_in_during_playback,
     handle_scribe_events,
@@ -221,6 +222,104 @@ class TurnPolicyTest(unittest.TestCase):
         self.assertEqual(threshold, 500)
         self.assertEqual(reason, "assistant_not_speaking")
         self.assertEqual(levels.threshold_rms, 500)
+
+    def test_publish_barge_in_state_throttles_status_but_refreshes_gate(self):
+        async def run():
+            statuses = []
+            task = asyncio.create_task(idle_forever())
+            turn = ActiveTurn(turn_id=1, prompt="hello", speculative=True, task=task)
+            turn.open_playback()
+            orchestrator = TurnOrchestrator(
+                asyncio.Queue(),
+                openai_client=object(),
+                elevenlabs_api_key="key",
+                voice_state=VoiceState("test-voice"),
+                stop_event=asyncio.Event(),
+                system_prompt="system",
+                policy=TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=100),
+                on_status=statuses.append,
+            )
+            orchestrator.state.active_turn = turn
+
+            try:
+                orchestrator.publish_barge_in_state(1.0, 900)
+                orchestrator.publish_barge_in_state(1.1, 900)
+
+                self.assertEqual(len([status for status in statuses if "barge_in_gate_open" in status]), 1)
+                self.assertTrue(orchestrator.state.gate_open)
+                self.assertTrue(orchestrator.levels.gate_open)
+            finally:
+                await turn.cancel("test")
+
+        asyncio.run(run())
+
+    def test_audio_activity_uses_chunk_rms_not_mic_peak_for_gate(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            levels = AudioLevels(mic_peak=1200)
+            turn_task = asyncio.create_task(idle_forever())
+            turn = ActiveTurn(turn_id=1, prompt="hello", speculative=True, task=turn_task)
+            turn.open_playback()
+            orchestrator = TurnOrchestrator(
+                scribe_events,
+                openai_client=object(),
+                elevenlabs_api_key="key",
+                voice_state=VoiceState("test-voice"),
+                stop_event=stop_event,
+                system_prompt="system",
+                policy=TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=0),
+                audio_levels=levels,
+            )
+            orchestrator.state.active_turn = turn
+            run_task = asyncio.create_task(orchestrator.run())
+
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await asyncio.sleep(0.01)
+
+            self.assertEqual(orchestrator.state.last_local_speech_rms, 0)
+            self.assertFalse(orchestrator.state.gate_open)
+            self.assertFalse(levels.gate_open)
+
+            stop_event.set()
+            run_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await run_task
+
+        asyncio.run(run())
+
+    def test_scribe_gate_open_records_barge_in_audio_evidence(self):
+        async def run():
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+            levels = AudioLevels(scribe_gate_open=True)
+            turn_task = asyncio.create_task(idle_forever())
+            turn = ActiveTurn(turn_id=1, prompt="hello", speculative=True, task=turn_task)
+            turn.open_playback()
+            orchestrator = TurnOrchestrator(
+                scribe_events,
+                openai_client=object(),
+                elevenlabs_api_key="key",
+                voice_state=VoiceState("test-voice"),
+                stop_event=stop_event,
+                system_prompt="system",
+                audio_levels=levels,
+            )
+            orchestrator.state.active_turn = turn
+            run_task = asyncio.create_task(orchestrator.run())
+
+            await scribe_events.put({"type": "audio_activity", "rms": 0})
+            await asyncio.sleep(0.01)
+
+            self.assertGreater(orchestrator.state.recent_barge_in_audio_at, 0)
+            self.assertGreater(orchestrator.state.utterance_barge_in_audio_at, 0)
+
+            stop_event.set()
+            run_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await run_task
+
+        asyncio.run(run())
 
     def test_single_loud_spike_does_not_open_gate_without_sustain(self):
         policy = TurnPolicy(barge_in_min_rms=500, barge_in_sustain_ms=350)
@@ -3474,7 +3573,7 @@ class AssistantStreamingTest(unittest.TestCase):
             await asyncio.sleep(0.05)
             await scribe_events.put({"type": "audio_activity", "rms": 900})
             await scribe_events.put({"type": "partial", "text": "wait"})
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.36)
             await scribe_events.put({"type": "audio_activity", "rms": 500})
             await asyncio.sleep(0.05)
 

@@ -1,3 +1,8 @@
+> Sensor positions below are also given in `base_link` (REP-103: +x forward,
+> +y left, +z up). The origin is the drive-axle midpoint on the ground centerline;
+> the axle sits 55 mm behind the bumper front face. Authoritative mount poses live
+> in `src/robot_model.py`.
+
 ## INNER CHASSIS
 
 275mm wide
@@ -28,7 +33,9 @@ bumper
 
 ---
 
-Downward facing ToF sensors:
-71.5mm off the ground
-117.5mm off center, left or right
-angled 35 degrees downward
+Downward facing cliff ToF sensors (measured):
+67mm off the ground (`z = 0.067`)
+128mm off center, left and right (`cliff_left y = +0.128`, `cliff_right y = -0.128`)
+angled 35 degrees downward (`pitch = +0.611 rad`; positive pitch is nose-down in a z-up frame)
+mounted at the leading edge — top edge sits ~9mm forward of the bumper (`x ≈ +0.064`)
+left and right only; there is no center cliff sensor

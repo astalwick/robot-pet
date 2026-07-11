@@ -17,11 +17,18 @@ DRIVE_COMMAND_TYPE = "drive_command"
 
 @dataclass(frozen=True)
 class DriveCommand:
+    # left_qpps/right_qpps are the actual command. wheels carries the normalized
+    # left/right that robot-motion uses to tell whether the gamepad is actively
+    # driving (arbitration vs. an autonomous intent); drive_status carries the
+    # safety-relevant controller_reader_alive/stop_reason liveness. wheels,
+    # drive_status and link_loop are also republished by robot-motion for the
+    # dashboard. The controller-button and drive-tuning telemetry used to ride
+    # along here too, but robot-motion never read them — the dashboard gets those
+    # straight from gamepad-teleop's own gamepad_teleop_update — so they are not
+    # passengers on the command path.
     left_qpps: int
     right_qpps: int
-    controller: dict[str, Any]
     wheels: dict[str, Any]
-    drive_tuning: dict[str, Any]
     drive_status: dict[str, Any]
     link_loop: dict[str, Any]
 
@@ -30,9 +37,7 @@ class DriveCommand:
             "type": DRIVE_COMMAND_TYPE,
             "left_qpps": self.left_qpps,
             "right_qpps": self.right_qpps,
-            "controller": self.controller,
             "wheels": self.wheels,
-            "drive_tuning": self.drive_tuning,
             "drive_status": self.drive_status,
             "link_loop": self.link_loop,
         }
@@ -44,9 +49,7 @@ class DriveCommand:
         return cls(
             left_qpps=int(message["left_qpps"]),
             right_qpps=int(message["right_qpps"]),
-            controller=dict(message["controller"]),
             wheels=dict(message["wheels"]),
-            drive_tuning=dict(message["drive_tuning"]),
             drive_status=dict(message["drive_status"]),
             link_loop=dict(message["link_loop"]),
         )

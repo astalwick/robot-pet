@@ -304,6 +304,24 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertFalse(published[0]["connected"])
         self.assertEqual(published[1]["drive_status"]["state"], "stopped")
 
+    def test_status_update_carries_controller_and_drive_tuning_to_hub(self):
+        # These no longer ride on the DriveCommand, so this publish is the only
+        # route for controller state and drive tuning to reach the dashboard.
+        state = controller_state()
+        controller = FakeController(state)
+        published = []
+        runner = GamepadTeleopRunner(
+            fast_config(),
+            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+        )
+
+        runner._publish_status_update(controller)
+
+        message = published[0]
+        self.assertEqual(message["source"], "gamepad_teleop")
+        self.assertTrue(message["controller"]["connected"])
+        self.assertIn("speed_scale", message["drive_tuning"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,14 +168,12 @@ class GamepadTeleopRunner:
             drive_command = DriveCommand(
                 left_qpps=target.left_qpps,
                 right_qpps=target.right_qpps,
-                controller=controller_message(controller.state),
                 wheels={
                     "left_command": wheels.left,
                     "right_command": wheels.right,
                     "left_target_qpps": target.left_qpps,
                     "right_target_qpps": target.right_qpps,
                 },
-                drive_tuning=self.config.drive_tuning.to_dict(),
                 drive_status=self._drive_status_payload(controller.reader_alive()),
                 link_loop=self._link_loop_payload(),
             )
@@ -198,9 +196,7 @@ class GamepadTeleopRunner:
             DriveCommand(
                 left_qpps=0,
                 right_qpps=0,
-                controller=controller_message(controller.state),
                 wheels={"left_command": 0.0, "right_command": 0.0, "left_target_qpps": 0, "right_target_qpps": 0},
-                drive_tuning=self.config.drive_tuning.to_dict(),
                 drive_status=self._drive_status_payload(controller.reader_alive()),
                 link_loop=self._link_loop_payload(),
             )

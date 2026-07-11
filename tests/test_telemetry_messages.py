@@ -356,7 +356,10 @@ class TelemetryMessagesTest(unittest.TestCase):
             odometry=odometry_message(left_distance_m=1.23, right_distance_m=1.21),
         )
 
-        self.assertEqual(message["odometry"], {"left_distance_m": 1.23, "right_distance_m": 1.21})
+        self.assertEqual(
+            message["odometry"],
+            {"left_distance_m": 1.23, "right_distance_m": 1.21, "x": None, "y": None, "theta": None},
+        )
 
     def test_drive_status_message_includes_command_and_publish_health(self):
         message = drive_status_message("driving", None, True, True, 0, 0.2, 1, False, motion_power_requested=True)

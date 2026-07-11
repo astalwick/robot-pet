@@ -63,9 +63,7 @@ def drive_command(left_qpps=0, right_qpps=0):
     return DriveCommand(
         left_qpps=left_qpps,
         right_qpps=right_qpps,
-        controller={"connected": True, "buttons": {}},
         wheels={"left_command": 0.5, "right_command": 0.5},
-        drive_tuning={"speed_scale": 0.25, "turbo_scale": 0.75, "turn_scale": 1.0, "qpps_slew_limit": 1000000.0},
         drive_status={"state": "driving", "controller_reader_alive": True},
         link_loop={},
     )
@@ -231,7 +229,10 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertTrue(runner._accumulate_odometry(motor))
         payload = runner._odometry_payload()
-        self.assertEqual(payload, {"left_distance_m": 0.0, "right_distance_m": 0.0})
+        self.assertEqual(
+            payload,
+            {"left_distance_m": 0.0, "right_distance_m": 0.0, "x": 0.0, "y": 0.0, "theta": 0.0},
+        )
 
     def test_odometry_accumulates_signed_per_wheel_distance(self):
         motor = FakeMotor()
@@ -301,6 +302,52 @@ class RobotMotionTest(unittest.TestCase):
         runner._accumulate_odometry(motor)  # re-baseline at 10, no delta
         payload = runner._odometry_payload()
         self.assertAlmostEqual(payload["left_distance_m"], 500 / ENCODER_COUNTS_PER_METER, places=4)
+
+    def test_odometry_straight_move_advances_x_only(self):
+        motor = FakeMotor()
+        # Baseline at 0, then both wheels forward the same amount: pure forward.
+        motor.positions.extend([(0, 0), (500, 500)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)
+        runner._accumulate_odometry(motor)
+
+        payload = runner._odometry_payload()
+        self.assertAlmostEqual(payload["x"], 500 / ENCODER_COUNTS_PER_METER, places=4)
+        self.assertAlmostEqual(payload["y"], 0.0, places=4)
+        self.assertAlmostEqual(payload["theta"], 0.0, places=5)
+
+    def test_odometry_in_place_turn_sets_theta_direction(self):
+        motor = FakeMotor()
+        # Left backward, right forward: the base rotates counterclockwise, so
+        # theta is positive in REP-103 and the pose stays near the origin.
+        motor.positions.extend([(0, 0), (-500, 500)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)
+        runner._accumulate_odometry(motor)
+
+        payload = runner._odometry_payload()
+        self.assertGreater(payload["theta"], 0.0)
+        self.assertAlmostEqual(payload["x"], 0.0, places=4)
+        self.assertAlmostEqual(payload["y"], 0.0, places=4)
+
+    def test_odometry_baseline_invalidation_does_not_jump_pose(self):
+        motor = FakeMotor()
+        # Drive forward, then invalidate (a reconnect / read gap) and re-baseline.
+        # The pose must continue from where it was, not snap back to the origin:
+        # the robot did not teleport just because the encoder baseline was reset.
+        motor.positions.extend([(0, 0), (500, 500), (1500, 1500)])
+        runner = self._odometry_runner(motor)
+
+        runner._accumulate_odometry(motor)  # baseline
+        runner._accumulate_odometry(motor)  # +500
+        x_before = runner._odometry_payload()["x"]
+
+        runner._invalidate_odometry_baseline()
+        runner._accumulate_odometry(motor)  # re-baseline at 1500, no delta
+
+        self.assertAlmostEqual(runner._odometry_payload()["x"], x_before, places=6)
 
     def test_stale_drive_command_stops_motor(self):
         motor = FakeMotor()
@@ -406,12 +453,23 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(command.linear_x, 0.0)
         self.assertLess(command.angular_z, 0.0)
 
-    def test_motion_intent_ignores_gamepad_drive_tuning(self):
+    def test_drive_command_round_trips_without_telemetry_only_passengers(self):
+        original = drive_command(left_qpps=120, right_qpps=-120)
+
+        restored = DriveCommand.from_message(original.to_message())
+
+        self.assertEqual(restored, original)
+        # The controller-button and drive-tuning telemetry no longer ride along.
+        message = original.to_message()
+        self.assertNotIn("controller", message)
+        self.assertNotIn("drive_tuning", message)
+
+    def test_motion_intent_uses_default_tuning_not_the_gamepad_command(self):
+        # An active intent mixes with the motion service's own DriveTuning defaults,
+        # independent of whatever the gamepad sent. (Gamepad tuning no longer rides
+        # on the drive command at all, so this is now structural, not just ignored.)
         runner = self._runner(FakeMotor())
         drive = drive_command()
-        drive.drive_tuning["speed_scale"] = 1.0
-        drive.drive_tuning["turbo_scale"] = 1.0
-        drive.controller["buttons"]["lb"] = True
 
         _, left_qpps, right_qpps = runner._target_from_drive_or_intent(
             drive,

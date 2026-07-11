@@ -3,10 +3,36 @@
 from dataclasses import dataclass
 
 from control.commands import MotionCommand, WheelCommand, WheelSpeedCommand
+from robot_model import ENCODER_COUNTS_PER_METER, TRACK_WIDTH_METERS
 
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def body_twist_to_wheel_qpps(linear_x_mps: float, angular_z_radps: float) -> WheelSpeedCommand:
+    """REP-103 diff-drive inverse kinematics: body twist -> wheel QPPS targets.
+
+    Positive angular_z is counterclockwise (a left turn), so the right wheel runs
+    faster. This matches DiffDriveOdometry.update, where a right wheel ahead of the
+    left produces positive theta.
+    """
+    left_mps = linear_x_mps - angular_z_radps * TRACK_WIDTH_METERS / 2
+    right_mps = linear_x_mps + angular_z_radps * TRACK_WIDTH_METERS / 2
+    return WheelSpeedCommand(
+        left_qpps=round(left_mps * ENCODER_COUNTS_PER_METER),
+        right_qpps=round(right_mps * ENCODER_COUNTS_PER_METER),
+    )
+
+
+def wheel_qpps_to_body_twist(left_qpps: int, right_qpps: int) -> MotionCommand:
+    """Diff-drive forward kinematics: wheel QPPS -> REP-103 body twist."""
+    left_mps = left_qpps / ENCODER_COUNTS_PER_METER
+    right_mps = right_qpps / ENCODER_COUNTS_PER_METER
+    return MotionCommand(
+        linear_x=(left_mps + right_mps) / 2,
+        angular_z=(right_mps - left_mps) / TRACK_WIDTH_METERS,
+    )
 
 
 @dataclass(frozen=True)

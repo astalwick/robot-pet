@@ -7,6 +7,28 @@ import time
 from typing import Any
 
 
+# --- ROS2 migration map --------------------------------------------------
+#
+# These are hand-rolled JSON dicts over a Unix socket. Most of it is throwaway
+# scaffolding, but a few carry data that maps onto real ROS2 messages/topics.
+# When we migrate, port these and drop the rest:
+#
+#   odometry_message      -> nav_msgs/Odometry (+ TF odom->base_link)
+#   wheel_message         -> wheel joint state (sensor_msgs/JointState)
+#   sensors_update ranges -> sensor_msgs/Range per sensor; join each reading to
+#                            robot_model.SENSOR_MOUNTS by name for its frame_id
+#   motor_battery_message -> sensor_msgs/BatteryState
+#   pi_battery_message    -> sensor_msgs/BatteryState
+#   the drive command     -> geometry_msgs/Twist on /cmd_vel
+#                            (see control/motion_drive.py::DriveCommand;
+#                             the velocity<->qpps conversion already lives in
+#                             control/differential_drive.py)
+#
+# Scaffolding — expected to be replaced, not ported: voice_update, vision_update,
+# gamepad_teleop_update, robot_motion_update and the other dashboard-hub payloads.
+# This block only records intent; it changes no behavior.
+
+
 BUTTON_FIELDS = (
     "a",
     "b",
@@ -279,16 +301,30 @@ def wheel_message(
     }
 
 
-def odometry_message(left_distance_m: float, right_distance_m: float) -> dict[str, Any]:
+def odometry_message(
+    left_distance_m: float,
+    right_distance_m: float,
+    x: float | None = None,
+    y: float | None = None,
+    theta: float | None = None,
+) -> dict[str, Any]:
     """Cumulative signed wheel travel in meters since the motion service started.
 
     Positive means robot-forward for both wheels. The dashboard diffs consecutive
     snapshots to dead-reckon a local path, so absolute counters are deliberate:
     they survive missed telemetry frames where per-frame deltas would not.
+
+    `x`, `y`, `theta` are the dead-reckoned pose in a fixed odom-style frame
+    anchored at startup (REP-103 axes: +x initial heading, +y its left, theta CCW
+    in radians), integrated from the same wheel deltas. They are additive,
+    backward-compatible keys — older readers ignore them.
     """
     return {
         "left_distance_m": left_distance_m,
         "right_distance_m": right_distance_m,
+        "x": x,
+        "y": y,
+        "theta": theta,
     }
 
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import signal
 import threading
@@ -31,9 +30,11 @@ from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer
 from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
+from control.odometry import DiffDriveOdometry
 from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
+from robot_model import ENCODER_COUNTS_PER_METER, TRACK_WIDTH_METERS
 from telemetry.messages import (
     drive_status_message,
     link_loop_message,
@@ -57,12 +58,8 @@ DRIVE_COMMAND_STALE_SECONDS = 0.5
 
 # Encoder-distance move physics. Distance completion is derived from these
 # physical facts rather than a single opaque counts-per-meter constant: goBILDA
-# 5203-2402-0019 motors (537.7 counts per output-shaft revolution) with nominal
-# 96 mm Hogback wheels mounted directly on the output shaft. The wheel diameter
-# is the calibrated effective rolling diameter: 1.00 m commanded measured 0.97 m.
-WHEEL_DIAMETER_METERS = 0.096
-ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7
-ENCODER_COUNTS_PER_METER = ENCODER_COUNTS_PER_WHEEL_REVOLUTION / (math.pi * WHEEL_DIAMETER_METERS)
+# ENCODER_COUNTS_PER_METER and the wheel/track constants live in robot_model.py
+# (the single source of truth that feeds the future URDF and odometry).
 ENCODER_COUNT_BITS = 32
 # A move commanding motion must keep gaining encoder travel; if it stalls this
 # long the no-progress watchdog stops and fails it.
@@ -169,6 +166,8 @@ class MotionRunner:
         self._last_left_position: int | None = None
         self._last_right_position: int | None = None
         self._odometry_available = False
+        # Dead-reckoned pose (x, y, theta) from the same per-tick wheel deltas.
+        self._odometry = DiffDriveOdometry(TRACK_WIDTH_METERS)
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
@@ -465,13 +464,10 @@ class MotionRunner:
         return left != 0.0 or right != 0.0
 
     def _intent_only_drive_command(self) -> DriveCommand:
-        tuning = DriveTuning()
         return DriveCommand(
             left_qpps=0,
             right_qpps=0,
-            controller={"connected": False, "buttons": {}},
             wheels={"left_command": 0.0, "right_command": 0.0},
-            drive_tuning=tuning.to_dict(),
             drive_status={"state": self.drive_state, "controller_reader_alive": None},
             link_loop={},
         )
@@ -619,8 +615,11 @@ class MotionRunner:
         # The first good read only sets the baseline; later reads add the
         # wrap-corrected delta so the published distance stays continuous.
         if self._last_left_position is not None:
-            self._left_distance_m += _encoder_delta(left, self._last_left_position) / ENCODER_COUNTS_PER_METER
-            self._right_distance_m += _encoder_delta(right, self._last_right_position) / ENCODER_COUNTS_PER_METER
+            left_delta_m = _encoder_delta(left, self._last_left_position) / ENCODER_COUNTS_PER_METER
+            right_delta_m = _encoder_delta(right, self._last_right_position) / ENCODER_COUNTS_PER_METER
+            self._left_distance_m += left_delta_m
+            self._right_distance_m += right_delta_m
+            self._odometry.update(left_delta_m, right_delta_m)
         self._last_left_position = left
         self._last_right_position = right
         self._odometry_available = True
@@ -629,9 +628,13 @@ class MotionRunner:
     def _odometry_payload(self) -> dict[str, Any] | None:
         if not self._odometry_available:
             return None
+        pose = self._odometry.pose
         return odometry_message(
             left_distance_m=round(self._left_distance_m, 4),
             right_distance_m=round(self._right_distance_m, 4),
+            x=round(pose.x, 4),
+            y=round(pose.y, 4),
+            theta=round(pose.theta, 5),
         )
 
     def _drive_status_payload(self, roboclaw_ready: bool | None = None) -> dict[str, Any]:

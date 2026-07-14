@@ -58,6 +58,22 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=2886 --attr-match=idProduct=001e
 sudo udevadm trigger /dev/gpiochip0 2>/dev/null || true
 
+# Ubuntu's portaudio is built with a PulseAudio backend, and Pa_Initialize
+# fails hard when no sound server is running (PortAudio issue #900). Run
+# pipewire-pulse for user pi at boot, but disable PipeWire's ALSA monitor so
+# it never claims the ReSpeaker — voice code opens it directly via ALSA.
+sudo apt install -y pipewire pipewire-pulse wireplumber
+sudo mkdir -p /etc/wireplumber/wireplumber.conf.d
+sudo tee /etc/wireplumber/wireplumber.conf.d/99-robot-pet-disable-alsa.conf >/dev/null <<'CONF'
+wireplumber.profiles = {
+  main = {
+    monitor.alsa = disabled
+  }
+}
+CONF
+sudo loginctl enable-linger "$USER"
+systemctl --user enable pipewire.socket pipewire-pulse.socket 2>/dev/null || true
+
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[5/15] Configuring UART for RoboClaw..."
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then

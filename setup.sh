@@ -35,15 +35,28 @@ KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
 UDEV
 sudo usermod -a -G i2c "$USER"
 
+# GPIO for the battery MOSFET cutoff. gpiozero 2.0.1 hardcodes gpiochip4 on
+# Pi 5, but kernels since 6.6.47 renamed the header chip to gpiochip0 — Pi OS
+# ships a compat symlink, Ubuntu doesn't. /dev/gpiochip0 itself is already
+# rw for the dialout group.
+sudo tee /etc/udev/rules.d/99-robot-pet-gpio.rules >/dev/null <<'UDEV'
+KERNEL=="gpiochip0", SYMLINK+="gpiochip4"
+UDEV
+
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
 echo "[4/15] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
 sudo usermod -a -G input "$USER"
 sudo usermod -a -G audio "$USER"
+# Camera: Pi OS puts the default user in video/render; Ubuntu doesn't, and
+# libcamera needs /dev/media*, /dev/video* (video) and dma-buf heaps.
+sudo usermod -a -G video "$USER"
+sudo usermod -a -G render "$USER"
 sudo tee /etc/udev/rules.d/99-robot-pet-respeaker.rules >/dev/null <<'UDEV'
 SUBSYSTEM=="usb", ATTR{idVendor}=="2886", ATTR{idProduct}=="001e", GROUP="audio", MODE="0660"
 UDEV
 sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=2886 --attr-match=idProduct=001e
+sudo udevadm trigger /dev/gpiochip0 2>/dev/null || true
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[5/15] Configuring UART for RoboClaw..."

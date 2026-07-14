@@ -23,6 +23,11 @@ the first run; a second argument picks the branch:
 Later deploys (`scripts/redeploy-robot.sh`) follow whatever branch is checked
 out on the Pi.
 
+Robot-local config (`sensors.json`, drive tuning, `voice.env` with API keys)
+lives in `~/.config/robot-pet` on the Pi and is not in git. Keep a copy in
+`~/robot-pet-config` on your Mac; `initialize-pi.sh` restores it onto a Pi
+that has no config yet.
+
 **On the Pi**, once hardware is connected:
 
 ```bash

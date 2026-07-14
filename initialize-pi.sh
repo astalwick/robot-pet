@@ -1,7 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-PI_HOST="robot-pi.local"
+# Ubuntu Server has no mDNS until setup.sh installs avahi-daemon, so a
+# fresh card is only reachable by IP: ./initialize-pi.sh 192.168.1.42
+PI_HOST="${1:-robot-pi.local}"
 PI_USER="pi"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 REPO_URL="git@github.com:astalwick/robot-pet.git"  # Adjust if needed
@@ -21,6 +23,7 @@ fi
 echo "[1/7] Checking Pi is reachable..."
 if ! ssh -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "echo 'Pi is up'" 2>/dev/null; then
     echo "ERROR: Cannot reach $PI_HOST"
+    echo "       On a freshly flashed card, pass the Pi's IP: $0 192.168.1.42"
     exit 1
 fi
 
@@ -47,9 +50,10 @@ chmod 600 ~/.ssh/config 2>/dev/null || true'
 echo "[4/7] Adding GitHub to known_hosts..."
 ssh "$PI_USER@$PI_HOST" 'ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null'
 
-# Run apt update and upgrade
+# Run apt update and upgrade. On Ubuntu, cloud-init and unattended-upgrades
+# hold the apt lock on first boot, and needrestart prompts interactively.
 echo "[5/7] Running apt update && apt full-upgrade (this may take a while)..."
-ssh -t "$PI_USER@$PI_HOST" 'sudo apt update && sudo apt full-upgrade -y'
+ssh -t "$PI_USER@$PI_HOST" 'command -v cloud-init >/dev/null && cloud-init status --wait; sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt update && sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt full-upgrade -y'
 
 # Clone repo and run setup.sh
 echo "[6/7] Cloning repo and running setup.sh..."

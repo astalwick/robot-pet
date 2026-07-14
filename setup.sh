@@ -11,7 +11,7 @@ echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
 echo "[1/15] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools avahi-daemon python3-lgpio
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[2/15] Adding $USER to dialout group..."
@@ -26,6 +26,13 @@ if ! grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG" 2>/dev/null; then
 else
     echo "    I2C already enabled in $BOOT_CONFIG"
 fi
+# Ubuntu's image has no i2c group (Pi OS creates it); make it and own the buses
+if ! getent group i2c >/dev/null; then
+    sudo groupadd i2c
+fi
+sudo tee /etc/udev/rules.d/99-robot-pet-i2c.rules >/dev/null <<'UDEV'
+KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
+UDEV
 sudo usermod -a -G i2c "$USER"
 
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
@@ -52,6 +59,12 @@ if ! grep -q "^dtoverlay=disable-bt" "$BOOT_CONFIG" 2>/dev/null; then
 else
     echo "    Bluetooth already disabled on UART"
 fi
+# Ubuntu runs a login getty on the RoboClaw UART and lacks Pi OS's serial0 alias
+sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
+sudo systemctl mask serial-getty@ttyAMA0.service >/dev/null
+sudo tee /etc/udev/rules.d/99-robot-pet-serial0.rules >/dev/null <<'UDEV'
+KERNEL=="ttyAMA0", SYMLINK+="serial0"
+UDEV
 
 # Cut power on halt/shutdown (Pi 4/5 EEPROM; idempotent)
 echo "[6/15] Configuring EEPROM power-off on halt..."

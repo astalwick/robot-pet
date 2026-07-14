@@ -13,6 +13,7 @@ dependencies = [
     "evdev; sys_platform == 'linux'",
     "gpiozero",
     "numpy",
+    "onnxruntime; sys_platform == 'linux'",
     "openai",
     "pyserial",
     "pyusb",

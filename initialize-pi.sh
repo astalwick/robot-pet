@@ -2,15 +2,16 @@
 set -euo pipefail
 
 # Ubuntu Server has no mDNS until setup.sh installs avahi-daemon, so a
-# fresh card is only reachable by IP: ./initialize-pi.sh 192.168.1.42
+# fresh card is only reachable by IP: ./initialize-pi.sh 192.168.1.42 [branch]
 PI_HOST="${1:-robot-pi.local}"
+BRANCH="${2:-main}"
 PI_USER="pi"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 REPO_URL="git@github.com:astalwick/robot-pet.git"  # Adjust if needed
 REMOTE_PATH="~/robot-pet"
 
 echo "=== Robo-Pet Pi Initialization ==="
-echo "Target: $PI_USER@$PI_HOST"
+echo "Target: $PI_USER@$PI_HOST (branch: $BRANCH)"
 echo ""
 
 # Check that the SSH key exists locally
@@ -59,11 +60,11 @@ ssh -t "$PI_USER@$PI_HOST" 'command -v cloud-init >/dev/null && cloud-init statu
 echo "[6/7] Cloning repo and running setup.sh..."
 ssh -t "$PI_USER@$PI_HOST" "
     if [[ -d $REMOTE_PATH ]]; then
-        echo 'Repo already exists, pulling latest...'
-        cd $REMOTE_PATH && git pull
+        echo 'Repo already exists, updating to $BRANCH...'
+        cd $REMOTE_PATH && git fetch --prune && git checkout $BRANCH && git pull
     else
-        echo 'Cloning repo...'
-        git clone $REPO_URL $REMOTE_PATH
+        echo 'Cloning repo ($BRANCH)...'
+        git clone -b $BRANCH $REPO_URL $REMOTE_PATH
     fi
     cd $REMOTE_PATH
     chmod +x setup.sh

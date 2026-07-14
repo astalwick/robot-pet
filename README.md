@@ -12,12 +12,16 @@ A Raspberry Pi 5 robot: differential drive, live camera, gamepad teleop, browser
 
 This sets up SSH keys, installs dependencies, configures UART, and installs the systemd services.
 
-It defaults to `robot-pi.local`. A freshly flashed card has no mDNS until
-`setup.sh` installs `avahi-daemon`, so pass the Pi's IP on the first run:
+It defaults to `robot-pi.local` and the `main` branch. A freshly flashed card
+has no mDNS until `setup.sh` installs `avahi-daemon`, so pass the Pi's IP on
+the first run; a second argument picks the branch:
 
 ```bash
-./initialize-pi.sh 192.168.1.42
+./initialize-pi.sh 192.168.1.42 ros2
 ```
+
+Later deploys (`scripts/redeploy-robot.sh`) follow whatever branch is checked
+out on the Pi.
 
 **On the Pi**, once hardware is connected:
 

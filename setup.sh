@@ -179,10 +179,9 @@ BASH_LOGIN
 # Install redeploy permissions for the dashboard action.
 echo "[10/15] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
+chmod +x "$REPO_DIR/scripts/install-service.sh"
 chmod +x "$REPO_DIR/restart.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
-INSTALL_PATH="$(command -v install)"
-APT_PATH="$(command -v apt)"
 SHUTDOWN_PATH="$(command -v shutdown)"
 SUDOERS_TMP="$(mktemp)"
 cat >"$SUDOERS_TMP" <<SUDOERS
@@ -226,7 +225,7 @@ $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-motion.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
 $USER ALL=(root) NOPASSWD: $SHUTDOWN_PATH -h now
-$USER ALL=(root) NOPASSWD: $INSTALL_PATH -m 0644 /home/pi/robot-pet/systemd/*.service /etc/systemd/system/*.service
+$USER ALL=(root) NOPASSWD: $REPO_DIR/scripts/install-service.sh
 SUDOERS
 sudo visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy

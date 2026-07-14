@@ -13,8 +13,14 @@ dependencies = [
     "evdev; sys_platform == 'linux'",
     "gpiozero",
     "numpy",
+    # openwakeword is installed with --no-deps (see setup.sh), so we declare
+    # its real dependencies ourselves. Verified complete by loading the wake
+    # model in a clean venv with exactly this set.
     "onnxruntime; sys_platform == 'linux'",
     "scipy; sys_platform == 'linux'",
+    "scikit-learn; sys_platform == 'linux'",
+    "tqdm; sys_platform == 'linux'",
+    "requests; sys_platform == 'linux'",
     "openai",
     "pyserial",
     "pyusb",

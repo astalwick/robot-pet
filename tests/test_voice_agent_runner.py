@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sys
+import threading
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -586,15 +587,21 @@ class SpeechConcurrencyTest(unittest.TestCase):
     def test_stop_cancels_the_goal_and_in_flight_narration(self):
         stop_event = asyncio.Event()
         cancelled = {"value": False}
+        narration_started = threading.Event()
 
         async def speak_progress(_text):
             try:
+                narration_started.set()
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 cancelled["value"] = True
                 raise
 
         def move(_name, **_):
+            # Runs in to_thread's worker. On Python 3.14 the tool call can finish
+            # before the narration task ever starts, and cancelling a never-started
+            # task skips its body — wait until the narration is truly in flight.
+            narration_started.wait(timeout=2.0)
             stop_event.set()
             return {"ok": True}
 

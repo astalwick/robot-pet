@@ -14,6 +14,7 @@ dependencies = [
     "gpiozero",
     "numpy",
     "onnxruntime; sys_platform == 'linux'",
+    "scipy; sys_platform == 'linux'",
     "openai",
     "pyserial",
     "pyusb",

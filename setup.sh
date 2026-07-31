@@ -72,7 +72,9 @@ wireplumber.profiles = {
 }
 CONF
 sudo loginctl enable-linger "$USER"
-systemctl --user enable pipewire.socket pipewire-pulse.socket 2>/dev/null || true
+sudo systemctl --global enable pipewire.socket pipewire-pulse.socket
+systemctl --user start pipewire.socket pipewire-pulse.socket 2>/dev/null || \
+    echo "    WARNING: could not start PipeWire user sockets until next login/reboot"
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
 echo "[5/15] Configuring UART for RoboClaw..."
@@ -89,6 +91,26 @@ else
     echo "    Bluetooth already disabled on UART"
 fi
 # Ubuntu runs a login getty on the RoboClaw UART and lacks Pi OS's serial0 alias
+BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+CMDLINE_TMP="$(mktemp)"
+awk '{
+  sep = ""
+  for (i = 1; i <= NF; i++) {
+    if ($i ~ /^console=(serial0|ttyAMA0),/) {
+      continue
+    }
+    printf "%s%s", sep, $i
+    sep = " "
+  }
+  print ""
+}' "$BOOT_CMDLINE" >"$CMDLINE_TMP"
+if ! cmp -s "$BOOT_CMDLINE" "$CMDLINE_TMP"; then
+    sudo install -m 0644 "$CMDLINE_TMP" "$BOOT_CMDLINE"
+    echo "    Removed serial console from $BOOT_CMDLINE (reboot required)"
+else
+    echo "    Serial console already clear of RoboClaw UART"
+fi
+rm "$CMDLINE_TMP"
 sudo systemctl disable --now serial-getty@ttyAMA0.service 2>/dev/null || true
 sudo systemctl mask serial-getty@ttyAMA0.service >/dev/null
 sudo tee /etc/udev/rules.d/99-robot-pet-serial0.rules >/dev/null <<'UDEV'

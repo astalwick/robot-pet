@@ -8,7 +8,8 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/robot-pet/src
 Environment=PYTHONPATH=/home/pi/robot-pet/src
-# portaudio's PulseAudio backend finds the pipewire-pulse socket through this
+# portaudio's PulseAudio backend finds the pipewire-pulse socket through this.
+# Hardcode pi's uid: %U in a system unit resolves to root (0), not User=.
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 EnvironmentFile=-/home/pi/.config/robot-pet/voice.env
 ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_voice.py

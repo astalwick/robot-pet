@@ -214,7 +214,7 @@ if [[ "$systemd_changed" -eq 1 ]]; then
   while IFS= read -r path; do
     [[ "$path" == systemd/* ]] || continue
     service="$(basename "$path")"
-    sudo "$REPO_DIR/scripts/install-service.sh" "$service"
+    sudo -n "$REPO_DIR/scripts/install-service.sh" "$service"
     if [[ "$service" == robot-vision.service || "$service" == robot-voice.service || "$service" == robot-sensors.service || "$service" == robot-battery.service || "$service" == robot-pi-battery.service || "$service" == robot-motion.service ]]; then
       echo "enabling $service"
       sudo systemctl enable "$service"

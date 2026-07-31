@@ -62,12 +62,23 @@ ssh -t "$PI_USER@$PI_HOST" 'command -v cloud-init >/dev/null && cloud-init statu
 # the Pi has no config yet, so re-runs never clobber newer robot state.
 CONFIG_BACKUP_DIR="$HOME/robot-pet-config"
 if [[ -d "$CONFIG_BACKUP_DIR" ]]; then
-    if ssh "$PI_USER@$PI_HOST" "test -d ~/.config/robot-pet"; then
-        echo "[6/8] Pi already has ~/.config/robot-pet; leaving it alone."
+    shopt -s nullglob
+    config_files=("$CONFIG_BACKUP_DIR"/*)
+    shopt -u nullglob
+    if [[ ${#config_files[@]} -eq 0 ]]; then
+        echo "[6/8] $CONFIG_BACKUP_DIR is empty; skipping config restore."
     else
-        echo "[6/8] Restoring robot config from $CONFIG_BACKUP_DIR..."
+        echo "[6/8] Restoring missing robot config from $CONFIG_BACKUP_DIR..."
         ssh "$PI_USER@$PI_HOST" "mkdir -p ~/.config/robot-pet && chmod 700 ~/.config/robot-pet"
-        scp "$CONFIG_BACKUP_DIR"/* "$PI_USER@$PI_HOST:~/.config/robot-pet/"
+        for config_file in "${config_files[@]}"; do
+            [[ -f "$config_file" ]] || continue
+            config_name="$(basename "$config_file")"
+            if ssh "$PI_USER@$PI_HOST" "test -e ~/.config/robot-pet/$config_name"; then
+                echo "    $config_name already exists on Pi; leaving it alone."
+            else
+                scp "$config_file" "$PI_USER@$PI_HOST:~/.config/robot-pet/$config_name"
+            fi
+        done
     fi
 else
     echo "[6/8] No $CONFIG_BACKUP_DIR on this machine; skipping config restore."

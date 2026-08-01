@@ -11,7 +11,6 @@ from drivers.respeaker import ReSpeakerAudio
 from lib.log import setup_logging
 from voice.agent_runner import run_agent_goal
 from voice.assistant import (
-    DEFAULT_VOICE_ID,
     AudioLevels,
     VoiceState,
     compose_system_prompt,
@@ -168,6 +167,7 @@ class VoiceSession:
                     character_prose=lambda: self.character_prose,
                     openai_model=self.config.openai_model,
                     stop_playback_now=self.stop_playback_now,
+                    usage=self.usage,
                 )
             ),
         ]
@@ -178,8 +178,12 @@ class VoiceSession:
         for task in self.tasks:
             task.cancel()
         for task in self.tasks:
-            with suppress(asyncio.CancelledError):
+            try:
                 await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001 -- a task that already died re-raises here
+                log.warning("voice session task failed: %s", exc)
         self.tasks = []
         self._mic_frames = None
 

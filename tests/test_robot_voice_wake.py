@@ -101,12 +101,11 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertLess(service._idle_started_at, time.monotonic() - 0.5)
 
-    async def test_deactivate_clears_history(self):
+    async def test_deactivate_stops_and_drops_session(self):
         service = RobotVoiceService("/tmp/voice.json", "/tmp/missing.sock")
         service.active_config = VoiceConfig(wake_word_enabled=False)
         service._mode = "active"
         session = mock.Mock()
-        session.history = mock.Mock()
         session.stop = mock.AsyncMock()
         service.session = session
 
@@ -117,7 +116,7 @@ class RobotVoiceWakeTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch("robot_voice.publish_message", side_effect=lambda _socket, message: published.append(message) or True):
             await service._deactivate_session()
 
-        session.history.clear.assert_called_once()
+        session.stop.assert_awaited_once()
         self.assertIsNone(service.session)
         self.assertEqual(service._mode, "armed")
         self.assertIn("timeline", published[-1])

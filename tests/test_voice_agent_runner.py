@@ -5,6 +5,7 @@ import os
 import sys
 import threading
 import unittest
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -986,6 +987,42 @@ class MotionObservationTest(unittest.TestCase):
         )
         caption = next(part["text"] for part in image_message["content"] if part.get("type") == "input_text")
         self.assertIn("Forward sensors: left 0.42 meters, center 0.90 meters, right unavailable.", caption)
+
+
+class GoalUsageTest(unittest.TestCase):
+    def test_every_goal_model_call_records_usage(self):
+        from voice.usage import UsageTotals
+
+        usage = UsageTotals()
+        steps = {"n": 0}
+
+        def responder(_input_items):
+            steps["n"] += 1
+            response = call("move", arguments={"distance_meters": 0.5}) if steps["n"] == 1 else final("Done.")
+            response.usage = SimpleNamespace(
+                input_tokens=100,
+                output_tokens=10,
+                input_tokens_details=SimpleNamespace(cached_tokens=40),
+            )
+            return response
+
+        openai = FakeOpenAI(responder)
+        run(
+            run_agent_goal(
+                goal="Move.",
+                stop_event=asyncio.Event(),
+                openai_client=openai,
+                openai_model="test-model",
+                voice_state=VoiceState("voice"),
+                motion_intent_caller=lambda _name, **_: {"ok": True},
+                usage=usage,
+            )
+        )
+
+        self.assertEqual(usage.llm_input_tokens, 200)
+        self.assertEqual(usage.llm_output_tokens, 20)
+        self.assertEqual(usage.llm_cached_input_tokens, 80)
+        self.assertEqual(usage.llm_by_model["test-model"]["input_tokens"], 200)
 
 
 if __name__ == "__main__":

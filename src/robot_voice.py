@@ -21,7 +21,7 @@ from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_m
 from drivers.respeaker import MIC_BLOCKSIZE, WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from drivers.status_leds import StatusLeds
 from lib.log import setup_logging
-from telemetry.messages import voice_update
+from telemetry.messages import encode_json_line, voice_update
 from telemetry.paths import (
     DEFAULT_CAMERA_PORT,
     DEFAULT_MOTION_INTENT_SOCKET,
@@ -29,7 +29,6 @@ from telemetry.paths import (
     DEFAULT_SUBSCRIBE_SOCKET,
     DEFAULT_VOICE_COMMAND_SOCKET,
 )
-from telemetry.messages import encode_json_line
 from telemetry.socket_client import publish_message, read_telemetry_snapshot
 from voice.assistant import effective_playback_rms
 from voice.doa import (
@@ -556,9 +555,14 @@ class RobotVoiceService:
             if not await self._activate_session():
                 await asyncio.sleep(ACTIVATE_FAILURE_BACKOFF_SECS)
                 continue
-            await self._wait_for_session_end()
+            try:
+                await self._wait_for_session_end()
+            except Exception as exc:  # noqa: BLE001 -- a dead session task re-raises here
+                # Degrade like a normal session end: keep the audio device, DoA
+                # reader, and wake model instead of rebuilding everything.
+                log.warning("voice session failed: %s", exc)
+                self.publish(config, status="error", last_error=str(exc))
             await self._deactivate_session()
-            self._wake_event.clear()
 
     async def _wait_for_session_trigger(self) -> None:
         while True:
@@ -680,10 +684,14 @@ class RobotVoiceService:
             self._sampler_task = None
         if self.session is not None:
             await self.session.stop()
-            self.session.history.clear()
             self.session = None
         self._idle_started_at = None
         self._end_session_event.clear()
+        # A wake that fired while the session was shutting down is stale. Clear it
+        # (and its buffered audio) before re-arming, so it can't produce a chime
+        # with no session or replay old audio into the next session's Scribe.
+        self._wake_event.clear()
+        self._wake_audio = []
         if self._detector is not None:
             self._detector.reset()
         self._mode = VOICE_ARMED

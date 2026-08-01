@@ -159,27 +159,6 @@ class TurnPolicy:
 
         return False
 
-    def should_accept_barge_in(
-        self,
-        text: str,
-        assistant_speaking: bool,
-        gate_open: bool,
-        assistant_speech_elapsed_secs: float | None = None,
-        mic_rms: int | None = None,
-        gate_reason: str = "not_sustained",
-        assistant_text: str = "",
-    ) -> bool:
-        should_accept, _reason = self.barge_in_decision(
-            text,
-            assistant_speaking,
-            gate_open,
-            assistant_speech_elapsed_secs,
-            mic_rms,
-            gate_reason,
-            assistant_text,
-        )
-        return should_accept
-
     def barge_in_decision(
         self,
         text: str,

@@ -400,6 +400,40 @@ class RobotVoiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(captured["personalities"], cards)
 
+    async def test_session_failure_deactivates_and_keeps_orchestrator_alive(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service.active_config = service_config(enabled=True, wake_word_enabled=True)
+        service._io_stop_event = asyncio.Event()
+        triggers = iter([False, True])
+
+        def fake_trigger():
+            if next(triggers):
+                service._io_stop_event.set()
+
+        deactivate = mock.AsyncMock()
+        with (
+            mock.patch.object(service, "publish"),
+            mock.patch.object(service, "_wait_for_session_trigger", new=mock.AsyncMock(side_effect=fake_trigger)),
+            mock.patch.object(service, "_activate_session", new=mock.AsyncMock(return_value=True)),
+            mock.patch.object(
+                service, "_wait_for_session_end", new=mock.AsyncMock(side_effect=RuntimeError("session died"))
+            ),
+            mock.patch.object(service, "_deactivate_session", new=deactivate),
+        ):
+            await asyncio.wait_for(service._run_orchestrator(), timeout=1.0)
+
+        deactivate.assert_awaited_once()
+
+    async def test_deactivate_session_clears_stale_wake_event_and_audio(self):
+        service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
+        service._wake_event.set()
+        service._wake_audio = [b"stale"]
+
+        await service._deactivate_session()
+
+        self.assertFalse(service._wake_event.is_set())
+        self.assertEqual(service._wake_audio, [])
+
     async def test_activate_session_consumes_wake_audio(self):
         service = RobotVoiceService("/tmp/missing.json", "/tmp/missing.sock", poll_seconds=0.01)
         service.active_config = service_config()

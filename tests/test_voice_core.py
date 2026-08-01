@@ -15,6 +15,7 @@ from voice.assistant import (
     ActiveTurn,
     AgentGoalRequest,
     AudioLevels,
+    ProgressSpeaker,
     TurnRuntimeState,
     TurnOrchestrator,
     VoiceState,
@@ -106,14 +107,15 @@ class TurnPolicyTest(unittest.TestCase):
         self.assertEqual(reason, "interrupt_only")
 
     def test_explicit_interrupt_words_can_barge_in_with_local_speech(self):
-        self.assertTrue(
-            TurnPolicy().should_accept_barge_in(
-                "stop",
-                assistant_speaking=True,
-                gate_open=False,
-                mic_rms=900,
-            )
+        should_barge_in, reason = TurnPolicy().barge_in_decision(
+            "stop",
+            assistant_speaking=True,
+            gate_open=False,
+            mic_rms=900,
         )
+
+        self.assertTrue(should_barge_in)
+        self.assertEqual(reason, "explicit_interrupt")
 
     def test_explicit_interrupt_uses_user_active_threshold(self):
         should_barge_in, reason = TurnPolicy().barge_in_decision(
@@ -4403,6 +4405,53 @@ class AssistantStreamingTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_accepted_barge_in_keeps_pending_utterance_prefix(self):
+        # A retraction leaves the first half of the utterance as a pending prefix.
+        # If the follow-up fragment barges in on active playback, the new turn must
+        # still stitch that prefix in front of the fragment.
+        async def run():
+            started_prompts = []
+
+            async def fake_run_assistant_turn(turn_id, openai_input, playback_event, speaking_event, *args, **kwargs):
+                started_prompts.append(openai_input[-1]["content"])
+                return ""
+
+            orchestrator = TurnOrchestrator(
+                asyncio.Queue(),
+                object(),
+                "test-key",
+                VoiceState("test-voice"),
+                asyncio.Event(),
+                "test system prompt",
+                policy=TurnPolicy(
+                    speculative_partial_delay_secs=0,
+                    speculative_local_quiet_secs=0,
+                    assistant_speech_barge_in_cooldown_secs=0,
+                ),
+                assistant_runner=fake_run_assistant_turn,
+            )
+            now = asyncio.get_running_loop().time()
+            orchestrator.state.utterance_prefix = "I want to buy some apples today"
+            orchestrator.state.utterance_prefix_deadline = now + 10.0
+            progress = ProgressSpeaker(text="Heading over to you now.")
+            progress.playback_event.set()
+            progress.speaking_event.set()
+            progress.mark_speech_started(now - 5.0)
+            orchestrator.state.progress = progress
+            orchestrator.state.recent_barge_in_mic_rms = 1200
+            orchestrator.state.recent_barge_in_gate_open = True
+            orchestrator.state.recent_barge_in_gate_reason = "substantial_partial"
+            orchestrator.state.recent_barge_in_audio_at = now
+
+            await orchestrator.handle_partial("and the tomatoes please")
+            await asyncio.sleep(0.05)
+
+            self.assertEqual(started_prompts, ["I want to buy some apples today and the tomatoes please"])
+
+            await orchestrator.cancel_active_turn("test_cleanup")
+
+        asyncio.run(run())
+
     def test_explicit_interrupt_within_grace_uses_barge_in_not_retraction(self):
         async def run():
             cancelled = []
@@ -5114,6 +5163,44 @@ class RobotToolDispatchTest(unittest.TestCase):
             self.assertEqual(result.output["snapshots"], 4)
             self.assertEqual(result.output["degrees_covered"], 360)
             self.assertEqual(len(turns), 4)
+
+        asyncio.run(run())
+
+    def test_scan_rejects_zero_or_non_numeric_degrees(self):
+        async def run():
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+                motion_intent_caller=lambda name, **kwargs: {"ok": True},
+            )
+            for degrees in (0, "sideways", None):
+                result = await dispatch_tool(self._call("scan", arguments={"degrees": degrees}), context)
+                self.assertFalse(result.ok)
+                self.assertEqual(result.output["error"], "invalid_degrees")
+
+        asyncio.run(run())
+
+    def test_scan_reports_progress_when_a_turn_fails_mid_sweep(self):
+        async def run():
+            turns = []
+
+            def motion_intent_caller(name, **kwargs):
+                turns.append(kwargs.get("degrees"))
+                if len(turns) == 2:
+                    return {"ok": False, "error": "safety_blocked"}
+                return {"ok": True}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                camera_snapshot_caller=lambda: b"jpeg-bytes",
+                motion_intent_caller=motion_intent_caller,
+            )
+            result = await dispatch_tool(self._call("scan", arguments={"degrees": 180}), context)
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output["error"], "safety_blocked")
+            self.assertEqual(result.output["snapshots"], 2)
+            self.assertEqual(result.output["degrees_covered"], 90)
 
         asyncio.run(run())
 

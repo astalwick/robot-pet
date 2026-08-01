@@ -32,7 +32,6 @@ log = setup_logging("robot-voice")
 
 
 OPENAI_MODEL = DEFAULT_OPENAI_MODEL
-DEFAULT_VOICE_ID = "Ct9jL3ofSaf3bjiuX3cL"
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 DEFAULT_OPERATIONAL_PROMPT_PATH = CONFIG_DIR / "operational_system_prompt.md"
 OPERATIONAL_SYSTEM_PROMPT = DEFAULT_OPERATIONAL_PROMPT_PATH.read_text().strip()
@@ -82,7 +81,6 @@ def is_end_session_request(text: str, policy: TurnPolicy = DEFAULT_TURN_POLICY) 
 
 @dataclass
 class AudioLevels:
-    mic_rms: int = 0
     mic_peak: int = 0
     playback_rms: int = 0
     playback_at: float = 0.0
@@ -764,6 +762,7 @@ class TurnOrchestrator:
         progress_speaker: Callable[..., Any] | None = None,
         character_prose: str | Callable[[], str] | None = None,
         openai_model: str = OPENAI_MODEL,
+        usage: Any = None,
     ) -> None:
         self.scribe_events = scribe_events
         self.openai_client = openai_client
@@ -786,6 +785,7 @@ class TurnOrchestrator:
         self.progress_speaker = progress_speaker
         self.character_prose = character_prose
         self.openai_model = openai_model
+        self.usage = usage
         self.state = TurnRuntimeState(gate_threshold_rms=policy.barge_in_min_rms)
         self.history = conversation_history if conversation_history is not None else ConversationHistory()
         self.levels = audio_levels if audio_levels is not None else AudioLevels()
@@ -1139,6 +1139,7 @@ class TurnOrchestrator:
                 speak_progress=self.speak_progress,
                 is_speaking=lambda: self.current_playback() is not None,
                 on_event=self.on_event,
+                usage=self.usage,
                 character_prose=self.current_character_prose(),
                 preamble=goal_request.preamble,
             )
@@ -1329,6 +1330,11 @@ class TurnOrchestrator:
                     self.state.utterance_prefix = ""
                     self.status(status="listening", partial_transcript=None)
                 else:
+                    # Keep a pending continuation prefix, same as the non-playback
+                    # path below: a barge-in right after a retraction must not lose
+                    # the stitched first half of the utterance.
+                    if self.state.utterance_prefix and now < self.state.utterance_prefix_deadline:
+                        text = f"{self.state.utterance_prefix} {text}"
                     self.state.debounce_task = asyncio.create_task(self.start_after_stable_partial(text))
             else:
                 self.emit("barge_in_rejected", source="partial", reason=outcome.reason, text=text)
@@ -1551,7 +1557,6 @@ class TurnOrchestrator:
                             self.status(status="listening", partial_transcript=None)
                     if heard_local_audio:
                         self.state.local_audio_seq += 1
-                    self.levels.mic_rms = self.state.last_local_speech_rms
                     self.publish_barge_in_state(now, self.state.last_local_speech_rms)
                     if self.current_playback():
                         if (
@@ -1610,6 +1615,7 @@ async def handle_scribe_events(
     progress_speaker: Callable[..., Any] | None = None,
     character_prose: str | Callable[[], str] | None = None,
     openai_model: str = OPENAI_MODEL,
+    usage: Any = None,
 ) -> None:
     await TurnOrchestrator(
         scribe_events,
@@ -1635,4 +1641,5 @@ async def handle_scribe_events(
         progress_speaker=progress_speaker,
         character_prose=character_prose,
         openai_model=openai_model,
+        usage=usage,
     ).run()

@@ -50,6 +50,33 @@ class FailingTextSendWebsocket(FakeWebsocket):
         await asyncio.Event().wait()
 
 
+class StallingWebsocket(FakeWebsocket):
+    """Delivers its scripted messages, then goes silent without ever closing."""
+
+    async def recv(self):
+        if self.messages:
+            return self.messages.pop(0)
+        await asyncio.Event().wait()
+
+
+class SlowStreamingWebsocket(FakeWebsocket):
+    def __init__(self):
+        super().__init__([])
+        self.responses = asyncio.Queue()
+
+    async def send(self, message):
+        await super().send(message)
+        text = json.loads(message).get("text")
+        if text in {"hello", "world"}:
+            audio = base64.b64encode(text.encode()).decode("ascii")
+            await self.responses.put(json.dumps({"audio": audio}))
+        elif text == "":
+            await self.responses.put(json.dumps({"isFinal": True}))
+
+    async def recv(self):
+        return await self.responses.get()
+
+
 class FakeScribeWebsocket:
     def __init__(self, messages, fail_after_messages=False):
         self.messages = list(messages)
@@ -225,6 +252,68 @@ class ElevenLabsIoTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, 2)
         self.assertTrue(sockets[0].closed)
         self.assertEqual(json.loads(sockets[1].sent[1]), {"text": "hello"})
+
+    async def test_tts_stall_without_isfinal_does_not_hang(self):
+        audio_message = json.dumps({"audio": base64.b64encode(b"\x00\x00").decode("ascii")})
+        ws = StallingWebsocket([audio_message])
+
+        async def connect(*_args, **_kwargs):
+            return ws
+
+        fake_websockets = types.SimpleNamespace(
+            connect=connect,
+            exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
+        )
+
+        async def chunks():
+            yield "hello"
+
+        playback = asyncio.Event()
+        playback.set()
+        with (
+            mock.patch.dict(sys.modules, {"websockets": fake_websockets}),
+            mock.patch("voice.elevenlabs_io.ELEVEN_STALL_TIMEOUT_SECS", 0.1),
+        ):
+            await asyncio.wait_for(
+                speak_with_eleven_flash(chunks(), "key", "voice-123", playback, asyncio.Event()),
+                timeout=2.0,
+            )
+
+        self.assertTrue(ws.closed)
+
+    async def test_tts_does_not_stall_while_text_is_still_streaming(self):
+        ws = SlowStreamingWebsocket()
+
+        async def connect(*_args, **_kwargs):
+            return ws
+
+        fake_websockets = types.SimpleNamespace(
+            connect=connect,
+            exceptions=types.SimpleNamespace(ConnectionClosed=FakeClosed, ConnectionClosedOK=FakeClosedOk),
+        )
+
+        async def chunks():
+            yield "hello"
+            await asyncio.sleep(0.15)
+            yield "world"
+
+        audio = []
+        playback = asyncio.Event()
+        playback.set()
+        with (
+            mock.patch.dict(sys.modules, {"websockets": fake_websockets}),
+            mock.patch("voice.elevenlabs_io.ELEVEN_STALL_TIMEOUT_SECS", 0.1),
+        ):
+            await speak_with_eleven_flash(
+                chunks(),
+                "key",
+                "voice-123",
+                playback,
+                asyncio.Event(),
+                audio_writer=audio.append,
+            )
+
+        self.assertEqual(audio, [b"hello", b"world"])
 
 # --- Speech-triggered Scribe streaming ---------------------------------------
 
@@ -719,6 +808,23 @@ class ScribeStreamTest(unittest.IsolatedAsyncioTestCase):
         errors = [status.get("scribe_last_error") for status in self.statuses if "scribe_last_error" in status]
         self.assertIn("", [error or "" for error in errors])
         self.assertIsNone(self.statuses[-1]["scribe_last_error"])
+
+    async def test_receive_failure_surfaces_scribe_error(self):
+        first = FakeScribe()
+        second = FakeScribe()
+        task = self.start(Connector([first, second]))
+        self.push(LOUD)
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        first.fail()
+        await self.settle()
+        self.push(LOUD)
+        await self.settle()
+        await self.finish(task)
+
+        errors = [status.get("scribe_last_error") for status in self.statuses if status.get("scribe_last_error")]
+        self.assertIn("FakeClosed", errors)
 
     async def test_midspeech_failure_reconnects_while_speech_active(self):
         first = FakeScribe()

@@ -606,7 +606,8 @@ async def _forward_clearances(context: VoiceToolContext) -> dict[str, float | No
         surroundings = check_surroundings_snapshot(snapshot)
         if surroundings.get("ok"):
             return forward_clearances(surroundings)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 -- telemetry transport failures vary
+        log.warning("forward clearances fetch failed: %s", exc)
         return None
     return None
 
@@ -737,7 +738,10 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
     if context.motion_intent_caller is None:
         return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
 
-    total = min(abs(call.arguments.get("degrees") or 360.0), SCAN_MAX_DEGREES)
+    degrees = call.arguments.get("degrees")
+    if not isinstance(degrees, (int, float)) or isinstance(degrees, bool) or not math.isfinite(degrees) or degrees == 0:
+        return _result(call, False, {"ok": False, "error": "invalid_degrees"})
+    total = min(abs(degrees), SCAN_MAX_DEGREES)
     captures = max(1, round(total / SCAN_STEP_DEGREES))
     full_sweep = total >= SCAN_MAX_DEGREES
     step = total / captures
@@ -772,7 +776,18 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
         if full_sweep or index < len(headings) - 1:
             turn = await asyncio.to_thread(context.motion_intent_caller, "turn", degrees=step)
             if turn.get("ok") is False:
-                return _result(call, False, {"ok": False, "error": turn.get("error", "turn_failed")})
+                # Tell the model how far the sweep got: the robot is stranded at an
+                # arbitrary heading, and its mental map is wrong without this.
+                return _result(
+                    call,
+                    False,
+                    {
+                        "ok": False,
+                        "error": turn.get("error", "turn_failed"),
+                        "snapshots": index + 1,
+                        "degrees_covered": round(current_heading),
+                    },
+                )
             current_heading += step
 
     # Return to the starting heading so each snapshot's "degrees to your left" label
@@ -783,7 +798,16 @@ async def _scan(call: RobotToolCall, context: VoiceToolContext) -> RobotToolResu
         back = -offset if offset <= 180.0 else 360.0 - offset
         turn = await asyncio.to_thread(context.motion_intent_caller, "turn", degrees=back)
         if turn.get("ok") is False:
-            return _result(call, False, {"ok": False, "error": turn.get("error", "turn_failed")})
+            return _result(
+                call,
+                False,
+                {
+                    "ok": False,
+                    "error": turn.get("error", "turn_failed"),
+                    "snapshots": len(headings),
+                    "degrees_covered": round(current_heading),
+                },
+            )
     image_parts.append(
         {"type": "input_text", "text": "Scan complete. You are now facing your starting direction again."}
     )

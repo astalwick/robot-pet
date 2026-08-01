@@ -247,7 +247,11 @@ def _log_narration_exception(task: asyncio.Task[Any]) -> None:
 
 
 async def _model_response(
-    openai_client: Any, openai_model: str, input_items: list[dict[str, Any]], previous_response_id: str | None
+    openai_client: Any,
+    openai_model: str,
+    input_items: list[dict[str, Any]],
+    previous_response_id: str | None,
+    usage: Any = None,
 ) -> Any:
     create_kwargs: dict[str, Any] = {
         "model": openai_model,
@@ -260,12 +264,18 @@ async def _model_response(
         create_kwargs["previous_response_id"] = previous_response_id
     for attempt in range(2):
         try:
-            return await openai_client.responses.create(**create_kwargs)
+            response = await openai_client.responses.create(**create_kwargs)
         except Exception as exc:  # noqa: BLE001 -- transient OpenAI transport failures
             if attempt:
                 raise
             log.warning("agent model call failed; retrying: %s", exc)
             await asyncio.sleep(OPENAI_CREATE_RETRY_DELAY_SECS)
+            continue
+        if usage is not None:
+            from voice.usage import record_openai_usage
+
+            record_openai_usage(usage, getattr(response, "usage", None), openai_model)
+        return response
 
 
 async def run_agent_goal(
@@ -283,6 +293,7 @@ async def run_agent_goal(
     speak_progress: Callable[[str], Awaitable[None]] | None = None,
     is_speaking: Callable[[], bool] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    usage: Any = None,
     character_prose: str = "",
     preamble: str = "",
     max_steps: int = MAX_STEPS,
@@ -366,7 +377,7 @@ async def run_agent_goal(
 
             try:
                 response = await asyncio.wait_for(
-                    _model_response(openai_client, openai_model, input_items, previous_response_id), remaining
+                    _model_response(openai_client, openai_model, input_items, previous_response_id, usage), remaining
                 )
             except asyncio.TimeoutError:
                 log.info("goal timed out waiting on model at step %d: %r", step, goal)

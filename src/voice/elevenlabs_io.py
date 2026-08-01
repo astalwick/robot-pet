@@ -25,6 +25,10 @@ SAMPLE_RATE = 16000
 SCRIBE_MODEL = "scribe_v2_realtime"
 ELEVEN_FLASH_MODEL = "eleven_flash_v2_5"
 ELEVEN_CLOSE_TIMEOUT_SECS = 0.2
+# If the TTS socket goes silent for this long mid-stream (e.g. the server never
+# sends isFinal), give up on the remaining audio instead of hanging the speaker.
+# Goal finals have no other timeout, so a hung socket would hang the goal task.
+ELEVEN_STALL_TIMEOUT_SECS = 15.0
 SCRIBE_VAD_SILENCE_THRESHOLD_SECS = 1.0
 SCRIBE_VAD_THRESHOLD = 0.6
 SCRIBE_MIN_SPEECH_DURATION_MS = 200
@@ -226,16 +230,25 @@ async def stream_audio_to_scribe(
         publish_status()
 
     async def close_link(event_type: str) -> None:
-        nonlocal link
+        nonlocal link, last_error
         if link is None:
             return
         socket = link
         link = None
-        if socket.receive_task is not None and not socket.receive_task.done():
-            socket.receive_task.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            if socket.receive_task is not None:
-                await socket.receive_task
+        receive_task = socket.receive_task
+        if receive_task is not None:
+            if not receive_task.done():
+                receive_task.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await receive_task
+            elif not receive_task.cancelled() and receive_task.exception() is not None:
+                # The receive loop died on its own (bad payload, unexpected close).
+                # Surface it — a silent reconnect churn is exactly what we'd want to
+                # see in the field.
+                exc = receive_task.exception()
+                last_error = str(exc) or type(exc).__name__
+                log.warning("elevenlabs scribe receive failed: %s", last_error)
+                publish_status()
         with suppress(Exception):
             await socket.ws.close()
         emit_event(event_type)
@@ -308,7 +321,11 @@ async def stream_audio_to_scribe(
                 if link is not None:
                     if state != SCRIBE_UPLOADING:
                         link.got_commit = False
-                        flushed = all([await send_chunk(buffered, silent=False) for buffered in list(pre_roll)])
+                        flushed = True
+                        for buffered in list(pre_roll):
+                            if not await send_chunk(buffered, silent=False):
+                                flushed = False
+                                break
                         if flushed and pre_roll.maxlen != preroll_frames:
                             pre_roll = deque(pre_roll, maxlen=preroll_frames)
                         set_state(SCRIBE_UPLOADING if flushed else SCRIBE_RECONNECTING)
@@ -386,6 +403,7 @@ async def speak_with_eleven_flash(
     ws = None
     play_task: asyncio.Task[None] | None = None
     prewarm_task: asyncio.Task | None = None
+    input_finished_at: float | None = None
     audio_profile_count = 0
 
     async def write_audio(audio: bytes) -> None:
@@ -450,6 +468,7 @@ async def speak_with_eleven_flash(
     async def play_audio(active_ws) -> None:
         pending_audio: list[bytes] = []
         final_received = False
+        last_message_at = time.monotonic()
 
         while True:
             if playback_event.is_set() and pending_audio:
@@ -463,6 +482,9 @@ async def speak_with_eleven_flash(
             try:
                 message = await asyncio.wait_for(active_ws.recv(), timeout=0.05)
             except TimeoutError:
+                if input_finished_at is not None and time.monotonic() - max(last_message_at, input_finished_at) > ELEVEN_STALL_TIMEOUT_SECS:
+                    log.warning("elevenlabs tts stalled; abandoning remaining audio")
+                    break
                 continue
             except websockets.exceptions.ConnectionClosedOK:
                 break
@@ -470,6 +492,7 @@ async def speak_with_eleven_flash(
                 log.warning("elevenlabs tts connection closed: code=%s reason=%s", exc.code, exc.reason)
                 break
 
+            last_message_at = time.monotonic()
             data = json.loads(message)
             log_elevenlabs_payload(data, "tts")
             if data.get("audio"):
@@ -533,11 +556,12 @@ async def speak_with_eleven_flash(
                 await cancel_voice_socket()
 
     async def finish_voice_socket() -> None:
-        nonlocal play_task, ws
+        nonlocal input_finished_at, play_task, ws
         if ws is None:
             await cancel_prewarm_socket()
             return
         await ws.send(json.dumps({"text": ""}))
+        input_finished_at = time.monotonic()
         await play_task
         await ws.close()
         play_task = None

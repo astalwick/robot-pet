@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import threading
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -281,6 +282,32 @@ class CameraServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(driver.starts, 1)
         state.stop_camera(force=True)
 
+    async def test_camera_waits_for_idle_stop_before_restarting(self):
+        store = FrameStore(asyncio.get_running_loop())
+        first_driver = BlockingStopCameraDriver()
+        second_driver = FakeCameraDriver()
+        drivers = iter((first_driver, second_driver))
+        state = CameraServiceState(
+            store,
+            driver_factory=lambda: next(drivers),
+            idle_timeout=0.01,
+            first_frame_timeout=0.5,
+            loop=asyncio.get_running_loop(),
+        )
+
+        self.assertTrue(await state.ensure_started())
+        state._idle_stop()
+        self.assertTrue(await asyncio.to_thread(first_driver.stop_started.wait, 1.0))
+
+        restart = asyncio.create_task(state.ensure_started())
+        await asyncio.sleep(0.02)
+        self.assertEqual(second_driver.starts, 0)
+
+        first_driver.allow_stop.set()
+        self.assertTrue(await restart)
+        self.assertEqual(second_driver.starts, 1)
+        state.stop_camera(force=True)
+
 
 class FakeCameraDriver:
     def __init__(self):
@@ -296,6 +323,18 @@ class FakeCameraDriver:
 
     def stop(self):
         self.started = False
+
+
+class BlockingStopCameraDriver(FakeCameraDriver):
+    def __init__(self):
+        super().__init__()
+        self.stop_started = threading.Event()
+        self.allow_stop = threading.Event()
+
+    def stop(self):
+        self.stop_started.set()
+        self.allow_stop.wait(timeout=1.0)
+        super().stop()
 
 
 if __name__ == "__main__":

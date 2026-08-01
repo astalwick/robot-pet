@@ -12,6 +12,7 @@ ALL_SERVICES = {
     "robot-brain.service",
     "robot-telemetry.service",
     "robot-battery.service",
+    "robot-pi-battery.service",
     "robot-motion.service",
     "robot-camera.service",
     "gamepad-teleop.service",
@@ -37,15 +38,20 @@ def planned_services(paths: list[str]) -> set[str]:
             continue
         if path == "src/robot_brain.py":
             want("robot-brain.service")
-        elif path in ("src/robot_telemetry.py",) or path.startswith("src/telemetry/"):
+        elif path == "src/robot_telemetry.py":
             want("robot-telemetry.service")
             want("robot-battery.service")
+            want("robot-pi-battery.service")
+        elif path.startswith("src/telemetry/"):
+            want_all()
         elif path == "src/robot_camera.py":
             want("robot-camera.service")
         elif path == "src/robot_motion.py":
             want("robot-motion.service")
         elif path == "src/robot_battery.py":
             want("robot-battery.service")
+        elif path == "src/robot_pi_battery.py":
+            want("robot-pi-battery.service")
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
             want("gamepad-teleop.service")
             want("robot-motion.service")
@@ -75,6 +81,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-sensors.service")
         elif path == "src/drivers/respeaker.py":
             want("robot-voice.service")
+        elif path == "src/drivers/imu.py":
+            want("robot-sensors.service")
         elif path.startswith("src/drivers/"):
             want("robot-brain.service")
             want("gamepad-teleop.service")
@@ -107,7 +115,27 @@ class TestRedeployRobot(unittest.TestCase):
     def test_exits_when_already_up_to_date(self):
         body = SCRIPT.read_text()
         self.assertIn('echo "Already up to date on $branch."', body)
-        self.assertRegex(body, r'Already up to date on \$branch\."\n  exit 0')
+        self.assertRegex(body, r'Already up to date on \$branch\."\n\s+exit 0')
+
+    def test_up_to_date_exit_requires_last_deploy_finished(self):
+        # A redeploy that fast-forwarded but failed (e.g. red tests) must be
+        # retried on the next run, not skipped as "already up to date".
+        body = SCRIPT.read_text()
+        self.assertIn("DEPLOYED_REV_FILE", body)
+        self.assertIn('if [[ "$baseline_rev" == "$local_rev" ]]; then', body)
+        self.assertIn("Retrying deploy on $branch", body)
+
+    def test_deployed_rev_recorded_only_after_success(self):
+        body = SCRIPT.read_text()
+        record_index = body.index('> "$DEPLOYED_REV_FILE"')
+        tests_index = body.index("Running tests...")
+        restarts_index = body.index("Restarting robot services...")
+        self.assertGreater(record_index, tests_index)
+        self.assertGreater(record_index, restarts_index)
+
+    def test_restart_planning_diffs_from_last_deployed_rev(self):
+        body = SCRIPT.read_text()
+        self.assertIn('changed_files="$(git diff --name-only "$baseline_rev" "$new_rev")"', body)
 
     def test_skips_pip_without_pyproject_change(self):
         body = SCRIPT.read_text()
@@ -155,6 +183,20 @@ class TestRedeployRobot(unittest.TestCase):
 
     def test_battery_service_paths_restart_battery(self):
         self.assertEqual(planned_services(["src/robot_battery.py"]), {"robot-battery.service"})
+
+    def test_telemetry_shared_modules_restart_all_consumers(self):
+        # telemetry/messages.py and socket_client.py are imported everywhere;
+        # a schema change must restart the whole fleet.
+        self.assertEqual(planned_services(["src/telemetry/messages.py"]), ALL_SERVICES)
+
+    def test_telemetry_hub_paths_restart_hub_and_battery_services(self):
+        self.assertEqual(
+            planned_services(["src/robot_telemetry.py"]),
+            {"robot-telemetry.service", "robot-battery.service", "robot-pi-battery.service"},
+        )
+
+    def test_imu_driver_restarts_sensors_service(self):
+        self.assertEqual(planned_services(["src/drivers/imu.py"]), {"robot-sensors.service"})
 
     def test_setup_installs_and_manages_battery_service(self):
         body = SETUP.read_text()

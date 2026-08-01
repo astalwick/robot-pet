@@ -156,7 +156,8 @@ def _parse_safety(raw: Any) -> SafetyConfig:
 
 
 def _parse_positive_mm(value: Any, field: str) -> int:
-    if not isinstance(value, int) or value <= 0:
+    # bool is an int subclass; without this check `true` parses as 1 mm.
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise TypeError(f"{field} must be a positive integer")
     return value
 

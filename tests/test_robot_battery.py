@@ -362,7 +362,9 @@ class RobotBatteryTest(unittest.TestCase):
         self.assertEqual(runner.state, "on")
         self.assertEqual(mosfet.off_count, 0)
 
-    def test_stale_voltage_resets_pending_cutoff(self):
+    def test_pending_cutoff_survives_stale_telemetry_gap(self):
+        # Telemetry flapping stale/fresh while the pack sits below cutoff must
+        # not restart the debounce and postpone the cutoff indefinitely.
         mosfet = FakeMosfet()
         times = iter([0.0, 3.0, 3.1])
         runner = BatteryRunner(
@@ -379,8 +381,8 @@ class RobotBatteryTest(unittest.TestCase):
         runner._handle_snapshot(snapshot(10.4, stale=True, gamepad_stale=False, controller_connected=True))
         runner._handle_snapshot(snapshot(10.4, controller_connected=True))
 
-        self.assertEqual(runner.state, "warning")
-        self.assertEqual(mosfet.off_count, 0)
+        self.assertEqual(runner.state, "low_battery_cutoff")
+        self.assertEqual(mosfet.off_count, 1)
 
     def test_cutoff_logs_periodic_reminder(self):
         times = iter([30.0, 59.0, 60.0])

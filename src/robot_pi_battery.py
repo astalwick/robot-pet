@@ -64,8 +64,9 @@ class PiBatteryService:
                 )
             )
             if shutdown_pending and not self.shutdown_requested:
-                self.shutdown_requested = True
-                self._shutdown(reading.battery_mv / 1000.0)
+                # Only latch on success; a failed shutdown command must be
+                # retried on the next low-voltage tick, not given up forever.
+                self.shutdown_requested = self._shutdown(reading.battery_mv / 1000.0)
         except Exception as exc:
             log.warning("UPS HAT E read failed: %s", exc)
             self._release_driver()
@@ -93,16 +94,18 @@ class PiBatteryService:
     def _driver_factory(self) -> UpsHatEDriver:
         return UpsHatEDriver(bus=self.config.bus, address=self.config.address)
 
-    def _shutdown(self, voltage: float) -> None:
+    def _shutdown(self, voltage: float) -> bool:
         log.warning("Pi UPS %.2fV at/below %.2fV; shutting down", voltage, self.config.shutdown_voltage)
         try:
             result = self.command_runner(self.config.shutdown_command)
         except Exception as exc:
             log.error("shutdown command failed: %s", exc)
-            return
+            return False
         if getattr(result, "returncode", 0) != 0:
             output = (getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
             log.error("shutdown command failed: %s", output or f"exit {result.returncode}")
+            return False
+        return True
 
     def _command_runner(self, command: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(command, check=False, capture_output=True, text=True, timeout=10)

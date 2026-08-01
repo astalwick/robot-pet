@@ -78,5 +78,7 @@ def subscribe(socket_path: str, reconnect_interval: float = 1.0) -> Iterator[dic
                 for line in file_obj:
                     if line:
                         yield decode_json_line(line)
-        except OSError:
+        # ValueError covers a malformed/truncated JSON line (e.g. the hub died
+        # mid-write); treat it like a broken connection and reconnect.
+        except (OSError, ValueError):
             time.sleep(reconnect_interval)

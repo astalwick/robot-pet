@@ -72,6 +72,13 @@ class SensorsConfigTest(unittest.TestCase):
         self.assertEqual(too_low.poll_rate_hz, MIN_POLL_RATE_HZ)
         self.assertEqual(too_high.poll_rate_hz, MAX_POLL_RATE_HZ)
 
+    def test_boolean_safety_threshold_raises(self):
+        # bool is an int subclass; `true` must not parse as a 1 mm threshold.
+        with self.assertRaises(TypeError):
+            SensorsConfig.from_dict({"safety": {"cliff_trip_above_mm": True}})
+        with self.assertRaises(TypeError):
+            SensorsConfig.from_dict({"safety": {"forward_stop_below_mm": True}})
+
     def test_unknown_kind_raises(self):
         with self.assertRaises(TypeError):
             SensorsConfig.from_dict(

@@ -18,6 +18,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,64 @@ class BroadcastHub:
             self._loop.call_soon_threadsafe(queue.put_nowait, event)
 
 
+JOURNAL_BACKLOG_LINES = 200
+JOURNAL_RESTART_DELAY_SECONDS = 1.0
+
+
+class JournalFollower:
+    """One shared `journalctl -f` process feeding the log hub.
+
+    Spawning a follower per browser tab meant several journalctl processes
+    tailing eleven units each; this starts a single one on first use and
+    replays a backlog of recent lines to newly connected tabs.
+    """
+
+    def __init__(self, hub: BroadcastHub):
+        self.hub = hub
+        self.backlog: deque[str] = deque(maxlen=JOURNAL_BACKLOG_LINES)
+        self._task: asyncio.Task | None = None
+        self._process: asyncio.subprocess.Process | None = None
+
+    def ensure_started(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._follow())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        if self._process is not None and self._process.returncode is None:
+            self._process.terminate()
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
+
+    async def _follow(self) -> None:
+        while True:
+            try:
+                self._process = await asyncio.create_subprocess_exec(
+                    *LOG_COMMAND,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            except OSError as exc:
+                self.hub.publish(f"journalctl unavailable: {exc}; retrying.", source="journal")
+                await asyncio.sleep(JOURNAL_RESTART_DELAY_SECONDS)
+                continue
+            assert self._process.stdout is not None
+            while line_bytes := await self._process.stdout.readline():
+                line = line_bytes.decode("utf-8", errors="replace").rstrip()
+                self.backlog.append(line)
+                self.hub.publish(line, source="journal")
+            self._process = None
+            self.hub.publish("journalctl exited; restarting log stream.", source="journal")
+            await asyncio.sleep(JOURNAL_RESTART_DELAY_SECONDS)
+
+
 class TelemetrySubscriberThread:
     """Runs the blocking telemetry subscribe iterator and publishes snapshots."""
 
@@ -321,6 +380,7 @@ class WebDashboardState:
         self.sensors_config_path = sensors_config_path
         self.redeploy_status_path = redeploy_status_path
         self.log_hub = BroadcastHub(loop)
+        self.journal_follower = JournalFollower(self.log_hub)
         self._lock = threading.Lock()
         self.redeploy_armed_until = 0.0
         self.redeploy_running = False
@@ -504,59 +564,18 @@ async def logs_handler(request: web.Request) -> web.StreamResponse:
     )
     await response.prepare(request)
 
-    action_queue = state.log_hub.subscribe()
-    process: asyncio.subprocess.Process | None = None
-    read_task: asyncio.Task[bytes] | None = None
-    action_task: asyncio.Task[dict[str, str]] | None = None
+    queue = state.log_hub.subscribe()
+    state.journal_follower.ensure_started()
 
     try:
-        process = await asyncio.create_subprocess_exec(
-            *LOG_COMMAND,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        assert process.stdout is not None
-        read_task = asyncio.create_task(process.stdout.readline())
-        action_task = asyncio.create_task(action_queue.get())
-
+        for line in list(state.journal_follower.backlog):
+            await response.write(format_sse_json_event({"line": line, "source": "journal"}))
         while True:
-            done, _pending = await asyncio.wait(
-                {read_task, action_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if read_task in done:
-                line_bytes = read_task.result()
-                if not line_bytes:
-                    await response.write(
-                        format_sse_json_event(
-                            {"line": "journalctl exited; logs are no longer streaming.", "source": "journal"}
-                        )
-                    )
-                    break
-                line = line_bytes.decode("utf-8", errors="replace").rstrip()
-                await response.write(format_sse_json_event({"line": line, "source": "journal"}))
-                read_task = asyncio.create_task(process.stdout.readline())
-            if action_task in done:
-                await response.write(format_sse_json_event(action_task.result()))
-                action_task = asyncio.create_task(action_queue.get())
+            await response.write(format_sse_json_event(await queue.get()))
     except (ConnectionResetError, ConnectionError, asyncio.CancelledError):
         pass
-    except OSError as exc:
-        try:
-            await response.write(format_sse_json_event({"line": f"journalctl unavailable: {exc}", "source": "journal"}))
-        except (ConnectionResetError, ConnectionError):
-            pass
     finally:
-        state.log_hub.unsubscribe(action_queue)
-        for task in (read_task, action_task):
-            if task is not None:
-                task.cancel()
-        if process is not None and process.returncode is None:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                process.kill()
+        state.log_hub.unsubscribe(queue)
     return response
 
 
@@ -741,10 +760,10 @@ async def config_apply(request: web.Request) -> web.Response:
         current = spec["default"]()
 
     merge_base = current.to_dict()
-    if name == "sensors":
-        merge_base = merge_sensors_form_patch(merge_base, patch)
-        patch = {}
     try:
+        if name == "sensors":
+            merge_base = merge_sensors_form_patch(merge_base, patch)
+            patch = {}
         config = spec["from_dict"]({**merge_base, **patch})
     except (TypeError, ValueError) as exc:
         return web.json_response({"error": f"Invalid {name} config: {exc}"}, status=400)
@@ -887,6 +906,11 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_get("/api/model-frames", model_frames_list_handler)
     app.router.add_get("/model-frames/{name}", model_frame_file_handler)
     app.router.add_static("/static", str(state.static_dir), show_index=False)
+
+    async def stop_journal_follower(_app: web.Application) -> None:
+        await state.journal_follower.stop()
+
+    app.on_cleanup.append(stop_journal_follower)
     return app
 
 

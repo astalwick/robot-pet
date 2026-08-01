@@ -283,6 +283,30 @@ class RangeDriverTest(unittest.TestCase):
         self.assertFalse(sensor.interrupt_cleared)
         sleep.assert_called_once_with(0.005)
 
+    def test_vl53l1x_stale_previous_reading_expires(self):
+        channels = {6: FakeChannelBus()}
+        mux = FakeMux(channels)
+        sensor = FakeL1XSensor(420)
+
+        driver = RangeDriver(
+            [RangeSensorConfig("forward", "vl53l1x", 6)],
+            i2c_factory=lambda: object(),
+            mux_factory=lambda i2c, address: mux,
+            vl53l1x_factory=lambda bus, address: sensor,
+        )
+
+        # Store the last good reading at t=0, then check it at t=1.0 -- past
+        # the 0.5s coast window, so the dead sensor must read as not ok.
+        with patch("drivers.range.time.monotonic", side_effect=[0.0, 1.0]):
+            self.assertEqual(driver.read_all()[0].distance_mm, 420)
+
+            sensor.data_ready = False
+            with patch("drivers.range.time.sleep"):
+                reading = driver.read_all()[0]
+
+        self.assertFalse(reading.ok)
+        self.assertIsNone(reading.distance_mm)
+
     def test_vl53l1x_rechecks_ready_data_once(self):
         channels = {6: FakeChannelBus()}
         mux = FakeMux(channels)

@@ -23,6 +23,15 @@ from telemetry.paths import DEFAULT_MOTOR_BATTERY_CACHE, DEFAULT_PUBLISH_SOCKET,
 DEFAULT_RATE_HZ = 5.0
 DEFAULT_STALE_TIMEOUT = 1.0
 WRITER_CLOSE_TIMEOUT = 1.0
+# A subscriber that stops reading fills its socket buffer; don't let its
+# drain() stall the broadcast loop (and every other subscriber) forever.
+BROADCAST_DRAIN_TIMEOUT = 1.0
+# One voice source_update line (timeline events + level samples) can exceed
+# asyncio's default 64 KiB readline limit.
+PUBLISH_LINE_LIMIT = 1024 * 1024
+# vcgencmd forks twice per sample; sampling every broadcast tick (5 Hz) is
+# pointless churn, so SoC health is refreshed at 1 Hz.
+SYSTEM_HEALTH_INTERVAL = 1.0
 
 log = setup_logging("robot-telemetry")
 
@@ -136,7 +145,9 @@ class TelemetryHub:
     async def start(self):
         self._prepare_socket(self.publish_socket)
         self._prepare_socket(self.subscribe_socket)
-        pub_server = await asyncio.start_unix_server(self._handle_publisher, path=self.publish_socket)
+        pub_server = await asyncio.start_unix_server(
+            self._handle_publisher, path=self.publish_socket, limit=PUBLISH_LINE_LIMIT
+        )
         sub_server = await asyncio.start_unix_server(self._handle_subscriber, path=self.subscribe_socket)
         self._servers = [pub_server, sub_server]
         self._broadcast_task = asyncio.create_task(self._broadcast_loop())
@@ -191,9 +202,12 @@ class TelemetryHub:
             await close_writer(writer)
 
     async def _broadcast_loop(self):
+        next_health_sample = 0.0
         while True:
             started = time.monotonic()
-            self._sample_system_health()
+            if started >= next_health_sample:
+                self._sample_system_health()
+                next_health_sample = started + SYSTEM_HEALTH_INTERVAL
             await self.broadcast(self.build_snapshot())
             elapsed = time.monotonic() - started
             await asyncio.sleep(max(0.0, self.interval - elapsed))
@@ -204,11 +218,15 @@ class TelemetryHub:
         for writer in list(self.subscribers):
             try:
                 writer.write(encoded)
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), timeout=BROADCAST_DRAIN_TIMEOUT)
+            except asyncio.TimeoutError:
+                log.warning("dropping telemetry subscriber that stopped reading")
+                dead.append(writer)
             except (ConnectionError, OSError):
                 dead.append(writer)
         for writer in dead:
             self.subscribers.discard(writer)
+            writer.close()
 
     def build_snapshot(self) -> dict[str, Any]:
         now = time.time()

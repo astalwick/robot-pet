@@ -269,6 +269,42 @@ class SensorsServiceTest(unittest.TestCase):
         # slow IMU can't pile its own delay on top of the poll period.
         self.assertEqual(imu_drivers[0].read_timeout, 0.25)
 
+    def test_imu_init_failure_keeps_range_driver_polling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "sensors.json")
+            write_imu_config(path)
+            clock = FakeClock()
+            published: list[dict] = []
+            drivers: list[FakeRangeDriver] = []
+
+            def driver_factory(config: SensorsConfig) -> FakeRangeDriver:
+                driver = FakeRangeDriver(config.driver_sensors())
+                drivers.append(driver)
+                return driver
+
+            def imu_driver_factory(config: SensorsConfig):
+                raise RuntimeError("no IMU on the bus")
+
+            service = SensorsService(
+                config_path=path,
+                publish=published.append,
+                driver_factory=driver_factory,
+                imu_driver_factory=imu_driver_factory,
+                time_fn=clock,
+            )
+            bump_mtime(path)
+
+            service.tick()
+            clock.advance(1.0)
+            service.tick()
+
+        # The failed IMU must not release and rebuild the range driver each tick.
+        self.assertEqual(len(drivers), 1)
+        self.assertFalse(drivers[0].cleaned_up)
+        message = published[-1]
+        self.assertEqual(message["status"], "polling")
+        self.assertEqual(message["imu"], {"ok": False, "reason": "no IMU on the bus"})
+
     def test_imu_read_failure_still_publishes_range(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sensors.json")

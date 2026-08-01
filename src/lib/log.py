@@ -21,13 +21,15 @@ def setup_logging(name: str, level: int = logging.INFO) -> logging.Logger:
         Configured logger instance
     """
     logger = logging.getLogger(name)
-    logger.setLevel(level)
-    
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setLevel(level)
-        formatter = logging.Formatter("%(levelname)s %(name)s: %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    
+
+    # Driver modules log under logging.getLogger(__name__) ("drivers.*"), which
+    # otherwise has no handler -- their INFO lines would never reach journald.
+    for configured in (logger, logging.getLogger("drivers")):
+        configured.setLevel(level)
+        if not configured.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(level)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+            configured.addHandler(handler)
+
     return logger

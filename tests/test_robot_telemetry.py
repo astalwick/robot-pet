@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -411,6 +412,55 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshot["motor_battery"]["stale"])
         self.assertEqual(snapshot["motor_battery"]["stale_reason"], "idle_no_gamepad")
         self.assertEqual(snapshot["motor_battery"]["cached_at"], 1234.0)
+
+    async def test_broadcast_drops_subscriber_stuck_in_drain(self):
+        class StuckWriter:
+            def __init__(self):
+                self.closed = False
+
+            def write(self, _data):
+                pass
+
+            async def drain(self):
+                await asyncio.Event().wait()
+
+            def close(self):
+                self.closed = True
+
+        stuck = StuckWriter()
+        self.hub.subscribers.add(stuck)
+
+        with patch("robot_telemetry.BROADCAST_DRAIN_TIMEOUT", 0.05):
+            await asyncio.wait_for(self.hub.broadcast(self.hub.build_snapshot()), timeout=1.0)
+
+        self.assertNotIn(stuck, self.hub.subscribers)
+        self.assertTrue(stuck.closed)
+
+    async def test_publisher_accepts_lines_longer_than_64k(self):
+        message = {
+            "type": "source_update",
+            "source": "vision",
+            "status": "detecting",
+            "blob": "x" * 100_000,
+        }
+
+        # Send from a thread: a 100 KB line overflows the socket buffer, so the
+        # hub must be reading concurrently for sendall to complete.
+        sent = await asyncio.to_thread(publish_message, self.publish_socket, message, 1.0)
+        self.assertTrue(sent)
+        await asyncio.sleep(0.05)
+
+        snapshot = self.hub.build_snapshot()
+        self.assertEqual(len(snapshot["vision"]["blob"]), 100_000)
+
+    async def test_system_health_sampled_at_most_once_per_interval(self):
+        # The hub broadcasts at 20 Hz here; health sampling should stay at 1 Hz.
+        calls = []
+        self.hub.sampler = lambda: calls.append(1) or {"uptime_seconds": 1, "power_bank_charge": None}
+
+        await asyncio.sleep(0.3)
+
+        self.assertLessEqual(len(calls), 1)
 
     async def test_hub_keeps_running_after_subscriber_disconnects(self):
         reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)

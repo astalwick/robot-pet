@@ -2,6 +2,11 @@
 set -euo pipefail
 
 REPO_DIR="${ROBOT_PET_REPO_DIR:-$HOME/robot-pet}"
+# Rev of the last redeploy that finished (tests passed, services restarted).
+# Restart planning diffs from here, so a redeploy that failed mid-way (e.g.
+# red tests after the fast-forward) is retried on the next run instead of
+# leaving services silently running stale code.
+DEPLOYED_REV_FILE="${ROBOT_PET_DEPLOYED_REV_FILE:-$REPO_DIR/.git/robot-pet-deployed-rev}"
 SERVICES=(
   robot-brain.service
   robot-telemetry.service
@@ -61,10 +66,16 @@ plan_service_restarts() {
       src/robot_brain.py)
         want_restart robot-brain.service
         ;;
-      src/robot_telemetry.py | src/telemetry/*)
+      src/robot_telemetry.py)
         want_restart robot-telemetry.service
         want_restart robot-battery.service
         want_restart robot-pi-battery.service
+        ;;
+      src/telemetry/*)
+        # telemetry/messages.py, socket_client.py, and paths.py are imported
+        # by every service; a schema change must not leave half the fleet
+        # speaking the old dialect.
+        want_all_robot_services
         ;;
       src/robot_camera.py)
         want_restart robot-camera.service
@@ -115,6 +126,9 @@ plan_service_restarts() {
         ;;
       src/drivers/respeaker.py)
         want_restart robot-voice.service
+        ;;
+      src/drivers/imu.py)
+        want_restart robot-sensors.service
         ;;
       src/drivers/*)
         want_restart robot-brain.service
@@ -168,9 +182,17 @@ local_rev="$(git rev-parse "$branch")"
 upstream_rev="$(git rev-parse "$upstream")"
 base_rev="$(git merge-base "$branch" "$upstream")"
 
+baseline_rev="$old_rev"
+if [[ -f "$DEPLOYED_REV_FILE" ]]; then
+  baseline_rev="$(cat "$DEPLOYED_REV_FILE")"
+fi
+
 if [[ "$local_rev" == "$upstream_rev" ]]; then
-  echo "Already up to date on $branch."
-  exit 0
+  if [[ "$baseline_rev" == "$local_rev" ]]; then
+    echo "Already up to date on $branch."
+    exit 0
+  fi
+  echo "Retrying deploy on $branch: the last redeploy did not finish."
 elif [[ "$local_rev" == "$base_rev" ]]; then
   echo "Fast-forwarding $branch from $upstream..."
   git merge --ff-only "$upstream"
@@ -181,8 +203,8 @@ else
 fi
 
 new_rev="$(git rev-parse HEAD)"
-changed_files="$(git diff --name-only "$old_rev" "$new_rev")"
-echo "Deployed $old_rev -> $new_rev"
+changed_files="$(git diff --name-only "$baseline_rev" "$new_rev")"
+echo "Deploying $baseline_rev -> $new_rev"
 echo ""
 
 need_pip=0
@@ -256,4 +278,5 @@ else
   echo ""
 fi
 
+printf '%s\n' "$new_rev" > "$DEPLOYED_REV_FILE"
 echo "Redeploy complete."

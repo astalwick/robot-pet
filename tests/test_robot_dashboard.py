@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 ROBOT_DASHBOARD_IMPORT_ERROR = None
 try:
     from config.drive_tuning import DriveTuning
-    from robot_dashboard import RobotDashboard, fix_wraparound, sparkline
+    from robot_dashboard import LOG_COMMAND, RobotDashboard, fix_wraparound, sparkline
 except ModuleNotFoundError as exc:
     if exc.name not in {"rich", "textual"}:
         raise
@@ -18,10 +18,28 @@ except ModuleNotFoundError as exc:
     RobotDashboard = None
     fix_wraparound = None
     sparkline = None
+    LOG_COMMAND = None
 
 
 @unittest.skipIf(ROBOT_DASHBOARD_IMPORT_ERROR is not None, "robot dashboard dependencies are not installed")
 class RobotDashboardTest(unittest.TestCase):
+    def test_dashboard_logs_include_all_robot_services(self):
+        command = " ".join(LOG_COMMAND)
+        for service in (
+            "robot-brain",
+            "robot-telemetry",
+            "robot-battery",
+            "robot-pi-battery",
+            "robot-motion",
+            "gamepad-teleop",
+            "robot-camera",
+            "robot-vision",
+            "robot-sensors",
+            "robot-voice",
+            "robot-web-dashboard",
+        ):
+            self.assertIn(service, command)
+
     def test_fix_wraparound_handles_unsigned_speed_and_derived_error(self):
         self.assertEqual(fix_wraparound((1 << 32) - 96), -96)
         self.assertEqual(fix_wraparound(-((1 << 32) - 96)), 96)

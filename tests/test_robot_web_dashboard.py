@@ -18,6 +18,8 @@ try:
     from robot_web_dashboard import (
         LOG_COMMAND,
         STATIC_DIR,
+        BroadcastHub,
+        JournalFollower,
         SnapshotStore,
         WebDashboardState,
         build_app,
@@ -62,6 +64,53 @@ class SnapshotStoreTest(unittest.IsolatedAsyncioTestCase):
             await publisher
 
         self.assertEqual(result, {"seq": "fresh"})
+
+
+@unittest.skipIf(
+    ROBOT_WEB_DASHBOARD_IMPORT_ERROR is not None, "aiohttp is not installed"
+)
+class JournalFollowerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_follower_publishes_lines_and_keeps_backlog(self):
+        hub = BroadcastHub(asyncio.get_running_loop())
+        queue = hub.subscribe()
+        follower = JournalFollower(hub)
+
+        with mock.patch("robot_web_dashboard.LOG_COMMAND", ["printf", "one\ntwo\n"]):
+            follower.ensure_started()
+            events = [await asyncio.wait_for(queue.get(), timeout=2.0) for _ in range(3)]
+
+        await follower.stop()
+        self.assertEqual(events[0], {"line": "one", "source": "journal"})
+        self.assertEqual(events[1], {"line": "two", "source": "journal"})
+        self.assertIn("restarting log stream", events[2]["line"])
+        self.assertEqual(list(follower.backlog), ["one", "two"])
+
+    async def test_follower_reports_missing_command(self):
+        hub = BroadcastHub(asyncio.get_running_loop())
+        queue = hub.subscribe()
+        follower = JournalFollower(hub)
+
+        with mock.patch("robot_web_dashboard.LOG_COMMAND", ["/nonexistent/journalctl"]):
+            follower.ensure_started()
+            event = await asyncio.wait_for(queue.get(), timeout=2.0)
+
+        await follower.stop()
+        self.assertIn("journalctl unavailable", event["line"])
+
+    async def test_follower_restarts_after_command_exits(self):
+        hub = BroadcastHub(asyncio.get_running_loop())
+        queue = hub.subscribe()
+        follower = JournalFollower(hub)
+
+        with (
+            mock.patch("robot_web_dashboard.LOG_COMMAND", ["printf", "one\n"]),
+            mock.patch("robot_web_dashboard.JOURNAL_RESTART_DELAY_SECONDS", 0.01),
+        ):
+            follower.ensure_started()
+            events = [await asyncio.wait_for(queue.get(), timeout=2.0) for _ in range(3)]
+
+        await follower.stop()
+        self.assertEqual([event["line"] for event in events], ["one", "journalctl exited; restarting log stream.", "one"])
 
 
 @unittest.skipIf(
@@ -463,6 +512,13 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             saved = json.load(file_obj)
         self.assertTrue(saved["safety"]["enabled"])
         self.assertEqual(len(saved["sensors"]), 1)
+
+    async def test_post_config_sensors_bad_number_returns_400(self):
+        async with self.client.post("/config/sensors", json={"cliff_trip_above_mm": "abc"}) as resp:
+            self.assertEqual(resp.status, 400)
+            payload = await resp.json()
+
+        self.assertIn("Invalid sensors config", payload["error"])
 
     async def test_config_unknown_name_returns_404(self):
         async with self.client.get("/config/nope") as resp:

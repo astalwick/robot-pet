@@ -18,6 +18,11 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 VL53L1X_READY_RECHECK_SECONDS = 0.005
+# How long a VL53L1X may coast on its previous reading when data_ready stays
+# False. Covers a missed cycle or two; beyond this the sensor has stopped
+# ranging (e.g. a power glitch reset it to idle) and the reading must not be
+# reported as fresh, because it feeds the cliff/forward safety gate.
+VL53L1X_LAST_GOOD_MAX_AGE_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -90,7 +95,7 @@ class RangeDriver:
         self.range_address = range_address
         self._lock = threading.Lock()
         self._entries: list[tuple[RangeSensorConfig, Any]] = []
-        self._last_good: dict[str, RangeReading] = {}
+        self._last_good: dict[str, tuple[RangeReading, float]] = {}
 
         if i2c_factory is None:
             i2c_factory = _default_i2c_factory
@@ -152,7 +157,9 @@ class RangeDriver:
                 if not sensor.data_ready:
                     previous = self._last_good.get(config.name)
                     if previous is not None:
-                        return previous
+                        reading, stored_at = previous
+                        if time.monotonic() - stored_at <= VL53L1X_LAST_GOOD_MAX_AGE_SECONDS:
+                            return reading
                     return RangeReading(
                         name=config.name,
                         kind=config.kind,
@@ -171,7 +178,7 @@ class RangeDriver:
                         distance_mm=None,
                         ok=True,
                     )
-                    self._last_good[config.name] = reading
+                    self._last_good[config.name] = (reading, time.monotonic())
                     return reading
                 distance_mm = max(0, int(distance_cm * 10) - config.offset_mm)
             else:
@@ -183,7 +190,7 @@ class RangeDriver:
                 distance_mm=distance_mm,
                 ok=True,
             )
-            self._last_good[config.name] = reading
+            self._last_good[config.name] = (reading, time.monotonic())
             return reading
         except Exception as exc:
             log.warning(

@@ -175,6 +175,7 @@ class CameraServiceState:
         self._driver: CameraDriver | None = None
         self._idle_handle: asyncio.TimerHandle | None = None
         self._lock = threading.Lock()
+        self._driver_lifecycle_lock = threading.Lock()
         self._start_lock = asyncio.Lock()
 
     async def ensure_started(self) -> bool:
@@ -187,15 +188,13 @@ class CameraServiceState:
                 if self._driver_factory is None:
                     return self.camera_ok or self.store.latest() is not None
 
-            driver = self._driver_factory()
             self.store.clear()
             if self.vision_store is not None:
                 self.vision_store.clear()
             try:
-                driver.start(
-                    self.store.publish,
-                    self.vision_store.publish if self.vision_store is not None else None,
-                )
+                # picamera2 configure/start can take the better part of a second;
+                # keep it off the event loop so /health and other handlers stay live.
+                await asyncio.to_thread(self._start_camera)
             except CameraUnavailable as exc:
                 log.error("camera unavailable: %s", exc)
                 with self._lock:
@@ -203,12 +202,20 @@ class CameraServiceState:
                     self.error = str(exc)
                 return False
 
+            return True
+
+    def _start_camera(self) -> None:
+        with self._driver_lifecycle_lock:
+            driver = self._driver_factory()
+            driver.start(
+                self.store.publish,
+                self.vision_store.publish if self.vision_store is not None else None,
+            )
             with self._lock:
                 self._driver = driver
                 self.camera_ok = True
                 self.error = None
             log.info("camera became active")
-            return True
 
     def acquire_stream(self) -> None:
         self._cancel_idle_stop()
@@ -230,23 +237,29 @@ class CameraServiceState:
         if self._idle_timeout <= 0:
             self.stop_camera()
             return
-        self._idle_handle = loop.call_later(self._idle_timeout, self.stop_camera)
+        self._idle_handle = loop.call_later(self._idle_timeout, self._idle_stop)
+
+    def _idle_stop(self) -> None:
+        # driver.stop() blocks; run it off the event loop. Shutdown still calls
+        # stop_camera() directly so the camera is released before exit.
+        threading.Thread(target=self.stop_camera, name="camera-idle-stop", daemon=True).start()
 
     def stop_camera(self, *, force: bool = False) -> None:
-        with self._lock:
-            if self.active_streams > 0 and not force:
-                return
-            driver = self._driver
-            self._driver = None
-            self.camera_ok = False
-            self._idle_handle = None
-        if driver is not None:
-            driver.stop()
-        self.store.clear()
-        if self.vision_store is not None:
-            self.vision_store.clear()
-        if driver is not None:
-            log.info("camera became idle")
+        with self._driver_lifecycle_lock:
+            with self._lock:
+                if self.active_streams > 0 and not force:
+                    return
+                driver = self._driver
+                self._driver = None
+                self.camera_ok = False
+                self._idle_handle = None
+            if driver is not None:
+                driver.stop()
+            self.store.clear()
+            if self.vision_store is not None:
+                self.vision_store.clear()
+            if driver is not None:
+                log.info("camera became idle")
 
     def _cancel_idle_stop(self) -> None:
         handle = self._idle_handle

@@ -100,6 +100,7 @@ class SensorsService:
         self._driver_signature: tuple[Any, ...] | None = None
         self._imu_driver_signature: tuple[Any, ...] | None = None
         self._driver_error: str | None = None
+        self._imu_error: str | None = None
         self._last_disabled_publish: float | None = None
         self._next_poll_time: float | None = None
 
@@ -134,7 +135,7 @@ class SensorsService:
         if self._imu_driver is not None:
             imu = imu_reading_to_dict(self._imu_driver.read(timeout=min(self._poll_period(), MAX_IMU_READ_SECONDS)))
         elif self.config.imu.enabled:
-            imu = {"ok": False, "reason": "uncalibrated"}
+            imu = {"ok": False, "reason": self._imu_error or "uncalibrated"}
         self.publish(
             sensors_update(
                 enabled=True,
@@ -161,28 +162,37 @@ class SensorsService:
     def _ensure_driver(self) -> bool:
         range_signature = _sensor_signature(self.config)
         imu_signature = _imu_signature(self.config.imu)
-        if (
-            self._driver is not None
-            and range_signature == self._driver_signature
-            and imu_signature == self._imu_driver_signature
-        ):
-            return True
 
-        self._release_drivers()
-        try:
-            self._driver = self.driver_factory(self.config)
-            self._imu_driver = self.imu_driver_factory(self.config)
-            self._driver_signature = range_signature
+        if self._driver is None or range_signature != self._driver_signature:
+            self._release_drivers()
+            try:
+                self._driver = self.driver_factory(self.config)
+                self._driver_signature = range_signature
+                self._driver_error = None
+                log.info("range driver ready for %d sensor(s)", len(self.config.sensors))
+            except Exception as exc:  # noqa: BLE001 -- hardware init can fail many ways
+                self._driver_error = str(exc)
+                log.warning("sensor driver init failed: %s", exc)
+                self._publish_status("driver_unavailable", error=self._driver_error)
+                self._next_poll_time = self.time_fn() + self._poll_period()
+                return False
+
+        if imu_signature != self._imu_driver_signature:
+            if self._imu_driver is not None:
+                self._imu_driver.cleanup()
+                self._imu_driver = None
+            try:
+                self._imu_driver = self.imu_driver_factory(self.config)
+                self._imu_error = None
+            except Exception as exc:  # noqa: BLE001
+                # A dead IMU must not stop range polling, and rebuilding it every
+                # tick would churn continuous ranging on every ToF sensor. Report
+                # the error and retry only when the IMU config changes.
+                self._imu_error = str(exc)
+                log.warning("imu driver init failed: %s", exc)
             self._imu_driver_signature = imu_signature
-            self._driver_error = None
-            log.info("range driver ready for %d sensor(s)", len(self.config.sensors))
-            return True
-        except Exception as exc:  # noqa: BLE001 -- hardware init can fail many ways
-            self._driver_error = str(exc)
-            log.warning("sensor driver init failed: %s", exc)
-            self._publish_status("driver_unavailable", error=self._driver_error)
-            self._next_poll_time = self.time_fn() + self._poll_period()
-            return False
+
+        return True
 
     def _release_drivers(self) -> None:
         if self._driver is not None:

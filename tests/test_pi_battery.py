@@ -45,8 +45,8 @@ class FakeBus:
             0x37: 0x0F,
         }
 
-    def read_byte_data(self, _address, register):
-        return self.registers[register]
+    def read_i2c_block_data(self, _address, register, length):
+        return [self.registers[register + offset] for offset in range(length)]
 
     def close(self):
         self.closed = True
@@ -125,6 +125,45 @@ class PiBatteryServiceTest(unittest.TestCase):
         self.assertEqual(published[-1]["status"], "critical")
         self.assertTrue(published[-1]["shutdown_pending"])
         self.assertEqual(shutdown_commands, [("sudo", "shutdown", "-h", "now")])
+
+    def test_shutdown_requested_only_once_after_success(self):
+        bus = FakeBus()
+        set_u16(bus, 0x20, round(PiBatteryConfig().shutdown_voltage * 1000))
+        shutdown_commands = []
+        service = PiBatteryService(
+            PiBatteryConfig(),
+            publish=lambda _message: None,
+            driver_factory=lambda: UpsHatEDriver(bus_factory=lambda _bus: bus),
+            command_runner=shutdown_commands.append,
+        )
+
+        service.tick()
+        service.tick()
+
+        self.assertEqual(len(shutdown_commands), 1)
+
+    def test_failed_shutdown_retries_on_next_tick(self):
+        bus = FakeBus()
+        set_u16(bus, 0x20, round(PiBatteryConfig().shutdown_voltage * 1000))
+        shutdown_commands = []
+
+        def failing_runner(command):
+            shutdown_commands.append(command)
+            raise RuntimeError("sudo unavailable")
+
+        service = PiBatteryService(
+            PiBatteryConfig(),
+            publish=lambda _message: None,
+            driver_factory=lambda: UpsHatEDriver(bus_factory=lambda _bus: bus),
+            command_runner=failing_runner,
+        )
+
+        with self.assertLogs("robot-pi-battery", level="ERROR"):
+            service.tick()
+            service.tick()
+
+        self.assertEqual(len(shutdown_commands), 2)
+        self.assertFalse(service.shutdown_requested)
 
 
 if __name__ == "__main__":

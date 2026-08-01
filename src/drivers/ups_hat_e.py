@@ -100,80 +100,48 @@ class UpsHatEDriver:
         self.bus = bus_factory(bus)
 
     def read(self) -> UpsHatEReading:
-        id_value = self.bus.read_byte_data(self.address, REG_ID)
-        power_on_value = self.bus.read_byte_data(self.address, REG_POWER_ON)
-        charge_state = self.bus.read_byte_data(self.address, REG_CHARGE_STATE)
-        comm_state = self.bus.read_byte_data(self.address, REG_COMM_STATE)
+        # Block reads: one I2C transaction per register group instead of ~30
+        # byte reads, and each 16-bit value arrives atomically (paired byte
+        # reads could tear a value rolling across a byte boundary).
+        status = self.bus.read_i2c_block_data(self.address, REG_ID, 4)
+        vbus = self.bus.read_i2c_block_data(self.address, REG_USB_C_VBUS_MV, 6)
+        battery = self.bus.read_i2c_block_data(self.address, REG_BATTERY_MV, 12)
+        cells = self.bus.read_i2c_block_data(self.address, REG_CELL1_MV, 8)
 
-        vbus_mv, vbus_mv_low, vbus_mv_high = self._read_u16(REG_USB_C_VBUS_MV)
-        vbus_ma, vbus_ma_low, vbus_ma_high = self._read_u16(REG_USB_C_VBUS_MA)
-        vbus_mw, vbus_mw_low, vbus_mw_high = self._read_u16(REG_USB_C_VBUS_MW)
-        battery_mv, battery_mv_low, battery_mv_high = self._read_u16(REG_BATTERY_MV)
-        battery_ma_raw, battery_ma_low, battery_ma_high = self._read_u16(REG_BATTERY_MA)
-        battery_percent, battery_percent_low, battery_percent_high = self._read_u16(REG_BATTERY_PERCENT)
-        remaining_mah, remaining_mah_low, remaining_mah_high = self._read_u16(REG_BATTERY_REMAINING_MAH)
-        runtime_min, runtime_min_low, runtime_min_high = self._read_u16(REG_BATTERY_RUNTIME_MIN)
-        charge_time_min, charge_time_min_low, charge_time_min_high = self._read_u16(REG_BATTERY_CHARGE_TIME_MIN)
-
-        cells = []
-        raw_cells = []
-        for register in (REG_CELL1_MV, REG_CELL2_MV, REG_CELL3_MV, REG_CELL4_MV):
-            cell_mv, low, high = self._read_u16(register)
-            cells.append(cell_mv)
-            raw_cells.append((register, low, high))
-
-        raw = {
-            REG_ID: id_value,
-            REG_POWER_ON: power_on_value,
-            REG_CHARGE_STATE: charge_state,
-            REG_COMM_STATE: comm_state,
-            REG_USB_C_VBUS_MV: vbus_mv_low,
-            REG_USB_C_VBUS_MV + 1: vbus_mv_high,
-            REG_USB_C_VBUS_MA: vbus_ma_low,
-            REG_USB_C_VBUS_MA + 1: vbus_ma_high,
-            REG_USB_C_VBUS_MW: vbus_mw_low,
-            REG_USB_C_VBUS_MW + 1: vbus_mw_high,
-            REG_BATTERY_MV: battery_mv_low,
-            REG_BATTERY_MV + 1: battery_mv_high,
-            REG_BATTERY_MA: battery_ma_low,
-            REG_BATTERY_MA + 1: battery_ma_high,
-            REG_BATTERY_PERCENT: battery_percent_low,
-            REG_BATTERY_PERCENT + 1: battery_percent_high,
-            REG_BATTERY_REMAINING_MAH: remaining_mah_low,
-            REG_BATTERY_REMAINING_MAH + 1: remaining_mah_high,
-            REG_BATTERY_RUNTIME_MIN: runtime_min_low,
-            REG_BATTERY_RUNTIME_MIN + 1: runtime_min_high,
-            REG_BATTERY_CHARGE_TIME_MIN: charge_time_min_low,
-            REG_BATTERY_CHARGE_TIME_MIN + 1: charge_time_min_high,
-            **{register: low for register, low, _high in raw_cells},
-            **{register + 1: high for register, _low, high in raw_cells},
-        }
+        raw = {}
+        for base, block in (
+            (REG_ID, status),
+            (REG_USB_C_VBUS_MV, vbus),
+            (REG_BATTERY_MV, battery),
+            (REG_CELL1_MV, cells),
+        ):
+            for offset, value in enumerate(block):
+                raw[base + offset] = value
 
         return UpsHatEReading(
-            device_id=id_value,
-            power_on_register=power_on_value,
-            charge_state=charge_state,
-            comm_state=comm_state,
-            vbus_mv=vbus_mv,
-            vbus_ma=signed_16(vbus_ma),
-            vbus_mw=vbus_mw,
-            battery_mv=battery_mv,
-            battery_ma=signed_16(battery_ma_raw),
-            battery_percent=battery_percent,
-            remaining_mah=remaining_mah,
-            runtime_min=available_minutes(runtime_min),
-            charge_time_min=available_minutes(charge_time_min),
-            cells_mv=tuple(cells),
+            device_id=status[0],
+            power_on_register=status[1],
+            charge_state=status[2],
+            comm_state=status[3],
+            vbus_mv=u16(vbus, 0),
+            vbus_ma=signed_16(u16(vbus, 2)),
+            vbus_mw=u16(vbus, 4),
+            battery_mv=u16(battery, 0),
+            battery_ma=signed_16(u16(battery, 2)),
+            battery_percent=u16(battery, 4),
+            remaining_mah=u16(battery, 6),
+            runtime_min=available_minutes(u16(battery, 8)),
+            charge_time_min=available_minutes(u16(battery, 10)),
+            cells_mv=(u16(cells, 0), u16(cells, 2), u16(cells, 4), u16(cells, 6)),
             raw=raw,
         )
 
     def cleanup(self) -> None:
         self.bus.close()
 
-    def _read_u16(self, register: int) -> tuple[int, int, int]:
-        low = self.bus.read_byte_data(self.address, register)
-        high = self.bus.read_byte_data(self.address, register + 1)
-        return (high << 8) | low, low, high
+
+def u16(block: list[int], offset: int) -> int:
+    return block[offset] | (block[offset + 1] << 8)
 
 
 def signed_16(value: int) -> int:

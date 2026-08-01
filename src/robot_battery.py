@@ -89,9 +89,10 @@ class BatteryRunner:
     def _handle_snapshot(self, snapshot: dict[str, Any]) -> None:
         now = self.clock()
         voltage = self._fresh_pack_voltage(snapshot)
-        if voltage is None:
-            self.low_voltage_seen_at = None
-        else:
+        # A snapshot without a fresh voltage leaves low_voltage_seen_at alone:
+        # telemetry flapping stale/fresh must not keep restarting the cutoff
+        # debounce while the pack sits below the cutoff line.
+        if voltage is not None:
             self._handle_voltage(voltage, now)
             self._remember_motor_battery(snapshot)
         self._sync_power(snapshot, now)

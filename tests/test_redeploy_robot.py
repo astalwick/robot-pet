@@ -209,6 +209,11 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertIn("$SYSTEMCTL_PATH stop robot-battery.service", body)
         self.assertIn("$SYSTEMCTL_PATH restart robot-battery.service", body)
 
+    def test_dashboard_restart_does_not_kill_systemctl_child(self):
+        body = (REPO_ROOT / "systemd" / "robot-web-dashboard.service").read_text()
+
+        self.assertIn("KillMode=mixed", body)
+
     def test_setup_does_not_fail_when_amixer_fails(self):
         body = SETUP.read_text()
 

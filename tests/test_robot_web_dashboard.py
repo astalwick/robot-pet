@@ -24,6 +24,7 @@ try:
         WebDashboardState,
         build_app,
         format_sse_event,
+        restart_web_dashboard,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "aiohttp":
@@ -127,6 +128,21 @@ class FormatSseEventTest(unittest.TestCase):
         self.assertEqual(
             format_sse_event({"a": 1, "b": [2, 3]}),
             b'data: {"a":1,"b":[2,3]}\n\n',
+        )
+
+
+class RestartWebDashboardTest(unittest.TestCase):
+    def test_restarts_without_waiting_for_service_stop(self):
+        with mock.patch("robot_web_dashboard.subprocess.run") as run:
+            result = restart_web_dashboard()
+
+        self.assertIs(result, run.return_value)
+        run.assert_called_once_with(
+            ["sudo", "systemctl", "restart", "--no-block", "robot-web-dashboard.service"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
 
 

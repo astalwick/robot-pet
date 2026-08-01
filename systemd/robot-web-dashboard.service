@@ -12,6 +12,7 @@ ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/robot_web_d
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 

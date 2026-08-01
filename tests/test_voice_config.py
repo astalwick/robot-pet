@@ -76,6 +76,8 @@ class VoiceConfigTest(unittest.TestCase):
         self.assertEqual(VoiceConfig.from_dict({"input_gain": -1, "output_gain": 9}).output_gain, MAX_AUDIO_GAIN)
 
     def test_openai_model_must_be_known(self):
+        self.assertEqual(VoiceConfig().openai_model, "gpt-5.6-luna")
+        self.assertEqual(VoiceConfig.from_dict({"openai_model": "gpt-5.6-luna"}).openai_model, "gpt-5.6-luna")
         self.assertEqual(VoiceConfig.from_dict({"openai_model": "gpt-5.5"}).openai_model, "gpt-5.5")
         with self.assertRaisesRegex(VoiceConfigError, "openai_model"):
             VoiceConfig.from_dict({"openai_model": "gpt-9"})

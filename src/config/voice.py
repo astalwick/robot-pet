@@ -14,8 +14,8 @@ DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/voice.json"
 DEFAULT_WAKE_MODEL_PATH = "/home/pi/robot-pet/models/wake/Hey_Bloop.onnx"
 DEFAULT_WAKE_CHIME_PATH = "/home/pi/robot-pet/assets/audio/wake_chime.wav"
 DEFAULT_SESSION_END_CHIME_PATH = "/home/pi/robot-pet/assets/audio/session_end_chime.wav"
-DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
-OPENAI_MODEL_CHOICES = ("gpt-5.4-mini", "gpt-5.5")
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
+OPENAI_MODEL_CHOICES = ("gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.5")
 MIN_AUDIO_GAIN = 0.0
 MAX_AUDIO_GAIN = 3.0
 

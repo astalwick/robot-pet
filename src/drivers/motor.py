@@ -91,10 +91,10 @@ class MotorDriver:
         left_duty = int(left * self.MAX_DUTY)
         right_duty = int(right * self.MAX_DUTY)
         
-        # M1 = left, M2 = right
+        # M1 = left, M2 = right. One atomic packet so a serial fault can't leave
+        # one wheel running at the old duty while the other updated.
         try:
-            self.controller.DutyM1(self.address, left_duty)
-            self.controller.DutyM2(self.address, right_duty)
+            self.controller.DutyM1M2(self.address, left_duty, right_duty)
             return True
         except Exception as exc:
             if is_recoverable_roboclaw_error(exc):
@@ -166,8 +166,7 @@ class MotorDriver:
     def stop(self):
         """Immediately stop both motors."""
         try:
-            self.controller.DutyM1(self.address, 0)
-            self.controller.DutyM2(self.address, 0)
+            self.controller.DutyM1M2(self.address, 0, 0)
         except Exception as exc:
             if is_recoverable_roboclaw_error(exc):
                 log.warning("RoboClaw stop command timed out: %s", exc)

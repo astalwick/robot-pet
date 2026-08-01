@@ -28,11 +28,8 @@ class FakeRoboClaw:
         self.calls.append(("SetTimeout", address, timeout))
         return True
 
-    def DutyM1(self, address, duty):
-        self.calls.append(("DutyM1", address, duty))
-
-    def DutyM2(self, address, duty):
-        self.calls.append(("DutyM2", address, duty))
+    def DutyM1M2(self, address, left_duty, right_duty):
+        self.calls.append(("DutyM1M2", address, left_duty, right_duty))
 
     def SpeedM1M2(self, address, left_qpps, right_qpps):
         self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
@@ -80,8 +77,8 @@ class TimeoutRoboClaw(FakeRoboClaw):
         self.calls.append(("SpeedM1M2", address, left_qpps, right_qpps))
         raise PacketTimeoutError("timed out")
 
-    def DutyM1(self, address, duty):
-        self.calls.append(("DutyM1", address, duty))
+    def DutyM1M2(self, address, left_duty, right_duty):
+        self.calls.append(("DutyM1M2", address, left_duty, right_duty))
         raise PacketTimeoutError("timed out")
 
 
@@ -139,15 +136,14 @@ class MotorDriverTest(unittest.TestCase):
         self.assertTrue(acknowledged)
         self.assertIn(("SpeedM1M2", 0x80, 100, -50), fake.calls)
 
-    def test_set_speed_returns_true_after_duty_commands(self):
+    def test_set_speed_sends_one_atomic_duty_command(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         acknowledged = driver.set_speed(0.5, -0.5)
 
         self.assertTrue(acknowledged)
-        self.assertIn(("DutyM1", 0x80, 16383), fake.calls)
-        self.assertIn(("DutyM2", 0x80, -16383), fake.calls)
+        self.assertIn(("DutyM1M2", 0x80, 16383, -16383), fake.calls)
 
     def test_read_wheel_speeds_reads_both_encoders(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
@@ -192,14 +188,13 @@ class MotorDriverTest(unittest.TestCase):
 
         self.assertEqual(driver.get_currents(), (1.5, 1.75))
 
-    def test_stop_preserves_existing_zero_duty_behavior(self):
+    def test_stop_sends_one_atomic_zero_duty_command(self):
         fake = FakeRoboClaw("/dev/fake", 38400)
         driver = MotorDriver(controller_factory=lambda port, baud: fake)
 
         driver.stop()
 
-        self.assertIn(("DutyM1", 0x80, 0), fake.calls)
-        self.assertIn(("DutyM2", 0x80, 0), fake.calls)
+        self.assertIn(("DutyM1M2", 0x80, 0, 0), fake.calls)
 
     def test_configures_roboclaw_serial_timeout_on_init(self):
         fake = FakeRoboClaw("/dev/fake", 38400)

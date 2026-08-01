@@ -81,9 +81,12 @@ TURN_NO_PROGRESS_TIMEOUT_SECONDS = 1.0
 
 KNOWN_TOOLS = ("express", "move", "diagnostic_turn", "face_me", "turn")
 DIAGNOSTIC_TURN_DIRECTIONS = ("toward_left_wheel", "toward_right_wheel")
-# Caller waits this long for a motion intent to finish. An encoder move is bounded
+# The bridge gives a motion intent this long to finish. An encoder move is bounded
 # by distance and the no-progress watchdog, so this is just a generous upper bound.
 MOTION_INTENT_REPLY_TIMEOUT_SECONDS = 35.0
+# Clients wait a little longer so the bridge's own internal_timeout reply wins the
+# race instead of both sides timing out at the same instant.
+MOTION_INTENT_CLIENT_TIMEOUT_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS + 5.0
 
 
 def valid_move_distance(value: Any) -> bool:
@@ -330,6 +333,11 @@ class MotionIntentExecutor:
 
         if self._active.turn_phase == "checking":
             if not fresh_yaw:
+                # Frozen yaw samples must not park the executor here forever:
+                # the wheels are safely at zero, but a stuck intent blocks every
+                # later one. The same no-progress window bounds the wait.
+                if now - self._active.turn_progress_at >= TURN_NO_PROGRESS_TIMEOUT_SECONDS:
+                    return self._finish_turn("turn_stalled")
                 return IntentTick(
                     command=MotionCommand(linear_x=0.0, angular_z=0.0),
                     finished=False,
@@ -366,6 +374,7 @@ class MotionIntentExecutor:
             stop = magnitude >= target_degrees or timed_stop
         if stop:
             self._active.turn_phase = "checking"
+            self._active.turn_progress_at = now
             return IntentTick(
                 command=MotionCommand(linear_x=0.0, angular_z=0.0),
                 finished=False,
@@ -683,15 +692,19 @@ class MotionIntentBridge:
 
         done_event = threading.Event()
         holder: list[dict[str, Any] | None] = [None]
+        entry = {"request": request, "done_event": done_event, "holder": holder}
         with self._lock:
             if self._pending is not None:
                 self._send(conn, {"ok": False, "error": "busy"})
                 return
-            self._pending = {"request": request, "done_event": done_event, "holder": holder}
+            self._pending = entry
 
         if not done_event.wait(timeout=self.INTENT_MAX_SECONDS):
+            # Only withdraw our own request. The main loop may have taken it
+            # already, and another connection's request may now hold the slot.
             with self._lock:
-                self._pending = None
+                if self._pending is entry:
+                    self._pending = None
             self._send(conn, {"ok": False, "error": "internal_timeout"})
             return
 
@@ -709,7 +722,7 @@ class MotionIntentBridge:
 def request_motion_intent(
     socket_path: str,
     tool: str,
-    timeout: float = MOTION_INTENT_REPLY_TIMEOUT_SECONDS,
+    timeout: float = MOTION_INTENT_CLIENT_TIMEOUT_SECONDS,
     **parameters: Any,
 ) -> dict[str, Any]:
     """Send a motion intent request over a Unix socket and wait for one reply.

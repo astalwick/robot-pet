@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from config.voice import DEFAULT_CONFIG_PATH, VoiceConfig, VoiceConfigError, load_voice_config, save_voice_config
-from control.motion_intent import MOTION_INTENT_REPLY_TIMEOUT_SECONDS, request_motion_intent
+from control.motion_intent import MOTION_INTENT_CLIENT_TIMEOUT_SECONDS, request_motion_intent
 from drivers.respeaker import MIC_BLOCKSIZE, WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from drivers.status_leds import StatusLeds
 from lib.log import setup_logging
@@ -55,7 +55,7 @@ WAKE_BUFFER_SECS = 2.0
 WAKE_HANDOFF_TAIL_SECS = 0.3
 DOA_POLL_INTERVAL_SECONDS = 0.1
 DOA_REOPEN_DELAY_SECONDS = 1.0
-FACE_ME_MOTION_TIMEOUT_SECONDS = MOTION_INTENT_REPLY_TIMEOUT_SECONDS
+FACE_ME_MOTION_TIMEOUT_SECONDS = MOTION_INTENT_CLIENT_TIMEOUT_SECONDS
 DEFAULT_CAMERA_SNAPSHOT_URL = f"http://127.0.0.1:{DEFAULT_CAMERA_PORT}/snapshot.jpg"
 VOICE_STOPPED: str | None = None
 VOICE_ARMED = "armed"
@@ -608,7 +608,7 @@ class RobotVoiceService:
             motion_intent_caller=lambda tool, **params: request_motion_intent(
                 motion_socket,
                 tool,
-                timeout=MOTION_INTENT_REPLY_TIMEOUT_SECONDS,
+                timeout=MOTION_INTENT_CLIENT_TIMEOUT_SECONDS,
                 **params,
             ),
             session_end_caller=self.request_end_session,

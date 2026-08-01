@@ -16,7 +16,6 @@ from typing import Any
 from config.drive_tuning import (
     DEFAULT_CONFIG_PATH as DRIVE_TUNING_CONFIG_PATH,
     DEFAULT_QPPS,
-    DriveTuning,
     DriveTuningConfigError,
     load_drive_tuning,
 )
@@ -84,6 +83,8 @@ class MotionConfig:
     baud: int = 38400
     qpps: int = DEFAULT_QPPS
     qpps_slew_limit: float = 5000.0
+    speed_scale: float = 0.25
+    turbo_scale: float = 0.75
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     intent_wait_timeout: float = 8.0
@@ -135,7 +136,13 @@ class MotionRunner:
         self._intent_snap_stop = False
         self.encoder_move: EncoderMove | None = None
 
-        self.mixer = DifferentialDriveMixer(qpps=config.qpps, speed_scale=1.0, turbo_scale=1.0)
+        # Mixes intent motion commands into wheel speeds using the same loaded
+        # tuning as gamepad teleop, so voice/agent moves match teleop speeds.
+        self.mixer = DifferentialDriveMixer(
+            qpps=config.qpps,
+            speed_scale=config.speed_scale,
+            turbo_scale=config.turbo_scale,
+        )
         self.stop_requested = False
         self.drive_state = "stopped"
         self.stop_reason: str | None = None
@@ -183,14 +190,22 @@ class MotionRunner:
                 motor = self._wait_for_roboclaw()
                 if self.stop_requested:
                     break
+                intent_failure = None
                 try:
-                    self._run_motor_loop(motor)
+                    intent_failure = self._run_motor_loop(motor)
                 except Exception as exc:
                     if not is_recoverable_roboclaw_error(exc):
                         raise
+                    intent_failure = "roboclaw_connection_lost"
                     log.warning("RoboClaw connection lost; reconnecting: %s", exc)
                 finally:
                     motor.cleanup()
+                # Leaving the motor loop invalidates a mid-flight intent's encoder
+                # baseline and yaw accumulation. Fail it with the actual cause
+                # instead of replaying it from scratch after reconnecting.
+                if intent_failure is not None and not self.stop_requested and self.intent_executor.is_active():
+                    self.intent_executor.cancel()
+                    self._fail_pending_intent(intent_failure)
         finally:
             self._stop_intent_bridge()
             self._stop_drive_listener()
@@ -284,7 +299,9 @@ class MotionRunner:
         return MotionIntentBridge(self.config.motion_intent_socket)
 
     def _wait_for_roboclaw(self) -> Any:
-        self._set_drive_state("waiting_for_roboclaw")
+        # Keep the last stop reason visible while reconnecting. This is the first
+        # state that gets published after the motor loop exits.
+        self._set_drive_state("waiting_for_roboclaw", self.stop_reason)
         while not self.stop_requested:
             now = self.clock()
             self._service_stop_requests()
@@ -311,8 +328,10 @@ class MotionRunner:
             self.sleep(self.config.retry_interval)
         return None
 
-    def _run_motor_loop(self, motor: Any) -> None:
+    def _run_motor_loop(self, motor: Any) -> str | None:
         self.encoder_move = None
+        stop_reason = None
+        intent_failure = None
         closed_loop_active = False
         idle_started_at = self.clock()
         idle_released = False
@@ -350,15 +369,17 @@ class MotionRunner:
                     if ramped.left_qpps != 0 or ramped.right_qpps != 0:
                         if not self._set_wheel_speeds(motor, ramped.left_qpps, ramped.right_qpps, now=now):
                             stop_reason = "RoboClaw speed command was not acknowledged"
+                            intent_failure = "roboclaw_connection_lost"
                             log.error("%s", stop_reason)
                             break
                         closed_loop_active = True
                         idle_released = False
-                        self.sleep(self.config.loop_interval)
+                        self._sleep_until_next_tick(cycle_started)
                         continue
                     if closed_loop_active:
                         if not self._set_wheel_speeds(motor, 0, 0, now=now):
                             stop_reason = "RoboClaw zero-speed command was not acknowledged"
+                            intent_failure = "roboclaw_connection_lost"
                             log.error("%s", stop_reason)
                             break
                         closed_loop_active = False
@@ -370,7 +391,7 @@ class MotionRunner:
                     elif idle_released:
                         self._publish_waiting_telemetry(None, roboclaw_ready=True)
                         break
-                    self.sleep(self.config.loop_interval)
+                    self._sleep_until_next_tick(cycle_started)
                     continue
 
                 drive = self._intent_only_drive_command()
@@ -417,6 +438,7 @@ class MotionRunner:
             reader_alive = drive.drive_status.get("controller_reader_alive")
             if reader_alive is False and (closed_loop_active or not target_is_zero):
                 stop_reason = drive.drive_status.get("stop_reason") or "controller reader stopped"
+                intent_failure = "controller_lost"
                 log.error("%s; stopping motors", stop_reason)
                 break
 
@@ -424,6 +446,7 @@ class MotionRunner:
                 if closed_loop_active:
                     if not self._set_wheel_speeds(motor, 0, 0, now=now):
                         stop_reason = "RoboClaw zero-speed command was not acknowledged"
+                        intent_failure = "roboclaw_connection_lost"
                         log.error("%s", stop_reason)
                         break
                     closed_loop_active = False
@@ -435,6 +458,7 @@ class MotionRunner:
             else:
                 if not self._set_wheel_speeds(motor, target.left_qpps, target.right_qpps, now=now):
                     stop_reason = "RoboClaw speed command was not acknowledged"
+                    intent_failure = "roboclaw_connection_lost"
                     log.error("%s", stop_reason)
                     break
                 closed_loop_active = True
@@ -452,11 +476,12 @@ class MotionRunner:
                 )
                 next_telemetry = now + self.config.telemetry_interval
 
-            self.sleep(self.config.loop_interval)
+            self._sleep_until_next_tick(cycle_started)
 
         self._set_wheel_speeds(motor, 0, 0, record=False)
         self._reset_slew()
-        self._set_drive_state("stopped")
+        self._set_drive_state("stopped", stop_reason)
+        return intent_failure
 
     def _gamepad_active_from_wheels(self, wheels: dict[str, Any]) -> bool:
         left = wheels.get("left_command", 0.0) or 0.0
@@ -480,17 +505,8 @@ class MotionRunner:
         if intent_command is None:
             return drive.wheels, drive.left_qpps, drive.right_qpps
 
-        tuning = DriveTuning()
-        intent_mixer = DifferentialDriveMixer(
-            qpps=self.config.qpps,
-            speed_scale=tuning.speed_scale,
-            turbo_scale=tuning.turbo_scale,
-        )
-        mixed_wheels = intent_mixer.mix(intent_command)
-        intent_target = intent_mixer.to_wheel_speeds(
-            intent_command,
-            turbo=False,
-        )
+        mixed_wheels = self.mixer.mix(intent_command)
+        intent_target = self.mixer.to_wheel_speeds(intent_command, turbo=False)
         return (
             {"left_command": mixed_wheels.left, "right_command": mixed_wheels.right},
             intent_target.left_qpps,
@@ -871,6 +887,11 @@ class MotionRunner:
             return None
         return max(0.0, now - self.last_motor_command_ack_at)
 
+    def _sleep_until_next_tick(self, cycle_started: float) -> None:
+        # Sleep only the remainder of the interval so the loop actually runs at
+        # the configured rate instead of work-time-plus-interval.
+        self.sleep(max(0.0, self.config.loop_interval - (self.clock() - cycle_started)))
+
     def _release_idle(self, motor: Any) -> None:
         motor.stop()
 
@@ -1020,6 +1041,8 @@ def main() -> None:
             baud=args.baud,
             qpps=args.qpps,
             qpps_slew_limit=drive_tuning.qpps_slew_limit,
+            speed_scale=drive_tuning.speed_scale,
+            turbo_scale=drive_tuning.turbo_scale,
             loop_interval=args.loop_interval,
             retry_interval=args.retry_interval,
             intent_wait_timeout=args.intent_wait_timeout,

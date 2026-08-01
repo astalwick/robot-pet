@@ -58,6 +58,11 @@ class DriveCommand:
 class MotionDrivePublisher:
     """Persistent line publisher used by gamepad-teleop."""
 
+    # Bounds connect and sendall so a wedged robot-motion (kernel buffer full)
+    # cannot block the teleop loop indefinitely; a timeout closes the socket
+    # like any other send failure.
+    SEND_TIMEOUT = 0.5
+
     def __init__(self, socket_path: str):
         self.socket_path = socket_path
         self._socket: socket.socket | None = None
@@ -65,6 +70,7 @@ class MotionDrivePublisher:
     def connect(self) -> bool:
         self.close()
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(self.SEND_TIMEOUT)
         try:
             client.connect(self.socket_path)
         except OSError:

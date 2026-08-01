@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import tempfile
 import unittest
 from collections import deque
 
@@ -377,6 +378,139 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertEqual(motor.commands[:2], [(250, 250), (0, 0)])
 
+    def test_motor_command_failure_records_stop_reason(self):
+        motor = FakeMotor()
+        motor.set_wheel_speeds = lambda _left, _right: False
+        runner = self._runner(motor)
+        runner._on_drive_command(drive_command(250, 250))
+
+        runner._run_motor_loop(motor)
+
+        self.assertEqual(runner.drive_state, "stopped")
+        self.assertEqual(runner.stop_reason, "RoboClaw speed command was not acknowledged")
+
+    def test_motor_command_failure_publishes_stop_reason_while_reconnecting(self):
+        motor = FakeMotor()
+        motor.set_wheel_speeds = lambda left, right: left == 0 and right == 0
+        published = []
+        attempts = 0
+
+        def motor_factory():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 2:
+                runner.request_stop()
+            return motor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = MotionRunner(
+                MotionConfig(
+                    loop_interval=0.05,
+                    telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
+                    drive_socket=os.path.join(tmpdir, "drive.sock"),
+                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
+                ),
+                motor_factory=motor_factory,
+                sleep=lambda _seconds: None,
+                clock=lambda: 0.0,
+                telemetry_publisher=lambda _socket, message: published.append(message) or True,
+            )
+            runner._on_drive_command(drive_command(250, 250))
+
+            runner.run_forever()
+
+        self.assertIn(
+            "RoboClaw speed command was not acknowledged",
+            [message["drive_status"]["stop_reason"] for message in published],
+        )
+
+    def test_connection_loss_mid_intent_fails_it_instead_of_replaying(self):
+        # A reconnect resets the encoder baseline and yaw accumulation, so
+        # replaying the intent could double the requested travel. The intent
+        # must fail instead of restarting from scratch.
+        motor = FakeMotor()
+        motor.set_wheel_speeds = lambda left, right: left == 0 and right == 0
+        completed = []
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.1
+            if current_time > 2.0:
+                runner.request_stop()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = MotionRunner(
+                MotionConfig(
+                    loop_interval=0.05,
+                    retry_interval=0.1,
+                    telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
+                    drive_socket=os.path.join(tmpdir, "drive.sock"),
+                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
+                ),
+                motor_factory=lambda: motor,
+                sleep=sleep,
+                clock=clock,
+                telemetry_publisher=lambda *_args: True,
+            )
+            runner.intent_executor.start("move", now=0.0, distance_meters=1.0)
+            runner.pending_intent_complete = completed.append
+
+            runner.run_forever()
+
+        self.assertEqual(completed, [{"ok": False, "error": "roboclaw_connection_lost"}])
+        self.assertFalse(runner.intent_executor.is_active())
+        self.assertIsNone(runner.encoder_move)
+
+    def test_controller_loss_mid_intent_reports_controller_loss(self):
+        motor = FakeMotor()
+        completed = []
+        attempts = 0
+
+        def motor_factory():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 2:
+                runner.request_stop()
+            return motor
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = MotionRunner(
+                MotionConfig(
+                    loop_interval=0.05,
+                    telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
+                    drive_socket=os.path.join(tmpdir, "drive.sock"),
+                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
+                ),
+                motor_factory=motor_factory,
+                sleep=lambda _seconds: None,
+                clock=lambda: 0.0,
+                telemetry_publisher=lambda *_args: True,
+            )
+            runner._on_drive_command(
+                DriveCommand(
+                    left_qpps=0,
+                    right_qpps=0,
+                    wheels={"left_command": 0.0, "right_command": 0.0},
+                    drive_status={
+                        "state": "controller_lost",
+                        "controller_reader_alive": False,
+                        "stop_reason": "controller input reader exited",
+                    },
+                    link_loop={},
+                )
+            )
+            runner.intent_executor.start("move", now=0.0, distance_meters=1.0)
+            runner.pending_intent_complete = completed.append
+
+            runner.run_forever()
+
+        self.assertEqual(completed, [{"ok": False, "error": "controller_lost"}])
+        self.assertFalse(runner.intent_executor.is_active())
+
     def test_motion_intent_runs_without_gamepad_drive_command(self):
         motor = FakeMotor()
         completed = []
@@ -464,10 +598,10 @@ class RobotMotionTest(unittest.TestCase):
         self.assertNotIn("controller", message)
         self.assertNotIn("drive_tuning", message)
 
-    def test_motion_intent_uses_default_tuning_not_the_gamepad_command(self):
-        # An active intent mixes with the motion service's own DriveTuning defaults,
-        # independent of whatever the gamepad sent. (Gamepad tuning no longer rides
-        # on the drive command at all, so this is now structural, not just ignored.)
+    def test_motion_intent_uses_configured_tuning_not_the_gamepad_command(self):
+        # An active intent mixes with the motion service's own configured tuning
+        # (defaults here), independent of whatever the gamepad sent. (Gamepad
+        # tuning no longer rides on the drive command at all.)
         runner = self._runner(FakeMotor())
         drive = drive_command()
 
@@ -478,6 +612,25 @@ class RobotMotionTest(unittest.TestCase):
 
         self.assertEqual(left_qpps, 181)
         self.assertEqual(right_qpps, -181)
+
+    def test_motion_intent_uses_loaded_speed_scale(self):
+        # main() forwards the loaded drive tuning into MotionConfig, so a tuned
+        # speed_scale changes intent wheel speeds the same way it changes teleop.
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, speed_scale=0.5),
+            motor_factory=lambda: FakeMotor(),
+            sleep=lambda _seconds: None,
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+
+        _, left_qpps, right_qpps = runner._target_from_drive_or_intent(
+            drive_command(),
+            MotionCommand(linear_x=0.0, angular_z=0.3),
+        )
+
+        self.assertEqual(left_qpps, 363)
+        self.assertEqual(right_qpps, -363)
 
     def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
         calls = 0

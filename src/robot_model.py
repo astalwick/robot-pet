@@ -20,8 +20,10 @@ from dataclasses import dataclass
 # --- Drive train ---------------------------------------------------------
 
 # 5203-2402-0019 motors (537.7 counts per output-shaft revolution) with nominal
-# 96 mm Hogback wheels mounted directly on the output shaft. WHEEL_DIAMETER_METERS
-# is the calibrated effective rolling diameter: 1.00 m commanded measured 0.97 m.
+# 96 mm Hogback wheels mounted directly on the output shaft. This is the nominal
+# diameter, not yet calibrated: a rolling test measured 0.97 m per 1.00 m
+# commanded, which suggests an effective diameter near 0.093. Remeasure and
+# update here when calibrating; it scales every distance move and odometry.
 WHEEL_DIAMETER_METERS = 0.096
 WHEEL_RADIUS_METERS = WHEEL_DIAMETER_METERS / 2
 ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7

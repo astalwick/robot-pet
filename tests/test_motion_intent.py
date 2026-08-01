@@ -480,6 +480,31 @@ class MotionIntentExecutorTest(unittest.TestCase):
         self.assertEqual(stalled.result, "turn_stalled")
         self.assertFalse(executor.is_active())
 
+    def test_turn_checking_phase_stalls_when_yaw_samples_freeze(self):
+        # After the target is crossed, the executor waits for a fresh yaw sample
+        # before deciding on a correction. If yaw samples freeze (the telemetry
+        # hub keeps replaying an old snapshot), that wait must give up rather
+        # than hold the executor busy — every later intent would get "busy".
+        executor = MotionIntentExecutor()
+        executor.start("turn", now=0.0, degrees=90)
+
+        executor.tick(now=0.0, gamepad_active=False, yaw_degrees=0.0, yaw_sample_time=10.0)
+        stopping = executor.tick(now=0.5, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.5)
+        self.assertTrue(stopping.snap_stop)
+
+        waiting = executor.tick(now=0.6, gamepad_active=False, yaw_degrees=91.0, yaw_sample_time=10.5)
+        self.assertFalse(waiting.finished)
+
+        stalled = executor.tick(
+            now=0.5 + TURN_NO_PROGRESS_TIMEOUT_SECONDS + 0.1,
+            gamepad_active=False,
+            yaw_degrees=91.0,
+            yaw_sample_time=10.5,
+        )
+        self.assertTrue(stalled.finished)
+        self.assertEqual(stalled.result, "turn_stalled")
+        self.assertFalse(executor.is_active())
+
     def test_turn_completes_on_magnitude_regardless_of_yaw_sign(self):
         # Deliberate tradeoff: completion compares the magnitude turned, not the
         # sign, so a left-commanded turn still completes when the IMU reports the
@@ -836,6 +861,28 @@ class MotionIntentBridgeTest(unittest.TestCase):
         self.bridge.discard_pending()
         thread.join(timeout=2.0)
         self.assertEqual(holder[0], {"ok": False, "error": "stopped"})
+
+    def test_handler_timeout_does_not_discard_a_newer_queued_request(self):
+        # Handler A times out while its request is already executing; a second
+        # request queued in the meantime must survive, not be silently dropped.
+        self.bridge.INTENT_MAX_SECONDS = 0.3
+        thread_a, holder_a = self._send_request_threaded("express", kind="wiggle")
+        request_a, _complete_a = self._take_pending()
+        self.assertEqual(request_a["tool"], "express")
+
+        # A's handler is now blocked in its wait; later requests use the normal timeout.
+        time.sleep(0.05)
+        self.bridge.INTENT_MAX_SECONDS = MotionIntentBridge.INTENT_MAX_SECONDS
+        thread_b, holder_b = self._send_request_threaded("move", distance_meters=0.5)
+
+        thread_a.join(timeout=2.0)
+        self.assertEqual(holder_a[0], {"ok": False, "error": "internal_timeout"})
+
+        request_b, complete_b = self._take_pending()
+        self.assertEqual(request_b["tool"], "move")
+        complete_b({"ok": True, "result": "completed"})
+        thread_b.join(timeout=2.0)
+        self.assertEqual(holder_b[0], {"ok": True, "result": "completed"})
 
     def test_express_rejects_invalid_kind_at_socket(self):
         self.assertEqual(

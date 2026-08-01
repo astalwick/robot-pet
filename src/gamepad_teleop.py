@@ -82,23 +82,20 @@ class GamepadTeleopRunner:
         self.stop_requested = True
 
     def run_forever(self):
-        try:
-            while not self.stop_requested:
-                controller = self._wait_for_controller()
-                if self.stop_requested:
-                    break
+        while not self.stop_requested:
+            controller = self._wait_for_controller()
+            if self.stop_requested:
+                break
 
-                self._publish_gamepad_update(True)
-                motion = self._wait_for_motion(controller)
-                if self.stop_requested:
-                    controller.cleanup()
-                    break
-
-                self._run_connected(controller, motion)
+            self._publish_gamepad_update(True)
+            motion = self._wait_for_motion(controller)
+            if self.stop_requested:
                 controller.cleanup()
-                motion.close()
-        finally:
-            pass
+                break
+
+            self._run_connected(controller, motion)
+            controller.cleanup()
+            motion.close()
 
     def _wait_for_controller(self):
         self._set_drive_state("waiting_for_controller")
@@ -190,7 +187,8 @@ class GamepadTeleopRunner:
                 log.warning("command loop stall %.3fs target=(%d,%d)", cycle_elapsed, target.left_qpps, target.right_qpps)
                 last_stall_log_at = now
 
-            self.sleep(self.config.loop_interval)
+            # Sleep only the remainder of the interval so the loop holds its rate.
+            self.sleep(max(0.0, self.config.loop_interval - (self.clock() - cycle_started)))
 
         motion.send(
             DriveCommand(

@@ -30,8 +30,8 @@ except ModuleNotFoundError:
         ABS_HAT0Y = 17
         BTN_SOUTH = 304
         BTN_EAST = 305
-        BTN_WEST = 307
-        BTN_NORTH = 308
+        BTN_NORTH = 307
+        BTN_WEST = 308
         BTN_TL = 310
         BTN_TR = 311
         BTN_SELECT = 314
@@ -197,8 +197,13 @@ class ControllerDriver:
         return self._thread is not None and self._thread.is_alive()
     
     def stop(self):
-        """Stop reading controller input."""
+        """Stop reading controller input and release the device."""
         self._running = False
+        # Close the device first: the reader blocks on the fd, so this is what
+        # actually wakes it. Joining before closing would eat the full timeout.
+        if self.device is not None:
+            self.device.close()
+            self.device = None
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
@@ -266,7 +271,8 @@ class ControllerDriver:
     
     def _handle_button(self, code: int, value: int):
         """Handle button press/release event."""
-        pressed = value == 1
+        # EV_KEY values: 0 = release, 1 = press, 2 = autorepeat (still held).
+        pressed = value != 0
         
         if code == self.BTN_A:
             self.state.a = pressed
@@ -294,6 +300,3 @@ class ControllerDriver:
     def cleanup(self):
         """Stop reading and release resources."""
         self.stop()
-        if self.device is not None:
-            self.device.close()
-        self.device = None

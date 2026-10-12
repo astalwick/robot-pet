@@ -40,9 +40,11 @@ hand spike, and the robot runs all eleven plain services on Ubuntu 26.04
 wake-word end-to-end, LLM and gamepad still to be exercised by hand). Phase 0
 step 8 (ROS package availability) is closed: every `ros-lyrical-*` package this
 plan and the SLAM follow-on need is in the main apt repo as of 2026-09-18 — see
-the risks table. Still open from Phase 1: the ROS install step in `setup.sh`,
-`ros.env`, `scripts/ros-node.sh`, the `pre-ros2-ubuntu-parity` tag, and
-deleting `scripts/ubuntu-probe.sh`.
+the risks table. **Phase 1 complete 2026-10-12:** ROS 2 Lyrical installed through `setup.sh`,
+`ros.env` + `scripts/ros-node.sh` in place, tag `pre-ros2-ubuntu-parity`
+pushed. Measured with the whole robot running plus Nav2 and slam_toolbox
+launched idle: ~2.8 GB available of 4 GB, plus 1.9 GB zram swap unused.
+venv interop (rclpy + message types + pip numpy) confirmed.
 
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 

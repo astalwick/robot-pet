@@ -4,6 +4,7 @@ set -euo pipefail
 ALL_SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-state-publisher.service
   robot-battery.service
   robot-pi-battery.service
   robot-motion.service
@@ -29,6 +30,7 @@ STOP_ORDER=(
   robot-motion.service
   robot-pi-battery.service
   robot-battery.service
+  robot-state-publisher.service
   robot-telemetry.service
   robot-brain.service
   robot-web-dashboard.service
@@ -36,6 +38,7 @@ STOP_ORDER=(
 START_ORDER=(
   robot-brain.service
   robot-telemetry.service
+  robot-state-publisher.service
   robot-sensors.service
   robot-battery.service
   robot-pi-battery.service
@@ -71,6 +74,7 @@ normalize_service() {
   case "$name" in
     brain) echo robot-brain.service; return ;;
     telemetry) echo robot-telemetry.service; return ;;
+    state-publisher|urdf) echo robot-state-publisher.service; return ;;
     battery) echo robot-battery.service; return ;;
     pi-battery|ups) echo robot-pi-battery.service; return ;;
     motion) echo robot-motion.service; return ;;
@@ -89,7 +93,7 @@ normalize_service() {
     return
   fi
   echo "Unknown service: $1" >&2
-  echo "Known services: brain telemetry battery pi-battery motion twist-mux camera gamepad-teleop vision voice sensors dashboard foxglove heartbeat" >&2
+  echo "Known services: brain telemetry state-publisher battery pi-battery motion twist-mux camera gamepad-teleop vision voice sensors dashboard foxglove heartbeat" >&2
   exit 1
 }
 

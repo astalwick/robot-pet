@@ -80,8 +80,18 @@ def imu_fields(imu: dict[str, Any]) -> dict[str, Any] | None:
 
 # sensor_msgs/BatteryState constants
 POWER_SUPPLY_STATUS_UNKNOWN = 0
+POWER_SUPPLY_STATUS_CHARGING = 1
+POWER_SUPPLY_STATUS_DISCHARGING = 2
+POWER_SUPPLY_STATUS_NOT_CHARGING = 3
 POWER_SUPPLY_HEALTH_UNKNOWN = 0
+POWER_SUPPLY_TECHNOLOGY_LION = 2
 POWER_SUPPLY_TECHNOLOGY_LIPO = 3
+# hub pi_battery power_state -> BatteryState.power_supply_status
+PI_POWER_SUPPLY_STATUS = {
+    "charging": POWER_SUPPLY_STATUS_CHARGING,
+    "discharging": POWER_SUPPLY_STATUS_DISCHARGING,
+    "standby": POWER_SUPPLY_STATUS_NOT_CHARGING,
+}
 
 # nav_msgs/Odometry covariances (6x6 row-major: x, y, z, roll, pitch, yaw).
 # Planar robot: large values on the axes we never estimate.
@@ -120,4 +130,23 @@ def battery_state_fields(motor_battery: dict[str, Any]) -> dict[str, Any] | None
         "power_supply_health": POWER_SUPPLY_HEALTH_UNKNOWN,
         "power_supply_technology": POWER_SUPPLY_TECHNOLOGY_LIPO,
         "present": True,
+    }
+
+
+def pi_battery_state_fields(pi_battery: dict[str, Any]) -> dict[str, Any] | None:
+    """Map the hub pi_battery dict (Waveshare UPS HAT E, 4x 21700 Li-ion) to BatteryState fields."""
+    if pi_battery.get("pack_voltage") is None:
+        return None
+    remaining_mah = pi_battery.get("remaining_mah")
+    return {
+        "frame_id": "base_link",
+        "voltage": float(pi_battery["pack_voltage"]),
+        "current": float(pi_battery["current_amps"]),
+        "charge": remaining_mah / 1000 if remaining_mah is not None else math.nan,
+        "percentage": pi_battery["percent"] / 100,
+        "power_supply_status": PI_POWER_SUPPLY_STATUS.get(pi_battery.get("power_state"), POWER_SUPPLY_STATUS_UNKNOWN),
+        "power_supply_health": POWER_SUPPLY_HEALTH_UNKNOWN,
+        "power_supply_technology": POWER_SUPPLY_TECHNOLOGY_LION,
+        "present": True,
+        "cell_voltage": [float(volts) for volts in pi_battery.get("cell_voltages", [])],
     }

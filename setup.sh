@@ -10,6 +10,7 @@ REPO_HTTPS="https://github.com/astalwick/robot-pet"
 ROBOT_SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-state-publisher.service
   robot-sensors.service
   robot-battery.service
   robot-pi-battery.service
@@ -35,6 +36,7 @@ ROBOT_SERVICES_STOP_ORDER=(
   robot-motion.service
   robot-pi-battery.service
   robot-battery.service
+  robot-state-publisher.service
   robot-telemetry.service
   robot-web-dashboard.service
   robot-brain.service

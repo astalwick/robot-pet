@@ -76,6 +76,16 @@ beyond the plan text:
   the RoboClaw wait loop wakes on a twist. Zero twists do not hold the rail.
 `/battery/motor` publishes nothing while the rail is off (no pack voltage).
 
+**Phase 5 complete 2026-10-12:** `gamepad_teleop_node.py` publishes
+`/cmd_vel_teleop`; `robot-twist-mux.service` (apt `twist_mux`,
+`config/twist_mux.yaml`) merges it with the reserved `/cmd_vel_nav` slot into
+`/cmd_vel`. The drive socket, `control/motion_drive.py` and the
+`controller_reader_alive` stop path are gone; the teleop runner publishes one
+zero twist on reader death, disconnect or stop and then goes quiet, leaving
+robot-motion's deadman as the backstop. Verified on the Pi: gamepad drive
+through DDS, stop on teleop kill and on dongle pull, dashboard panels as
+before. Arbitration still reads the muxed `/cmd_vel` (see the Phase 7 note).
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was

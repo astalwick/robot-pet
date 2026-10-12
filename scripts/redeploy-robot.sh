@@ -10,6 +10,7 @@ DEPLOYED_REV_FILE="${ROBOT_PET_DEPLOYED_REV_FILE:-$REPO_DIR/.git/robot-pet-deplo
 SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-state-publisher.service
   robot-battery.service
   robot-pi-battery.service
   robot-motion.service
@@ -35,12 +36,14 @@ STOP_SERVICES=(
   robot-motion.service
   robot-pi-battery.service
   robot-battery.service
+  robot-state-publisher.service
   robot-telemetry.service
   robot-brain.service
 )
 START_SERVICES=(
   robot-brain.service
   robot-telemetry.service
+  robot-state-publisher.service
   robot-sensors.service
   robot-battery.service
   robot-pi-battery.service
@@ -95,7 +98,7 @@ plan_service_restarts() {
       src/robot_battery.py)
         want_restart robot-battery.service
         ;;
-      src/robot_pi_battery.py)
+      src/robot_pi_battery.py | src/ros_nodes/pi_battery_node.py)
         want_restart robot-pi-battery.service
         ;;
       src/ros_nodes/gamepad_teleop_node.py)
@@ -115,6 +118,7 @@ plan_service_restarts() {
       src/ros_nodes/ros_messages.py)
         want_restart robot-sensors.service
         want_restart robot-motion.service
+        want_restart robot-pi-battery.service
         ;;
       src/robot_voice.py | src/voice/*)
         want_restart robot-voice.service
@@ -172,6 +176,9 @@ plan_service_restarts() {
       src/ros_nodes/heartbeat_node.py)
         want_restart robot-heartbeat.service
         ;;
+      urdf/robot.urdf | scripts/generate-urdf.py)
+        want_restart robot-state-publisher.service
+        ;;
       config/twist_mux.yaml)
         want_restart robot-twist-mux.service
         ;;
@@ -181,6 +188,7 @@ plan_service_restarts() {
         want_restart robot-sensors.service
         want_restart robot-motion.service
         want_restart gamepad-teleop.service
+        want_restart robot-pi-battery.service
         ;;
       systemd/*)
         want_restart "$(basename "$path")"

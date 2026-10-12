@@ -11,6 +11,7 @@ SETUP = REPO_ROOT / "setup.sh"
 ALL_SERVICES = {
     "robot-brain.service",
     "robot-telemetry.service",
+    "robot-state-publisher.service",
     "robot-battery.service",
     "robot-pi-battery.service",
     "robot-motion.service",
@@ -53,7 +54,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-motion.service")
         elif path == "src/robot_battery.py":
             want("robot-battery.service")
-        elif path == "src/robot_pi_battery.py":
+        elif path in ("src/robot_pi_battery.py", "src/ros_nodes/pi_battery_node.py"):
             want("robot-pi-battery.service")
         elif path == "src/ros_nodes/gamepad_teleop_node.py":
             want("gamepad-teleop.service")
@@ -68,6 +69,7 @@ def planned_services(paths: list[str]) -> set[str]:
         elif path == "src/ros_nodes/ros_messages.py":
             want("robot-sensors.service")
             want("robot-motion.service")
+            want("robot-pi-battery.service")
         elif path == "src/robot_voice.py" or path.startswith("src/voice/"):
             want("robot-voice.service")
         elif path == "src/robot_web_dashboard.py" or path.startswith("src/web_dashboard_static/"):
@@ -112,6 +114,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-web-dashboard.service")
         elif path == "src/ros_nodes/heartbeat_node.py":
             want("robot-heartbeat.service")
+        elif path in ("urdf/robot.urdf", "scripts/generate-urdf.py"):
+            want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
         elif path == "scripts/ros-node.sh":
@@ -119,6 +123,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-sensors.service")
             want("robot-motion.service")
             want("gamepad-teleop.service")
+            want("robot-pi-battery.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -237,13 +242,22 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertEqual(planned_services(["src/ros_nodes/sensors_node.py"]), {"robot-sensors.service"})
         self.assertEqual(planned_services(["src/ros_nodes/motion_node.py"]), {"robot-motion.service"})
         self.assertEqual(
-            planned_services(["src/ros_nodes/ros_messages.py"]), {"robot-sensors.service", "robot-motion.service"}
+            planned_services(["src/ros_nodes/ros_messages.py"]),
+            {"robot-sensors.service", "robot-motion.service", "robot-pi-battery.service"},
         )
         self.assertEqual(planned_services(["src/ros_nodes/gamepad_teleop_node.py"]), {"gamepad-teleop.service"})
         self.assertEqual(planned_services(["config/twist_mux.yaml"]), {"robot-twist-mux.service"})
+        self.assertEqual(planned_services(["src/ros_nodes/pi_battery_node.py"]), {"robot-pi-battery.service"})
+        self.assertEqual(planned_services(["urdf/robot.urdf"]), {"robot-state-publisher.service"})
         self.assertEqual(
             planned_services(["scripts/ros-node.sh"]),
-            {"robot-heartbeat.service", "robot-sensors.service", "robot-motion.service", "gamepad-teleop.service"},
+            {
+                "robot-heartbeat.service",
+                "robot-sensors.service",
+                "robot-motion.service",
+                "gamepad-teleop.service",
+                "robot-pi-battery.service",
+            },
         )
 
     def test_dashboard_restart_does_not_kill_systemctl_child(self):

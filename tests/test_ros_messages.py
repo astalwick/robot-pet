@@ -8,9 +8,13 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from ros_nodes.ros_messages import (
     INFRARED,
+    POWER_SUPPLY_STATUS_CHARGING,
+    POWER_SUPPLY_STATUS_DISCHARGING,
+    POWER_SUPPLY_TECHNOLOGY_LION,
     POWER_SUPPLY_TECHNOLOGY_LIPO,
     UNKNOWN_COVARIANCE,
     battery_state_fields,
+    pi_battery_state_fields,
     imu_fields,
     odometry_fields,
     quaternion_from_euler_degrees,
@@ -125,6 +129,36 @@ class BatteryStateFieldsTest(unittest.TestCase):
 
     def test_unknown_percentage_is_nan(self):
         self.assertTrue(math.isnan(battery_state_fields({"pack_voltage": 11.7})["percentage"]))
+
+
+class PiBatteryStateFieldsTest(unittest.TestCase):
+    def test_no_voltage_returns_none(self):
+        self.assertIsNone(pi_battery_state_fields({"pack_voltage": None, "percent": None}))
+
+    def test_charging_reading(self):
+        fields = pi_battery_state_fields(
+            {
+                "pack_voltage": 15.2,
+                "current_amps": 1.4,
+                "percent": 80,
+                "remaining_mah": 4000,
+                "cell_voltages": [3.8, 3.8, 3.8, 3.8],
+                "power_state": "charging",
+            }
+        )
+        self.assertEqual(fields["voltage"], 15.2)
+        self.assertEqual(fields["current"], 1.4)
+        self.assertAlmostEqual(fields["charge"], 4.0)
+        self.assertAlmostEqual(fields["percentage"], 0.8)
+        self.assertEqual(fields["power_supply_status"], POWER_SUPPLY_STATUS_CHARGING)
+        self.assertEqual(fields["power_supply_technology"], POWER_SUPPLY_TECHNOLOGY_LION)
+        self.assertEqual(fields["cell_voltage"], [3.8, 3.8, 3.8, 3.8])
+
+    def test_discharging_status(self):
+        fields = pi_battery_state_fields(
+            {"pack_voltage": 14.0, "current_amps": -0.9, "percent": 50, "remaining_mah": 2500, "power_state": "discharging"}
+        )
+        self.assertEqual(fields["power_supply_status"], POWER_SUPPLY_STATUS_DISCHARGING)
 
 
 if __name__ == "__main__":

@@ -742,6 +742,29 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(left_qpps, 363)
         self.assertEqual(right_qpps, -363)
 
+    def test_moving_twist_requests_motor_power(self):
+        runner = self._runner(FakeMotor())
+        self.assertFalse(runner._motion_power_requested())
+
+        runner.on_twist_command(MotionCommand(linear_x=0.0, angular_z=0.0))
+        self.assertFalse(runner._motion_power_requested())
+
+        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
+        self.assertTrue(runner._motion_power_requested())
+
+    def test_wait_for_roboclaw_probes_on_twist(self):
+        motor = FakeMotor()
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
+
+        self.assertIs(runner._wait_for_roboclaw(), motor)
+
     def test_wait_for_roboclaw_does_not_probe_without_power_reason(self):
         calls = 0
 

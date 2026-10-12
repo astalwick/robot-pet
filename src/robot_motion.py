@@ -347,7 +347,7 @@ class MotionRunner:
             self._service_stop_requests()
             self._service_intent_requests(now)
             self._fail_intent_if_roboclaw_wait_timed_out(now)
-            drive = self._get_drive_command()
+            drive = self._get_drive_command() or self._twist_drive_command()
             self._publish_waiting_telemetry(drive, roboclaw_ready=False)
             if drive is None and not self._motion_power_requested():
                 self.sleep(self.config.retry_interval)
@@ -723,7 +723,13 @@ class MotionRunner:
         )
 
     def _motion_power_requested(self) -> bool:
-        return self.intent_executor.is_active() or self.pending_intent_complete is not None
+        # robot-battery switches the RoboClaw rail on for this flag (or a
+        # connected gamepad). A moving /cmd_vel stream has no gamepad, so it
+        # asks here; the rail holds a few seconds after the stream goes quiet.
+        if self.intent_executor.is_active() or self.pending_intent_complete is not None:
+            return True
+        twist = self._get_twist_command()
+        return twist is not None and (twist.linear_x != 0.0 or twist.angular_z != 0.0)
 
     def _fail_intent_if_roboclaw_wait_timed_out(self, now: float) -> None:
         if not self._motion_power_requested():

@@ -9,16 +9,12 @@ REPO_HTTPS="https://github.com/astalwick/robot-pet"
 echo "=== Robo-Pet Setup ==="
 echo ""
 
-# Install base packages (idempotent - apt handles already-installed)
-echo "[1/17] Installing base packages..."
-sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools avahi-daemon python3-lgpio
-
-
 # Ubuntu Server ships a few daemons that do nothing for a robot and together
 # hold ~300 MB on the 4 GB Pi: snapd, fwupd, packagekit, and the unattended
 # apt timers (which also grab the apt lock and CPU at random). Disable rather
-# than purge so the ubuntu-server metapackage stays intact.
-echo "[2/17] Disabling Ubuntu baggage and adding zram swap..."
+# than purge so the ubuntu-server metapackage stays intact. Runs first so
+# unattended-upgrades can't hold the apt lock through the rest of setup.
+echo "[1/17] Disabling Ubuntu baggage and adding zram swap..."
 sudo systemctl disable --now snapd.socket snapd.service snapd.seeded.service \
     fwupd.service fwupd-refresh.timer packagekit.service \
     unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
@@ -31,6 +27,11 @@ ALGO=zstd
 PERCENT=50
 ZRAM
 sudo systemctl restart zramswap.service
+
+# Install base packages (idempotent - apt handles already-installed)
+echo "[2/17] Installing base packages..."
+sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools avahi-daemon python3-lgpio
+
 
 # Add user to dialout group for serial port access (idempotent)
 echo "[3/17] Adding $USER to dialout group..."

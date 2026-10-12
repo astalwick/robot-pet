@@ -6,6 +6,38 @@ VENV_PATH="$REPO_DIR/.venv"
 LOG_DIR="/var/log/robot-pet"
 REPO_HTTPS="https://github.com/astalwick/robot-pet"
 
+# Start order; foxglove and the ROS heartbeat come last (nothing depends on them).
+ROBOT_SERVICES=(
+  robot-brain.service
+  robot-telemetry.service
+  robot-sensors.service
+  robot-battery.service
+  robot-pi-battery.service
+  robot-motion.service
+  robot-camera.service
+  gamepad-teleop.service
+  robot-vision.service
+  robot-voice.service
+  robot-web-dashboard.service
+  robot-foxglove.service
+  robot-heartbeat.service
+)
+ROBOT_SERVICES_STOP_ORDER=(
+  robot-heartbeat.service
+  robot-foxglove.service
+  robot-vision.service
+  gamepad-teleop.service
+  robot-camera.service
+  robot-voice.service
+  robot-sensors.service
+  robot-motion.service
+  robot-pi-battery.service
+  robot-battery.service
+  robot-telemetry.service
+  robot-web-dashboard.service
+  robot-brain.service
+)
+
 echo "=== Robo-Pet Setup ==="
 echo ""
 
@@ -254,50 +286,20 @@ chmod +x "$REPO_DIR/scripts/install-service.sh"
 chmod +x "$REPO_DIR/restart.sh"
 SYSTEMCTL_PATH="$(command -v systemctl)"
 SHUTDOWN_PATH="$(command -v shutdown)"
+# One line per service per verb: Ubuntu's sudo-rs forbids wildcards in
+# sudoers command arguments, so each unit has to be spelled out.
 SUDOERS_TMP="$(mktemp)"
-cat >"$SUDOERS_TMP" <<SUDOERS
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-vision.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-voice.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-sensors.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-pi-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH enable robot-motion.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-brain.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-telemetry.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start gamepad-teleop.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-camera.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-vision.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-voice.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-sensors.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-pi-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH start robot-motion.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-brain.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-telemetry.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop gamepad-teleop.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-camera.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-vision.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-voice.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-sensors.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-pi-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH stop robot-motion.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-brain.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-telemetry.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart gamepad-teleop.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-camera.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-vision.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-voice.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-sensors.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-pi-battery.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-motion.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart robot-web-dashboard.service
-$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service
-$USER ALL=(root) NOPASSWD: $SHUTDOWN_PATH -h now
-$USER ALL=(root) NOPASSWD: $REPO_DIR/scripts/install-service.sh
-SUDOERS
+{
+  echo "$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH daemon-reload"
+  for service in "${ROBOT_SERVICES[@]}"; do
+    for verb in enable start stop restart; do
+      echo "$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH $verb $service"
+    done
+  done
+  echo "$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH restart --no-block robot-web-dashboard.service"
+  echo "$USER ALL=(root) NOPASSWD: $SHUTDOWN_PATH -h now"
+  echo "$USER ALL=(root) NOPASSWD: $REPO_DIR/scripts/install-service.sh"
+} >"$SUDOERS_TMP"
 sudo visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy
 rm "$SUDOERS_TMP"
@@ -375,51 +377,15 @@ for service_file in "$REPO_DIR/systemd/"*.service; do
   sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
 done
 sudo systemctl daemon-reload
-for service in \
-  robot-brain.service \
-  robot-telemetry.service \
-  robot-battery.service \
-  robot-pi-battery.service \
-  robot-motion.service \
-  gamepad-teleop.service \
-  robot-camera.service \
-  robot-vision.service \
-  robot-voice.service \
-  robot-sensors.service \
-  robot-web-dashboard.service
-do
+for service in "${ROBOT_SERVICES[@]}"; do
   echo "    enabling $service"
   sudo systemctl enable "$service"
 done
-for service in \
-  robot-vision.service \
-  gamepad-teleop.service \
-  robot-camera.service \
-  robot-voice.service \
-  robot-sensors.service \
-  robot-motion.service \
-  robot-pi-battery.service \
-  robot-battery.service \
-  robot-telemetry.service \
-  robot-web-dashboard.service \
-  robot-brain.service
-do
+for service in "${ROBOT_SERVICES_STOP_ORDER[@]}"; do
   echo "    stopping $service"
   sudo systemctl stop "$service"
 done
-for service in \
-  robot-brain.service \
-  robot-telemetry.service \
-  robot-sensors.service \
-  robot-battery.service \
-  robot-pi-battery.service \
-  robot-motion.service \
-  robot-camera.service \
-  gamepad-teleop.service \
-  robot-vision.service \
-  robot-voice.service \
-  robot-web-dashboard.service
-do
+for service in "${ROBOT_SERVICES[@]}"; do
   echo "    starting $service"
   sudo systemctl start "$service"
 done

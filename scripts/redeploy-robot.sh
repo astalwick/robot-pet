@@ -19,8 +19,12 @@ SERVICES=(
   robot-voice.service
   robot-sensors.service
   robot-web-dashboard.service
+  robot-foxglove.service
+  robot-heartbeat.service
 )
 STOP_SERVICES=(
+  robot-heartbeat.service
+  robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
   robot-camera.service
@@ -43,6 +47,8 @@ START_SERVICES=(
   gamepad-teleop.service
   robot-vision.service
   robot-voice.service
+  robot-foxglove.service
+  robot-heartbeat.service
 )
 
 declare -A RESTART_SERVICES=()
@@ -153,6 +159,13 @@ plan_service_restarts() {
         want_restart robot-sensors.service
         want_restart robot-web-dashboard.service
         ;;
+      src/ros_nodes/heartbeat_node.py)
+        want_restart robot-heartbeat.service
+        ;;
+      scripts/ros-node.sh)
+        # every ROS node runs through this wrapper
+        want_restart robot-heartbeat.service
+        ;;
       systemd/*)
         want_restart "$(basename "$path")"
         ;;
@@ -237,10 +250,8 @@ if [[ "$systemd_changed" -eq 1 ]]; then
     [[ "$path" == systemd/* ]] || continue
     service="$(basename "$path")"
     sudo -n "$REPO_DIR/scripts/install-service.sh" "$service"
-    if [[ "$service" == robot-vision.service || "$service" == robot-voice.service || "$service" == robot-sensors.service || "$service" == robot-battery.service || "$service" == robot-pi-battery.service || "$service" == robot-motion.service ]]; then
-      echo "enabling $service"
-      sudo systemctl enable "$service"
-    fi
+    echo "enabling $service"
+    sudo systemctl enable "$service"
   done <<< "$changed_files"
   sudo systemctl daemon-reload
   echo ""

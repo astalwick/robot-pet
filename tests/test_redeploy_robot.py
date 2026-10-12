@@ -20,6 +20,8 @@ ALL_SERVICES = {
     "robot-voice.service",
     "robot-sensors.service",
     "robot-web-dashboard.service",
+    "robot-foxglove.service",
+    "robot-heartbeat.service",
 }
 
 
@@ -102,6 +104,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-voice.service")
             want("robot-sensors.service")
             want("robot-web-dashboard.service")
+        elif path == "src/ros_nodes/heartbeat_node.py" or path == "scripts/ros-node.sh":
+            want("robot-heartbeat.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -204,10 +208,20 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertIn('for service_file in "$REPO_DIR/systemd/"*.service', body)
         self.assertIn('sudo install -m 0644 "$service_file"', body)
         self.assertIn("robot-battery.service", body)
-        self.assertIn("$SYSTEMCTL_PATH enable robot-battery.service", body)
-        self.assertIn("$SYSTEMCTL_PATH start robot-battery.service", body)
-        self.assertIn("$SYSTEMCTL_PATH stop robot-battery.service", body)
-        self.assertIn("$SYSTEMCTL_PATH restart robot-battery.service", body)
+        self.assertIn('for service in "${ROBOT_SERVICES[@]}"; do', body)
+        self.assertIn("for verb in enable start stop restart; do", body)
+        self.assertIn('echo "$USER ALL=(root) NOPASSWD: $SYSTEMCTL_PATH $verb $service"', body)
+
+    def test_setup_service_lists_cover_every_unit(self):
+        body = SETUP.read_text()
+        units = {path.name for path in (REPO_ROOT / "systemd").glob("*.service")}
+        for unit in units:
+            self.assertIn(f"  {unit}\n", body, unit)
+        self.assertEqual(units, ALL_SERVICES)
+
+    def test_ros_node_paths_restart_heartbeat(self):
+        self.assertEqual(planned_services(["src/ros_nodes/heartbeat_node.py"]), {"robot-heartbeat.service"})
+        self.assertEqual(planned_services(["scripts/ros-node.sh"]), {"robot-heartbeat.service"})
 
     def test_dashboard_restart_does_not_kill_systemctl_child(self):
         body = (REPO_ROOT / "systemd" / "robot-web-dashboard.service").read_text()

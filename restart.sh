@@ -13,8 +13,12 @@ ALL_SERVICES=(
   robot-voice.service
   robot-sensors.service
   robot-web-dashboard.service
+  robot-foxglove.service
+  robot-heartbeat.service
 )
 STOP_ORDER=(
+  robot-heartbeat.service
+  robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
   robot-camera.service
@@ -39,6 +43,8 @@ START_ORDER=(
   robot-vision.service
   robot-voice.service
   robot-web-dashboard.service
+  robot-foxglove.service
+  robot-heartbeat.service
 )
 
 usage() {
@@ -71,13 +77,15 @@ normalize_service() {
     voice) echo robot-voice.service; return ;;
     sensors) echo robot-sensors.service; return ;;
     web-dashboard|dashboard) echo robot-web-dashboard.service; return ;;
+    foxglove) echo robot-foxglove.service; return ;;
+    heartbeat) echo robot-heartbeat.service; return ;;
   esac
   if [[ "$name" == robot-* || "$name" == gamepad-teleop ]]; then
     echo "${name}.service"
     return
   fi
   echo "Unknown service: $1" >&2
-  echo "Known services: brain telemetry battery pi-battery motion camera gamepad-teleop vision voice sensors dashboard" >&2
+  echo "Known services: brain telemetry battery pi-battery motion camera gamepad-teleop vision voice sensors dashboard foxglove heartbeat" >&2
   exit 1
 }
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Robot ROS Heartbeat (scaffolding)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/scripts/ros-node.sh /home/pi/robot-pet/src/ros_nodes/heartbeat_node.py
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

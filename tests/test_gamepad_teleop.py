@@ -8,6 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.drive_tuning import DriveTuning
+from control.differential_drive import body_twist_to_wheel_qpps
 from gamepad_teleop import GamepadTeleopRunner, TeleopConfig
 
 logging.getLogger("gamepad-teleop").disabled = True
@@ -67,25 +68,21 @@ def fast_config(**overrides):
 
 
 class FakeMotion:
-    def __init__(self, connect_results=None, fail_send=False):
-        self.connect_results = list(connect_results or [True])
-        self.fail_send = fail_send
-        self.commands = []
-        self.closed = False
+    """Captures published twists, exposing them as the (left, right) qpps they map to."""
 
-    def connect(self):
-        if not self.connect_results:
-            return True
-        return self.connect_results.pop(0)
+    def __init__(self):
+        self.twists = []
 
-    def send(self, command):
-        if self.fail_send:
-            return False
-        self.commands.append((command.left_qpps, command.right_qpps))
-        return True
+    def publish(self, twist):
+        self.twists.append(twist)
 
-    def close(self):
-        self.closed = True
+    @property
+    def commands(self):
+        commands = []
+        for twist in self.twists:
+            wheels = body_twist_to_wheel_qpps(twist.linear_x, twist.angular_z)
+            commands.append((wheels.left_qpps, wheels.right_qpps))
+        return commands
 
 
 class GamepadTeleopRunnerTest(unittest.TestCase):
@@ -106,10 +103,11 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         runner = GamepadTeleopRunner(
             TeleopConfig(qpps=1000, drive_tuning=DriveTuning(speed_scale=0.25, turbo_scale=0.75)),
+            twist_publisher=motion.publish,
             sleep=sleep,
         )
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         # Full forward: 250 qpps normal, then 750 qpps once turbo (LB) engages — no ramp.
         self.assertEqual(motion.commands[:3], [(250, 250), (750, 750), (750, 750)])
@@ -128,9 +126,9 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             else:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), twist_publisher=motion.publish, sleep=sleep)
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         self.assertIn((250, 250), motion.commands)
         self.assertIn((0, 0), motion.commands)
@@ -143,9 +141,9 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         def sleep(_seconds):
             controller.on_disconnect()
 
-        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), twist_publisher=motion.publish, sleep=sleep)
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         self.assertEqual(motion.commands[-1], (0, 0))
 
@@ -163,23 +161,15 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             if sleeps > 2:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), twist_publisher=motion.publish, sleep=sleep)
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         self.assertIn((250, -250), motion.commands)
+        # One zero twist, then silence: robot-motion's deadman takes over.
         self.assertEqual(motion.commands[-1], (0, 0))
-
-    def test_motion_send_failure_stops_loop(self):
-        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
-        controller = FakeController(state)
-        motion = FakeMotion(fail_send=True)
-        runner = GamepadTeleopRunner(fast_config(), sleep=lambda _seconds: None)
-
-        runner._run_connected(controller, motion)
-
-        self.assertEqual(motion.commands, [])
-        self.assertEqual(runner.drive_state, "motion_send_failed")
+        self.assertEqual(motion.commands.count((0, 0)), 1)
+        self.assertEqual(runner.drive_state, "controller_lost")
 
     def test_steady_motion_heartbeats_drive_commands(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
@@ -193,35 +183,12 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
             if sleeps == 2:
                 runner.request_stop()
 
-        runner = GamepadTeleopRunner(fast_config(), sleep=sleep)
+        runner = GamepadTeleopRunner(fast_config(), twist_publisher=motion.publish, sleep=sleep)
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         self.assertGreaterEqual(motion.commands.count((250, 250)), 2)
         self.assertEqual(motion.commands[-1], (0, 0))
-
-    def test_run_forever_retries_motion_connect(self):
-        state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
-        controller = FakeController(state)
-        failed_motion = FakeMotion(connect_results=[False])
-        ready_motion = FakeMotion()
-        motions = iter([failed_motion, ready_motion])
-
-        def sleep(_seconds):
-            if ready_motion.commands:
-                runner.request_stop()
-
-        runner = GamepadTeleopRunner(
-            fast_config(),
-            controller_factory=lambda: controller,
-            motion_factory=lambda: next(motions),
-            sleep=sleep,
-        )
-
-        runner.run_forever()
-
-        self.assertEqual(failed_motion.commands, [])
-        self.assertIn((250, 250), ready_motion.commands)
 
     def test_run_forever_waits_for_controller(self):
         state = controller_state(left_stick_y=0.0, right_stick_x=0.0, rb=False, lb=False)
@@ -236,8 +203,8 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         runner = GamepadTeleopRunner(
             fast_config(),
+            twist_publisher=motion.publish,
             controller_factory=lambda: next(controllers),
-            motion_factory=lambda: motion,
             sleep=sleep,
         )
 
@@ -246,23 +213,20 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertFalse(missing_controller.cleaned_up)
         self.assertIn((0, 0), motion.commands)
 
-    def test_wait_for_motion_publishes_connected_gamepad(self):
-        state = controller_state()
-        controller = FakeController(state)
-        motion = FakeMotion(connect_results=[False])
-        published = []
+    def test_turn_publishes_positive_angular_z_for_left_turn(self):
+        # Right stick left spins left wheel back / right wheel forward: a left
+        # (counterclockwise) turn, which REP-103 reports as positive angular_z.
+        state = controller_state(left_stick_y=0.0, right_stick_x=-1.0, rb=True, lb=False)
+        motion = FakeMotion()
         runner = GamepadTeleopRunner(
-            fast_config(),
-            motion_factory=lambda: motion,
-            sleep=lambda _seconds: runner.request_stop(),
-            telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
+            fast_config(), twist_publisher=motion.publish, sleep=lambda _seconds: runner.request_stop()
         )
 
-        runner._wait_for_motion(controller)
+        runner._run_connected(FakeController(state))
 
-        gamepad_messages = [message for message in published if message.get("source") == "gamepad"]
-        self.assertTrue(gamepad_messages)
-        self.assertTrue(gamepad_messages[0]["connected"])
+        self.assertEqual(motion.commands[0], (-250, 250))
+        self.assertAlmostEqual(motion.twists[0].linear_x, 0.0)
+        self.assertGreater(motion.twists[0].angular_z, 0.0)
 
     def test_run_connected_heartbeats_connected_gamepad(self):
         state = controller_state()
@@ -271,11 +235,12 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         published = []
         runner = GamepadTeleopRunner(
             fast_config(),
+            twist_publisher=motion.publish,
             sleep=lambda _seconds: runner.request_stop(),
             telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
         )
 
-        runner._run_connected(controller, motion)
+        runner._run_connected(controller)
 
         self.assertTrue(any(message.get("source") == "gamepad" and message["connected"] for message in published))
 
@@ -292,6 +257,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
 
         runner = GamepadTeleopRunner(
             fast_config(),
+            twist_publisher=lambda _twist: None,
             sleep=sleep,
             clock=clock,
             telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
@@ -312,6 +278,7 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         published = []
         runner = GamepadTeleopRunner(
             fast_config(),
+            twist_publisher=lambda _twist: None,
             telemetry_publisher=lambda _socket_path, message: published.append(message) or True,
         )
 

@@ -1,14 +1,14 @@
 [Unit]
-Description=Gamepad Teleop - controller input to robot-motion
-After=robot-brain.service robot-telemetry.service robot-motion.service
-Wants=robot-brain.service robot-telemetry.service robot-motion.service
+Description=Gamepad Teleop - controller input to /cmd_vel_teleop
+After=robot-brain.service robot-telemetry.service robot-twist-mux.service
+Wants=robot-brain.service robot-telemetry.service robot-twist-mux.service
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/robot-pet/src
 Environment=PYTHONPATH=/home/pi/robot-pet/src
-ExecStart=/home/pi/robot-pet/.venv/bin/python /home/pi/robot-pet/src/gamepad_teleop.py
+ExecStart=/home/pi/robot-pet/scripts/ros-node.sh /home/pi/robot-pet/src/ros_nodes/gamepad_teleop_node.py
 Restart=always
 RestartSec=2
 StandardOutput=journal

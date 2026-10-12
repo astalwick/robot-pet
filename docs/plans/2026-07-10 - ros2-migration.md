@@ -61,6 +61,21 @@ range topics run at ~10 Hz although config says 20, because each tick is
 I2C-bound (five ToF reads plus an IMU wait of up to 50 ms). Pre-existing, not
 a regression; fine for the safety gate and costmaps.
 
+**Phase 4 complete 2026-10-12:** `motion_node.py` wraps `MotionRunner`;
+`/cmd_vel` in, `/odom` + `odom -> base_link` TF at a steady 20 Hz,
+`/battery/motor` at telemetry cadence. Verified on the Pi: angular twist
+spins the wheels in place with the right wheel forward, the pub's death stops
+them, gamepad and voice intents unchanged, dashboard unchanged. Two decisions
+beyond the plan text:
+- Encoders are now read every motor-loop tick (one extra RoboClaw read per
+  50 ms) instead of every fourth telemetry tick (0.8 s). Without this the
+  20 Hz TF would have republished a stale pose and smeared SLAM scans.
+  Encoder-distance moves reuse that read instead of making their own.
+- A fresh non-zero twist raises `motion_power_requested`, so robot-battery
+  switches the RoboClaw rail on for `/cmd_vel` with no gamepad connected, and
+  the RoboClaw wait loop wakes on a twist. Zero twists do not hold the rail.
+`/battery/motor` publishes nothing while the rail is off (no pack voltage).
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was
@@ -573,7 +588,10 @@ to be this file's single source — so generate, don't hand-write.
      decision: where voice motion intents rank against a nav goal (today
      intents run inside the motion node and are interrupted by gamepad
      activity; with nav publishing too, an intent and a nav goal would fight
-     tick-by-tick unless one of them yields).
+     tick-by-tick unless one of them yields). Phase 5 deliberately kept the
+     "non-zero muxed `/cmd_vel` ⇒ gamepad active" rule rather than subscribing
+     the motion node to `/cmd_vel_teleop` separately: until Nav2 publishes,
+     the two are identical, and the real question is this policy one.
    - **Map persistence.** slam_toolbox's serialized map + localization mode
      (or map_saver). Without it the `map` frame is rebuilt from scratch each
      boot and any saved landmark/place poses ("kitchen") are garbage across

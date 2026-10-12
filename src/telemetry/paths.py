@@ -1,7 +1,6 @@
 DEFAULT_PUBLISH_SOCKET = "/run/robot-pet/telemetry-pub.sock"
 DEFAULT_SUBSCRIBE_SOCKET = "/run/robot-pet/telemetry-sub.sock"
 DEFAULT_VOICE_COMMAND_SOCKET = "/run/robot-pet/voice-command.sock"
-DEFAULT_MOTION_DRIVE_SOCKET = "/run/robot-pet/motion-drive.sock"
 DEFAULT_MOTION_INTENT_SOCKET = "/run/robot-pet/motion-intent.sock"
 DEFAULT_MOTOR_BATTERY_CACHE = "/run/robot-pet/motor-battery-last.json"
 

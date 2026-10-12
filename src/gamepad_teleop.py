@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Gamepad teleop: reads controller input and sends drive commands to robot-motion."""
+"""Gamepad teleop: reads controller input and publishes body twists for robot-motion.
+
+The runner computes wheel QPPS targets exactly as before (deadzone, turn scale,
+turbo) and hands the equivalent body twist to an injected publisher. The ROS
+node in ros_nodes/gamepad_teleop_node.py publishes that twist on /cmd_vel_teleop;
+twist_mux forwards it to /cmd_vel for robot-motion.
+"""
 
 import argparse
-import signal
 import threading
 import time
 from collections import deque
@@ -11,8 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config.drive_tuning import DEFAULT_CONFIG_PATH, DEFAULT_QPPS, DriveTuning, DriveTuningConfigError, load_drive_tuning
-from control.differential_drive import DifferentialDriveMixer
-from control.motion_drive import DriveCommand, MotionDrivePublisher
+from control.commands import MotionCommand
+from control.differential_drive import DifferentialDriveMixer, wheel_qpps_to_body_twist
 from control.teleop import GamepadTeleopPolicy
 from drivers.controller import ControllerDriver
 from lib.log import setup_logging
@@ -24,7 +29,7 @@ from telemetry.messages import (
     link_loop_message,
     motor_battery_message,
 )
-from telemetry.paths import DEFAULT_MOTION_DRIVE_SOCKET, DEFAULT_PUBLISH_SOCKET
+from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
 
@@ -42,22 +47,21 @@ class TeleopConfig:
     loop_interval: float = 0.05
     retry_interval: float = 1.0
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
-    motion_drive_socket: str = DEFAULT_MOTION_DRIVE_SOCKET
 
 
 class GamepadTeleopRunner:
     def __init__(
         self,
         config: TeleopConfig,
+        twist_publisher: Callable[[MotionCommand], None],
         controller_factory: Callable[[], Any] | None = None,
-        motion_factory: Callable[[], Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         telemetry_publisher: Callable[[str, dict[str, Any]], bool] = publish_message,
     ):
         self.config = config
+        self.twist_publisher = twist_publisher
         self.controller_factory = controller_factory or self._controller_factory
-        self.motion_factory = motion_factory or self._motion_factory
         self.sleep = sleep
         self.clock = clock
         self.telemetry_publisher = telemetry_publisher
@@ -88,14 +92,8 @@ class GamepadTeleopRunner:
                 break
 
             self._publish_gamepad_update(True)
-            motion = self._wait_for_motion(controller)
-            if self.stop_requested:
-                controller.cleanup()
-                break
-
-            self._run_connected(controller, motion)
+            self._run_connected(controller)
             controller.cleanup()
-            motion.close()
 
     def _wait_for_controller(self):
         self._set_drive_state("waiting_for_controller")
@@ -107,19 +105,6 @@ class GamepadTeleopRunner:
                 log.info("controller connected")
                 return controller
             self._sleep_with_status_updates(self.config.retry_interval, connected=False)
-        return None
-
-    def _wait_for_motion(self, controller):
-        self._set_drive_state("waiting_for_motion")
-        while not self.stop_requested:
-            self._publish_gamepad_update(True)
-            self._publish_status_update(controller)
-            motion = self.motion_factory()
-            if motion.connect():
-                log.info("robot-motion drive socket connected")
-                return motion
-            log.info("waiting for robot-motion")
-            self._sleep_with_status_updates(self.config.retry_interval, controller=controller, connected=True)
         return None
 
     def _sleep_with_status_updates(self, duration: float, controller=None, connected: bool = False):
@@ -134,7 +119,7 @@ class GamepadTeleopRunner:
             if remaining > 0:
                 self.sleep(remaining)
 
-    def _run_connected(self, controller, motion):
+    def _run_connected(self, controller):
         disconnected = threading.Event()
         controller.start(on_disconnect=disconnected.set)
         last_stall_log_at = 0.0
@@ -151,7 +136,6 @@ class GamepadTeleopRunner:
                 next_status_at = now + STATUS_PUBLISH_INTERVAL
 
             command = self.policy.motion_from_state(controller.state)
-            wheels = self.mixer.mix(command)
             # robot-motion owns acceleration shaping (slew) for every motion source,
             # so we send the raw target and let it ease the command in and out.
             target = self.mixer.to_wheel_speeds(command, turbo=controller.state.lb)
@@ -162,22 +146,7 @@ class GamepadTeleopRunner:
                 log.error("%s; stopping", stop_reason)
                 break
 
-            drive_command = DriveCommand(
-                left_qpps=target.left_qpps,
-                right_qpps=target.right_qpps,
-                wheels={
-                    "left_command": wheels.left,
-                    "right_command": wheels.right,
-                    "left_target_qpps": target.left_qpps,
-                    "right_target_qpps": target.right_qpps,
-                },
-                drive_status=self._drive_status_payload(controller.reader_alive()),
-                link_loop=self._link_loop_payload(),
-            )
-            if not motion.send(drive_command):
-                stop_reason = "robot-motion drive socket send failed"
-                log.error("%s", stop_reason)
-                break
+            self.twist_publisher(wheel_qpps_to_body_twist(target.left_qpps, target.right_qpps))
 
             cycle_elapsed = self.clock() - cycle_started
             if (
@@ -190,26 +159,18 @@ class GamepadTeleopRunner:
             # Sleep only the remainder of the interval so the loop holds its rate.
             self.sleep(max(0.0, self.config.loop_interval - (self.clock() - cycle_started)))
 
-        motion.send(
-            DriveCommand(
-                left_qpps=0,
-                right_qpps=0,
-                wheels={"left_command": 0.0, "right_command": 0.0, "left_target_qpps": 0, "right_target_qpps": 0},
-                drive_status=self._drive_status_payload(controller.reader_alive()),
-                link_loop=self._link_loop_payload(),
-            )
-        )
+        # One zero twist, then silence: robot-motion's deadman is the backstop.
+        self.twist_publisher(MotionCommand(linear_x=0.0, angular_z=0.0))
         if disconnected.is_set():
             reason = controller.disconnect_reason or "controller disconnected"
             self._set_drive_state("controller_lost", reason)
             self._publish_gamepad_update(False)
             log.warning("%s; waiting for reconnect", reason)
         elif stop_reason is not None:
-            self._set_drive_state("motion_send_failed", stop_reason)
+            self._set_drive_state("controller_lost", stop_reason)
             log.warning("%s; waiting for reconnect", stop_reason)
         else:
             self._set_drive_state("stopped")
-
 
     def _link_loop_payload(self) -> dict[str, Any]:
         return link_loop_message(
@@ -274,12 +235,9 @@ class GamepadTeleopRunner:
     def _controller_factory(self):
         return ControllerDriver(deadzone=0.0, device_path=self.config.device)
 
-    def _motion_factory(self):
-        return MotionDrivePublisher(self.config.motion_drive_socket)
-
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Gamepad teleop service (sends commands to robot-motion).")
+    parser = argparse.ArgumentParser(description="Gamepad teleop service (publishes /cmd_vel_teleop).")
     parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Drive tuning JSON config path")
     parser.add_argument("--device", help="Read a specific /dev/input/event* controller device")
     parser.add_argument("--qpps", type=int, default=DEFAULT_QPPS, help="Configured RoboClaw max speed in encoder counts/sec")
@@ -291,16 +249,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loop-interval", type=float, default=0.05, help="Main control loop interval in seconds")
     parser.add_argument("--retry-interval", type=float, default=1.0, help="Reconnect retry interval in seconds")
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET, help="Telemetry hub publisher socket")
-    parser.add_argument(
-        "--motion-drive-socket",
-        default=DEFAULT_MOTION_DRIVE_SOCKET,
-        help="robot-motion drive command socket",
-    )
     return parser
 
 
-def main():
-    args = build_parser().parse_args()
+def build_config(args: argparse.Namespace) -> TeleopConfig:
     try:
         tuning_values = load_drive_tuning(args.config).to_dict()
     except DriveTuningConfigError as exc:
@@ -317,22 +269,11 @@ def main():
         value = getattr(args, key)
         if value is not None:
             tuning_values[key] = value
-    drive_tuning = DriveTuning.from_dict(tuning_values)
-
-    config = TeleopConfig(
+    return TeleopConfig(
         device=args.device,
         qpps=args.qpps,
-        drive_tuning=drive_tuning,
+        drive_tuning=DriveTuning.from_dict(tuning_values),
         loop_interval=args.loop_interval,
         retry_interval=args.retry_interval,
         telemetry_socket=args.telemetry_socket,
-        motion_drive_socket=args.motion_drive_socket,
     )
-    runner = GamepadTeleopRunner(config)
-    signal.signal(signal.SIGTERM, runner.request_stop)
-    signal.signal(signal.SIGINT, runner.request_stop)
-    runner.run_forever()
-
-
-if __name__ == "__main__":
-    main()

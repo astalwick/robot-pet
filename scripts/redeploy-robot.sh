@@ -13,6 +13,7 @@ SERVICES=(
   robot-battery.service
   robot-pi-battery.service
   robot-motion.service
+  robot-twist-mux.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -27,6 +28,7 @@ STOP_SERVICES=(
   robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
+  robot-twist-mux.service
   robot-camera.service
   robot-voice.service
   robot-sensors.service
@@ -43,6 +45,7 @@ START_SERVICES=(
   robot-battery.service
   robot-pi-battery.service
   robot-motion.service
+  robot-twist-mux.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -94,6 +97,9 @@ plan_service_restarts() {
         ;;
       src/robot_pi_battery.py)
         want_restart robot-pi-battery.service
+        ;;
+      src/ros_nodes/gamepad_teleop_node.py)
+        want_restart gamepad-teleop.service
         ;;
       src/gamepad_teleop.py | src/control/*)
         want_restart gamepad-teleop.service
@@ -166,11 +172,15 @@ plan_service_restarts() {
       src/ros_nodes/heartbeat_node.py)
         want_restart robot-heartbeat.service
         ;;
+      config/twist_mux.yaml)
+        want_restart robot-twist-mux.service
+        ;;
       scripts/ros-node.sh)
         # every ROS node runs through this wrapper
         want_restart robot-heartbeat.service
         want_restart robot-sensors.service
         want_restart robot-motion.service
+        want_restart gamepad-teleop.service
         ;;
       systemd/*)
         want_restart "$(basename "$path")"

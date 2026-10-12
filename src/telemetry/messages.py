@@ -19,10 +19,10 @@ from typing import Any
 #                            robot_model.SENSOR_MOUNTS by name for its frame_id
 #   motor_battery_message -> sensor_msgs/BatteryState
 #   pi_battery_message    -> sensor_msgs/BatteryState
-#   the drive command     -> geometry_msgs/Twist on /cmd_vel
-#                            (see control/motion_drive.py::DriveCommand;
-#                             the velocity<->qpps conversion already lives in
-#                             control/differential_drive.py)
+#   the drive command     -> geometry_msgs/Twist on /cmd_vel (done: gamepad-teleop
+#                            publishes /cmd_vel_teleop, twist_mux owns /cmd_vel;
+#                            the velocity<->qpps conversion lives in
+#                            control/differential_drive.py)
 #
 # Scaffolding — expected to be replaced, not ported: voice_update, vision_update,
 # gamepad_teleop_update, robot_motion_update and the other dashboard-hub payloads.

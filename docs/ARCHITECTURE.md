@@ -118,7 +118,7 @@ src/
 | `robot-motion` | RoboClaw owner, range-sensor safety, voice motion intents | Active |
 | `robot-battery` | MOSFET motor-rail power policy (GPIO only; see Body Phase 2) | Planned |
 
-`robot-motion` owns `MotorDriver` / RoboClaw, subscribes to sensor telemetry for safety gating, accepts drive commands on `/run/robot-pet/motion-drive.sock`, and hosts voice motion intents on `/run/robot-pet/motion-intent.sock`. Thresholds come from `sensors.json` (`safety.enabled`, cliff/forward mm limits, per-sensor `role`).
+`robot-motion` owns `MotorDriver` / RoboClaw, subscribes to sensor telemetry for safety gating, subscribes to `/cmd_vel` (ROS, fed by `twist_mux` from `/cmd_vel_teleop` and the reserved `/cmd_vel_nav`), and hosts voice motion intents on `/run/robot-pet/motion-intent.sock`. Thresholds come from `sensors.json` (`safety.enabled`, cliff/forward mm limits, per-sensor `role`).
 
 `robot-battery` (Body Phase 2, planned) would own the high-side MOSFET on the LiPo motor rail. It would stay running when the rail is off, subscribe to telemetry, and apply a power policy still under design in [body-phase-2.md](phases/body-phase-2.md#robot-battery--motor-rail-power) (brainstorm table — not spec). It would not open RoboClaw serial; that stays `robot-motion` once power is applied.
 

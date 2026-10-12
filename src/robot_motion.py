@@ -27,7 +27,6 @@ from config.sensors import (
 )
 from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer, body_twist_to_wheel_qpps, clamp, wheel_qpps_to_body_twist
-from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
 from control.odometry import DiffDriveOdometry, Pose
 from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
@@ -43,7 +42,6 @@ from telemetry.messages import (
     wheel_message,
 )
 from telemetry.paths import (
-    DEFAULT_MOTION_DRIVE_SOCKET,
     DEFAULT_MOTION_INTENT_SOCKET,
     DEFAULT_PUBLISH_SOCKET,
     DEFAULT_SUBSCRIBE_SOCKET,
@@ -77,6 +75,15 @@ class EncoderMove:
 
 
 @dataclass(frozen=True)
+class DriveCommand:
+    """One tick's wheel target plus the normalized wheels the dashboard shows."""
+
+    left_qpps: int
+    right_qpps: int
+    wheels: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class MotionConfig:
     port: str = "/dev/serial0"
     address: int = 0x80
@@ -94,7 +101,6 @@ class MotionConfig:
     sensors_config_path: str = DEFAULT_CONFIG_PATH
     telemetry_socket: str = DEFAULT_PUBLISH_SOCKET
     telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET
-    drive_socket: str = DEFAULT_MOTION_DRIVE_SOCKET
     motion_intent_socket: str = DEFAULT_MOTION_INTENT_SOCKET
 
 
@@ -125,10 +131,7 @@ class MotionRunner:
         self._sensors_lock = threading.Lock()
 
         self._drive_lock = threading.Lock()
-        self._latest_drive: DriveCommand | None = None
-        self._latest_drive_at: float | None = None
-        self._drive_listener: DriveCommandListener | None = None
-        # ROS /cmd_vel path, fed by motion_node.py. Same deadman as the socket.
+        # /cmd_vel, fed by motion_node.py; DRIVE_COMMAND_STALE_SECONDS is the deadman.
         self._latest_twist: MotionCommand | None = None
         self._latest_twist_at: float | None = None
 
@@ -187,7 +190,6 @@ class MotionRunner:
     def run_forever(self) -> None:
         telemetry_thread = threading.Thread(target=self._telemetry_subscribe_loop, daemon=True)
         telemetry_thread.start()
-        self._start_drive_listener()
         self._start_intent_bridge()
 
         try:
@@ -213,32 +215,6 @@ class MotionRunner:
                     self._fail_pending_intent(intent_failure)
         finally:
             self._stop_intent_bridge()
-            self._stop_drive_listener()
-
-    def _start_drive_listener(self) -> None:
-        self._drive_listener = DriveCommandListener(self.config.drive_socket, self._on_drive_command)
-        self._drive_listener.start()
-        log.info("motion drive socket at %s", self.config.drive_socket)
-
-    def _stop_drive_listener(self) -> None:
-        if self._drive_listener is not None:
-            self._drive_listener.stop()
-            self._drive_listener = None
-
-    def _on_drive_command(self, command: DriveCommand) -> None:
-        with self._drive_lock:
-            self._latest_drive = command
-            self._latest_drive_at = self.clock()
-
-    def _get_drive_command(self) -> DriveCommand | None:
-        with self._drive_lock:
-            command = self._latest_drive
-            seen_at = self._latest_drive_at
-        if command is None or seen_at is None:
-            return None
-        if self.clock() - seen_at > DRIVE_COMMAND_STALE_SECONDS:
-            return None
-        return command
 
     def on_twist_command(self, command: MotionCommand) -> None:
         with self._drive_lock:
@@ -267,8 +243,6 @@ class MotionRunner:
                 "left_command": clamp(target.left_qpps / self.config.qpps, -1.0, 1.0),
                 "right_command": clamp(target.right_qpps / self.config.qpps, -1.0, 1.0),
             },
-            drive_status={"state": self.drive_state, "controller_reader_alive": None},
-            link_loop={},
         )
 
     def odometry_state(self) -> tuple[Pose, MotionCommand]:
@@ -347,7 +321,7 @@ class MotionRunner:
             self._service_stop_requests()
             self._service_intent_requests(now)
             self._fail_intent_if_roboclaw_wait_timed_out(now)
-            drive = self._get_drive_command() or self._twist_drive_command()
+            drive = self._twist_drive_command()
             self._publish_waiting_telemetry(drive, roboclaw_ready=False)
             if drive is None and not self._motion_power_requested():
                 self.sleep(self.config.retry_interval)
@@ -395,8 +369,7 @@ class MotionRunner:
             # slam_toolbox interpolates the pose from TF for every lidar scan.
             self._accumulate_odometry(motor)
 
-            # The gamepad socket wins while both paths exist (Phase 5 retires it).
-            drive = self._get_drive_command() or self._twist_drive_command()
+            drive = self._twist_drive_command()
             if drive is None:
                 intent_command = self._tick_intent(now, gamepad_active=False)
                 if intent_command is None:
@@ -479,13 +452,6 @@ class MotionRunner:
             target = WheelSpeedCommand(left_qpps=left_qpps, right_qpps=right_qpps)
             target_is_zero = target.left_qpps == 0 and target.right_qpps == 0
 
-            reader_alive = drive.drive_status.get("controller_reader_alive")
-            if reader_alive is False and (closed_loop_active or not target_is_zero):
-                stop_reason = drive.drive_status.get("stop_reason") or "controller reader stopped"
-                intent_failure = "controller_lost"
-                log.error("%s; stopping motors", stop_reason)
-                break
-
             if target_is_zero:
                 if closed_loop_active:
                     if not self._set_wheel_speeds(motor, 0, 0, now=now):
@@ -510,7 +476,6 @@ class MotionRunner:
 
             if now >= next_telemetry:
                 self._publish_telemetry(
-                    drive,
                     wheels,
                     target,
                     motor,
@@ -534,13 +499,7 @@ class MotionRunner:
         return left != 0.0 or right != 0.0
 
     def _intent_only_drive_command(self) -> DriveCommand:
-        return DriveCommand(
-            left_qpps=0,
-            right_qpps=0,
-            wheels={"left_command": 0.0, "right_command": 0.0},
-            drive_status={"state": self.drive_state, "controller_reader_alive": None},
-            link_loop={},
-        )
+        return DriveCommand(left_qpps=0, right_qpps=0, wheels={"left_command": 0.0, "right_command": 0.0})
 
     def _target_from_drive_or_intent(
         self,
@@ -559,33 +518,26 @@ class MotionRunner:
         )
 
     def _publish_waiting_telemetry(self, drive: DriveCommand | None = None, roboclaw_ready: bool = False) -> None:
-        drive_status = self._drive_status_payload(roboclaw_ready=roboclaw_ready)
-        if drive is None:
-            wheels = {"read_ok": False}
-            link_loop = link_loop_message(
+        wheels = {"read_ok": False}
+        if drive is not None:
+            wheels.update(drive.wheels)
+
+        message = robot_motion_update(
+            wheels=wheels,
+            motor_battery=motor_battery_message(None),
+            link_loop=link_loop_message(
                 read_success_rate=None,
                 consecutive_read_failures=0,
                 last_good_read_age_seconds=None,
                 telemetry_latency_ms=None,
                 command_loop_hz=None,
-            )
-        else:
-            wheels = dict(drive.wheels)
-            wheels["read_ok"] = False
-            link_loop = drive.link_loop
-            drive_status["controller_reader_alive"] = drive.drive_status.get("controller_reader_alive")
-
-        message = robot_motion_update(
-            wheels=wheels,
-            motor_battery=motor_battery_message(None),
-            link_loop=link_loop,
-            drive_status=drive_status,
+            ),
+            drive_status=self._drive_status_payload(roboclaw_ready=roboclaw_ready),
         )
         self._publish_message(message)
 
     def _publish_telemetry(
         self,
-        drive: DriveCommand,
         wheels: dict[str, Any],
         target: WheelSpeedCommand,
         motor: Any,
@@ -597,22 +549,16 @@ class MotionRunner:
         read_ok = self._read_next_telemetry_value(motor)
 
         self._record_read_result(read_ok, now)
-        link_loop = dict(drive.link_loop)
-        link_loop["read_success_rate"] = self._read_success_rate()
-        link_loop["consecutive_read_failures"] = self.consecutive_read_failures
-        link_loop["last_good_read_age_seconds"] = (
-            now - self.last_good_read_at if self.last_good_read_at is not None else None
+        link_loop = link_loop_message(
+            read_success_rate=self._read_success_rate(),
+            consecutive_read_failures=self.consecutive_read_failures,
+            last_good_read_age_seconds=now - self.last_good_read_at if self.last_good_read_at is not None else None,
+            telemetry_latency_ms=None,
+            command_loop_hz=self._command_loop_hz(),
         )
-        link_loop["command_loop_hz"] = self._command_loop_hz()
-
-        drive_status = dict(drive.drive_status)
-        drive_status["motor_command_ok"] = self.last_motor_command_ok
-        drive_status["consecutive_motor_command_failures"] = self.consecutive_motor_command_failures
-        drive_status["last_motor_command_ack_age_seconds"] = self._last_motor_command_ack_age(now)
+        drive_status = self._drive_status_payload(roboclaw_ready=True)
         drive_status["safety_blocked"] = safety_blocked
         drive_status["safety_reason"] = safety_reason
-        drive_status["motion_power_requested"] = self._motion_power_requested()
-        drive_status["roboclaw_ready"] = True
 
         message = robot_motion_update(
             wheels=wheel_message(
@@ -1079,7 +1025,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sensors-config", default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
-    parser.add_argument("--drive-socket", default=DEFAULT_MOTION_DRIVE_SOCKET)
     parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
     return parser
 
@@ -1108,7 +1053,6 @@ def build_runner(args: argparse.Namespace, telemetry_publisher: Callable[[str, d
             sensors_config_path=args.sensors_config,
             telemetry_socket=args.telemetry_socket,
             telemetry_subscribe_socket=args.telemetry_subscribe_socket,
-            drive_socket=args.drive_socket,
             motion_intent_socket=args.motion_intent_socket,
         ),
         telemetry_publisher=telemetry_publisher,

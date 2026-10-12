@@ -14,6 +14,7 @@ ALL_SERVICES = {
     "robot-battery.service",
     "robot-pi-battery.service",
     "robot-motion.service",
+    "robot-twist-mux.service",
     "robot-camera.service",
     "gamepad-teleop.service",
     "robot-vision.service",
@@ -54,6 +55,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-battery.service")
         elif path == "src/robot_pi_battery.py":
             want("robot-pi-battery.service")
+        elif path == "src/ros_nodes/gamepad_teleop_node.py":
+            want("gamepad-teleop.service")
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
             want("gamepad-teleop.service")
             want("robot-motion.service")
@@ -109,10 +112,13 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-web-dashboard.service")
         elif path == "src/ros_nodes/heartbeat_node.py":
             want("robot-heartbeat.service")
+        elif path == "config/twist_mux.yaml":
+            want("robot-twist-mux.service")
         elif path == "scripts/ros-node.sh":
             want("robot-heartbeat.service")
             want("robot-sensors.service")
             want("robot-motion.service")
+            want("gamepad-teleop.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -233,9 +239,11 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertEqual(
             planned_services(["src/ros_nodes/ros_messages.py"]), {"robot-sensors.service", "robot-motion.service"}
         )
+        self.assertEqual(planned_services(["src/ros_nodes/gamepad_teleop_node.py"]), {"gamepad-teleop.service"})
+        self.assertEqual(planned_services(["config/twist_mux.yaml"]), {"robot-twist-mux.service"})
         self.assertEqual(
             planned_services(["scripts/ros-node.sh"]),
-            {"robot-heartbeat.service", "robot-sensors.service", "robot-motion.service"},
+            {"robot-heartbeat.service", "robot-sensors.service", "robot-motion.service", "gamepad-teleop.service"},
         )
 
     def test_dashboard_restart_does_not_kill_systemctl_child(self):

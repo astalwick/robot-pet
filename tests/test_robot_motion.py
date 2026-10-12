@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
 from control.commands import MotionCommand, WheelSpeedCommand
-from control.motion_drive import DriveCommand
+from control.differential_drive import wheel_qpps_to_body_twist
 from control.safety_gate import SafetyState
 from robot_model import TRACK_WIDTH_METERS
 from robot_motion import ENCODER_COUNTS_PER_METER, EncoderMove, MotionConfig, MotionRunner
@@ -61,14 +61,9 @@ class FakeMotor:
         pass
 
 
-def drive_command(left_qpps=0, right_qpps=0):
-    return DriveCommand(
-        left_qpps=left_qpps,
-        right_qpps=right_qpps,
-        wheels={"left_command": 0.5, "right_command": 0.5},
-        drive_status={"state": "driving", "controller_reader_alive": True},
-        link_loop={},
-    )
+def drive_wheels(runner, left_qpps, right_qpps):
+    """Feed the runner the /cmd_vel twist that maps to these wheel speeds."""
+    runner.on_twist_command(wheel_qpps_to_body_twist(left_qpps, right_qpps))
 
 
 def encoder_move_should_stop(runner, motor, now, commanding_forward, safety):
@@ -97,7 +92,7 @@ class RobotMotionTest(unittest.TestCase):
         )
         runner._sensor_readings = [{"name": "cliff_left", "ok": True, "distance_mm": 300}]
         runner._sensors_live = True
-        runner._on_drive_command(drive_command(250, 250))
+        drive_wheels(runner, 250, 250)
 
         runner._run_motor_loop(motor)
 
@@ -109,7 +104,7 @@ class RobotMotionTest(unittest.TestCase):
         runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
         runner._sensor_readings = [{"name": "cliff_left", "ok": True, "distance_mm": 300}]
         runner._sensors_live = True
-        runner._on_drive_command(drive_command(250, 250))
+        drive_wheels(runner, 250, 250)
 
         runner._run_motor_loop(motor)
 
@@ -123,7 +118,7 @@ class RobotMotionTest(unittest.TestCase):
             sensors=(SensorEntry("cliff_left", "vl53l0x", 0, role="cliff"),),
         )
         runner._sensors_live = False
-        runner._on_drive_command(drive_command(250, 250))
+        drive_wheels(runner, 250, 250)
 
         runner._run_motor_loop(motor)
 
@@ -140,7 +135,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=lambda: 0.0,
             telemetry_publisher=lambda *_args: True,
         )
-        runner._on_drive_command(drive_command(999999, -999999))
+        drive_wheels(runner, 999999, -999999)
 
         runner._run_motor_loop(motor)
 
@@ -171,12 +166,9 @@ class RobotMotionTest(unittest.TestCase):
             clock=lambda: 0.0,
             telemetry_publisher=lambda _socket, message: published.append(message) or True,
         )
-        drive = drive_command(100, 100)
-
         for _index in range(3):
             runner._publish_telemetry(
-                drive,
-                drive.wheels,
+                {"left_command": 0.1, "right_command": 0.1},
                 WheelSpeedCommand(100, 100),
                 motor,
                 (1000, 1000),
@@ -214,7 +206,7 @@ class RobotMotionTest(unittest.TestCase):
         )
         runner._last_pack_voltage = 10.4
         runner._telemetry_read_slot = 0
-        runner._on_drive_command(drive_command(100, 100))
+        drive_wheels(runner, 100, 100)
 
         runner._run_motor_loop(motor)
 
@@ -414,17 +406,6 @@ class RobotMotionTest(unittest.TestCase):
         expected = round(0.2 * ENCODER_COUNTS_PER_METER)
         self.assertEqual(motor.commands[:2], [(expected, expected), (0, 0)])
 
-    def test_drive_socket_wins_over_twist(self):
-        motor = FakeMotor()
-        runner = self._runner(motor)
-        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
-        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
-        runner._on_drive_command(drive_command(250, 250))
-
-        runner._run_motor_loop(motor)
-
-        self.assertEqual(motor.commands[0], (250, 250))
-
     def test_twist_wheels_payload_is_normalized_by_qpps(self):
         runner = self._runner(FakeMotor())
         runner.on_twist_command(MotionCommand(linear_x=0.1, angular_z=0.0))
@@ -435,7 +416,6 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual((drive.left_qpps, drive.right_qpps), (expected, expected))
         self.assertAlmostEqual(drive.wheels["left_command"], expected / runner.config.qpps)
         self.assertAlmostEqual(drive.wheels["right_command"], expected / runner.config.qpps)
-        self.assertIsNone(drive.drive_status["controller_reader_alive"])
         self.assertTrue(runner._gamepad_active_from_wheels(drive.wheels))
 
     def test_odometry_state_reports_pose_and_twist_from_encoder_deltas(self):
@@ -460,39 +440,11 @@ class RobotMotionTest(unittest.TestCase):
         self.assertAlmostEqual(twist.linear_x, 0.2, places=2)
         self.assertAlmostEqual(twist.angular_z, 0.0)
 
-    def test_stale_drive_command_stops_motor(self):
-        motor = FakeMotor()
-        current_time = 0.0
-        sleeps = 0
-
-        def clock():
-            return current_time
-
-        def sleep(_seconds):
-            nonlocal current_time, sleeps
-            sleeps += 1
-            current_time += 0.6
-            if sleeps == 2:
-                runner.request_stop()
-
-        runner = MotionRunner(
-            MotionConfig(loop_interval=0.05),
-            motor_factory=lambda: motor,
-            sleep=sleep,
-            clock=clock,
-            telemetry_publisher=lambda *_args: True,
-        )
-        runner._on_drive_command(drive_command(250, 250))
-
-        runner._run_motor_loop(motor)
-
-        self.assertEqual(motor.commands[:2], [(250, 250), (0, 0)])
-
     def test_motor_command_failure_records_stop_reason(self):
         motor = FakeMotor()
         motor.set_wheel_speeds = lambda _left, _right: False
         runner = self._runner(motor)
-        runner._on_drive_command(drive_command(250, 250))
+        drive_wheels(runner, 250, 250)
 
         runner._run_motor_loop(motor)
 
@@ -517,15 +469,14 @@ class RobotMotionTest(unittest.TestCase):
                 MotionConfig(
                     loop_interval=0.05,
                     telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
-                    drive_socket=os.path.join(tmpdir, "drive.sock"),
-                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
+                            motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
                 ),
                 motor_factory=motor_factory,
                 sleep=lambda _seconds: None,
                 clock=lambda: 0.0,
                 telemetry_publisher=lambda _socket, message: published.append(message) or True,
             )
-            runner._on_drive_command(drive_command(250, 250))
+            drive_wheels(runner, 250, 250)
 
             runner.run_forever()
 
@@ -558,8 +509,7 @@ class RobotMotionTest(unittest.TestCase):
                     loop_interval=0.05,
                     retry_interval=0.1,
                     telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
-                    drive_socket=os.path.join(tmpdir, "drive.sock"),
-                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
+                            motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
                 ),
                 motor_factory=lambda: motor,
                 sleep=sleep,
@@ -574,52 +524,6 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(completed, [{"ok": False, "error": "roboclaw_connection_lost"}])
         self.assertFalse(runner.intent_executor.is_active())
         self.assertIsNone(runner.encoder_move)
-
-    def test_controller_loss_mid_intent_reports_controller_loss(self):
-        motor = FakeMotor()
-        completed = []
-        attempts = 0
-
-        def motor_factory():
-            nonlocal attempts
-            attempts += 1
-            if attempts == 2:
-                runner.request_stop()
-            return motor
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            runner = MotionRunner(
-                MotionConfig(
-                    loop_interval=0.05,
-                    telemetry_subscribe_socket=os.path.join(tmpdir, "sub.sock"),
-                    drive_socket=os.path.join(tmpdir, "drive.sock"),
-                    motion_intent_socket=os.path.join(tmpdir, "intent.sock"),
-                ),
-                motor_factory=motor_factory,
-                sleep=lambda _seconds: None,
-                clock=lambda: 0.0,
-                telemetry_publisher=lambda *_args: True,
-            )
-            runner._on_drive_command(
-                DriveCommand(
-                    left_qpps=0,
-                    right_qpps=0,
-                    wheels={"left_command": 0.0, "right_command": 0.0},
-                    drive_status={
-                        "state": "controller_lost",
-                        "controller_reader_alive": False,
-                        "stop_reason": "controller input reader exited",
-                    },
-                    link_loop={},
-                )
-            )
-            runner.intent_executor.start("move", now=0.0, distance_meters=1.0)
-            runner.pending_intent_complete = completed.append
-
-            runner.run_forever()
-
-        self.assertEqual(completed, [{"ok": False, "error": "controller_lost"}])
-        self.assertFalse(runner.intent_executor.is_active())
 
     def test_motion_intent_runs_without_gamepad_drive_command(self):
         motor = FakeMotor()
@@ -697,26 +601,14 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(command.linear_x, 0.0)
         self.assertLess(command.angular_z, 0.0)
 
-    def test_drive_command_round_trips_without_telemetry_only_passengers(self):
-        original = drive_command(left_qpps=120, right_qpps=-120)
-
-        restored = DriveCommand.from_message(original.to_message())
-
-        self.assertEqual(restored, original)
-        # The controller-button and drive-tuning telemetry no longer ride along.
-        message = original.to_message()
-        self.assertNotIn("controller", message)
-        self.assertNotIn("drive_tuning", message)
-
     def test_motion_intent_uses_configured_tuning_not_the_gamepad_command(self):
         # An active intent mixes with the motion service's own configured tuning
         # (defaults here), independent of whatever the gamepad sent. (Gamepad
         # tuning no longer rides on the drive command at all.)
         runner = self._runner(FakeMotor())
-        drive = drive_command()
 
         _, left_qpps, right_qpps = runner._target_from_drive_or_intent(
-            drive,
+            runner._intent_only_drive_command(),
             MotionCommand(linear_x=0.0, angular_z=0.3),
         )
 
@@ -735,7 +627,7 @@ class RobotMotionTest(unittest.TestCase):
         )
 
         _, left_qpps, right_qpps = runner._target_from_drive_or_intent(
-            drive_command(),
+            runner._intent_only_drive_command(),
             MotionCommand(linear_x=0.0, angular_z=0.3),
         )
 
@@ -850,7 +742,7 @@ class RobotMotionTest(unittest.TestCase):
             clock=lambda: 0.0,
             telemetry_publisher=lambda _socket, message: published.append(message) or True,
         )
-        runner._on_drive_command(drive_command(250, 250))
+        drive_wheels(runner, 250, 250)
 
         self.assertIs(runner._wait_for_roboclaw(), motor)
 

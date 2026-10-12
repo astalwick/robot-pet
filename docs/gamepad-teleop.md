@@ -49,7 +49,7 @@ sudo systemctl restart gamepad-teleop
 
 Voice motion tools (`wiggle`, `move_forward`) use `/run/robot-pet/motion-intent.sock` on `robot-motion.service`. If voice reports `motion_socket_missing`, check `journalctl -u robot-motion` for `motion intent socket at` or `motion intent bridge unavailable`. Restarting `robot-motion` recreates the socket.
 
-Gamepad wheel commands go to `/run/robot-pet/motion-drive.sock`. If teleop logs `waiting for robot-motion`, start or restart `robot-motion.service` first.
+Gamepad wheel commands are published as `geometry_msgs/Twist` on `/cmd_vel_teleop`; `robot-twist-mux.service` forwards them to `/cmd_vel` for `robot-motion`. Check the path with `ros2 topic hz /cmd_vel_teleop` and `ros2 topic hz /cmd_vel`.
 
 ## Foreground Debugging
 

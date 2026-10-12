@@ -14,6 +14,7 @@ ROBOT_SERVICES=(
   robot-battery.service
   robot-pi-battery.service
   robot-motion.service
+  robot-twist-mux.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -27,6 +28,7 @@ ROBOT_SERVICES_STOP_ORDER=(
   robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
+  robot-twist-mux.service
   robot-camera.service
   robot-voice.service
   robot-sensors.service

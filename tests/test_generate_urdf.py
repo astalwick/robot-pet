@@ -52,6 +52,14 @@ class GenerateUrdfTest(unittest.TestCase):
     def test_imu_frame_matches_the_imu_message_frame_id(self):
         self.assertIn("imu_link", joint_origins(self.root))
 
+    def test_urdf_survives_the_systemd_parameter_handoff(self):
+        # robot-state-publisher.service passes the file as `-p robot_description:=...`,
+        # which rcl parses as YAML. A ": " or " #" in the text turns it into a mapping
+        # or a comment and the node exits before it starts.
+        urdf = generate_urdf.render_urdf()
+        self.assertNotIn(": ", urdf)
+        self.assertNotIn(" #", urdf)
+
     def test_checked_in_urdf_is_up_to_date(self):
         with open(os.path.join(ROOT, "urdf", "robot.urdf")) as handle:
             self.assertEqual(handle.read(), generate_urdf.render_urdf(), "run scripts/generate-urdf.py")

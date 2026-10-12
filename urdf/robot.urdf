@@ -70,7 +70,7 @@
     <origin xyz="0.0000 0.0000 0.0000" rpy="0.0000 0.0000 0.0000"/>
   </joint>
 
-  <!-- Lidar: uncomment and fill in once the mount is measured (see the ros2-migration plan).
+  <!-- Lidar - uncomment and fill in once the mount is measured (see the ros2-migration plan).
   <link name="laser"/>
   <joint name="base_to_laser" type="fixed">
     <parent link="base_link"/>

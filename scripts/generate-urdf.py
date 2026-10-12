@@ -73,7 +73,7 @@ def render_urdf() -> str:
 """)
     parts.append(fixed_joint("imu_link", 0.0, 0.0, 0.0))
     parts.append("""
-  <!-- Lidar: uncomment and fill in once the mount is measured (see the ros2-migration plan).
+  <!-- Lidar - uncomment and fill in once the mount is measured (see the ros2-migration plan).
   <link name="laser"/>
   <joint name="base_to_laser" type="fixed">
     <parent link="base_link"/>

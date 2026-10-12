@@ -20,6 +20,8 @@ prepared for. The lidar itself is **not** in this plan; the done criterion is
 | Teleop | Port our `gamepad_teleop` (keep feel, tuning, telemetry); it publishes `Twist` via the prep-plan kinematics. |
 | Testing | `python3 -m unittest` on the Mac stays green, forever. Node files are thin, import `rclpy`, and are excluded from off-robot tests. |
 | Viz | `foxglove_bridge` from day one. |
+| DDS | **CycloneDDS** (`ros-lyrical-rmw-cyclonedds-cpp`, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` in `ros.env`). Decided 2026-10-12: Nav2 is coming and it is the Nav2-recommended RMW; baked in from Phase 1 so every node is tested against it once. |
+| Nav2 | Confirmed 2026-10-12 as the follow-on (lidar + slam_toolbox + Nav2). Consequences pulled forward: `twist_mux` in Phase 5, odom/TF at 20 Hz from Phase 4, Nav2/slam packages installed in Phase 1 to measure memory on the 4 GB Pi. |
 
 **Amended 2026-07-13:** originally targeted Ubuntu 24.04 + Jazzy. The Phase 0
 spike found 24.04 cannot drive the Pi 5 camera at all — its libcamera predates
@@ -31,7 +33,18 @@ ROS2 Lyrical Luth** — both LTS (Lyrical supported to May 2031). Lyrical is two
 months old, so spike step 8 must confirm the `ros-lyrical-*` packages we need
 actually exist before committing.
 
-### Two refinements made while writing this plan (flagging for owner sign-off)
+**Status 2026-10-12:** Phase 0 and most of Phase 1 happened together — the
+Ubuntu port went straight into `setup.sh`/`initialize-pi.sh` instead of a
+hand spike, and the robot runs all eleven plain services on Ubuntu 26.04
+(camera, sensors, battery, voice audio and wake-word deps verified; motion,
+wake-word end-to-end, LLM and gamepad still to be exercised by hand). Phase 0
+step 8 (ROS package availability) is closed: every `ros-lyrical-*` package this
+plan and the SLAM follow-on need is in the main apt repo as of 2026-09-18 — see
+the risks table. Still open from Phase 1: the ROS install step in `setup.sh`,
+`ros.env`, `scripts/ros-node.sh`, the `pre-ros2-ubuntu-parity` tag, and
+deleting `scripts/ubuntu-probe.sh`.
+
+### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was
    "dashboard untouched". The cheapest correct way to get that is *not* to teach
@@ -243,14 +256,25 @@ on Ubuntu**. That isolates "OS port" bugs from "ROS port" bugs.
    getty mask), i2c group/udev if needed, EEPROM step guarded by
    `command -v` as it already is.
 2. Add the ROS2 install to `setup.sh` as a new step: the apt-source deb,
-   `ros-lyrical-ros-base`, `ros-lyrical-foxglove-bridge`,
-   `ros-lyrical-robot-state-publisher`, `ros-lyrical-demo-nodes-py` (kept for
-   smoke-testing). Idempotent like every other step.
+   `ros-lyrical-ros-base`, `ros-lyrical-rmw-cyclonedds-cpp`,
+   `ros-lyrical-foxglove-bridge`, `ros-lyrical-robot-state-publisher`,
+   `ros-lyrical-twist-mux`, `ros-lyrical-demo-nodes-py` (kept for
+   smoke-testing), plus `ros-lyrical-slam-toolbox` and
+   `ros-lyrical-nav2-bringup` now — not used until the lidar plan, but
+   launching them idle gives a real memory number on the 4 GB Pi instead of
+   an estimate (measured 2026-10-12: ~3 GB available with the whole robot
+   running; budget ~1 GB for Nav2 + SLAM + Foxglove). Idempotent like every
+   other step.
+2b. Trim Ubuntu baggage in `setup.sh`: remove `snapd` and `fwupd`, disable
+   `unattended-upgrades` (it steals the apt lock and CPU at random, which
+   matters once control loops run). ~300 MB back. Add zram swap (Ubuntu
+   Server ships none) as the out-of-memory safety net.
 3. Add `/home/pi/.config/robot-pet/ros.env` written by setup:
 
    ```
    ROS_DOMAIN_ID=17
    ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+   RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
    ```
 
 4. Add `scripts/ros-node.sh` — the single wrapper every ROS unit will use:
@@ -389,11 +413,11 @@ The heart of the migration. `MotionRunner` already isolates every hard problem
    - **Outputs:** publish `nav_msgs/Odometry` on `/odom` (pose from
      `self._odometry.pose`, twist from `wheel_qpps_to_body_twist(actual qpps)`,
      fixed diagonal covariance constants) and broadcast TF `odom → base_link`
-     at their **own named rate constant** (`ODOM_PUBLISH_HZ = 5` for now — do
-     NOT piggyback on the hub telemetry cadence; slam_toolbox interpolates
-     robot pose from this TF for every lidar scan, and the RPLidar spins at
-     ~10 Hz, so this constant goes to 20–30 Hz when the lidar lands — smearing
-     scans during in-place turns otherwise). `sensor_msgs/BatteryState` on
+     at their **own named rate constant** (`ODOM_PUBLISH_HZ = 20` — do NOT
+     piggyback on the hub telemetry cadence; slam_toolbox interpolates robot
+     pose from this TF for every lidar scan, and the RPLidar spins at ~10 Hz,
+     so anything slower smears scans during in-place turns. Was 5 in the
+     original plan; set to 20 from the start since the lidar is confirmed). `sensor_msgs/BatteryState` on
      `/battery/motor` from the pack voltage stays at the existing
      `_publish_telemetry` cadence. Message assembly lives in
      `ros_messages.py` (pure, Mac-tested).
@@ -430,7 +454,14 @@ Completes the command path. After this, `/cmd_vel` is the only way wheels move
    behavioral change: instead of `motion.send(DriveCommand(...))`, compute
    `to_wheel_speeds` exactly as today (preserving deadzone/turn/turbo feel and
    tuning config), convert with `wheel_qpps_to_body_twist`, publish `Twist` on
-   `/cmd_vel` at the same 20 Hz. Keep all hub telemetry publishes
+   `/cmd_vel_teleop` at the same 20 Hz.
+1b. `twist_mux` (apt) owns `/cmd_vel`: one `systemd/robot-twist-mux.service`
+   plus a small yaml with `/cmd_vel_teleop` at top priority and a `/cmd_vel_nav`
+   slot (unused until Nav2) below it. Pulled forward from the lidar-readiness
+   list because Nav2 is confirmed; doing it now means the motion node's
+   `/cmd_vel` subscription and the safety tests never have to change. The
+   "twist ≠ zero ⇒ gamepad active" rule in Phase 4 should read the teleop
+   topic specifically, not the muxed one. Keep all hub telemetry publishes
    (`gamepad_update`, `gamepad_teleop_update`) as they are.
 2. Shutdown/reader-death behavior: on `reader_alive() == False`, controller
    disconnect, or SIGTERM, publish one zero twist, then stop publishing (the
@@ -520,13 +551,12 @@ to be this file's single source — so generate, don't hand-write.
    else should need to move — that claim is the migration's exit criterion.
    The checklist must also carry these three known-future items so the exit
    criterion stays honest:
-   - **`/cmd_vel` arbitration.** Phase 4's "twist ≠ zero ⇒ gamepad active"
-     rule is correct only while teleop is the sole `/cmd_vel` publisher. The
-     moment nav2 (or any autonomous commander) publishes too, a nav goal
-     preempts every voice intent and an intent fights nav tick-by-tick. Fix at
-     that point: `twist_mux` (apt) with prioritized inputs
-     (`/cmd_vel_teleop` > `/cmd_vel_nav`, …) feeding one `/cmd_vel`, plus a
-     decision about where motion intents rank.
+   - **`/cmd_vel` arbitration.** `twist_mux` lands in Phase 5 with a
+     `/cmd_vel_nav` slot already reserved. What remains is the policy
+     decision: where voice motion intents rank against a nav goal (today
+     intents run inside the motion node and are interrupted by gamepad
+     activity; with nav publishing too, an intent and a nav goal would fight
+     tick-by-tick unless one of them yields).
    - **Map persistence.** slam_toolbox's serialized map + localization mode
      (or map_saver). Without it the `map` frame is rebuilt from scratch each
      boot and any saved landmark/place poses ("kitchen") are garbage across
@@ -561,7 +591,7 @@ simultaneously for a 30-minute soak with no unit restarts in `journalctl`.
 | Camera regression on Ubuntu (was the 24.04 killer; 26.04 packages picamera2) | Phase 0 step 4 go/no-go before anything is committed; Trixie image = free rollback; fallback is revisiting Docker on Raspberry Pi OS. |
 | gpiozero has no working backend on Ubuntu/Pi 5 (motor-rail cutoff depends on it) | Phase 0 step 6b go/no-go; fix is `lgpio` in the venv. |
 | pip wheels missing for 26.04's Python (esp. onnxruntime for wake word) | Phase 0 step 6c builds the real venv and runs the suite on the Pi. |
-| Lyrical is two months old — needed `ros-lyrical-*` packages not yet released | Phase 0 step 8 verifies ros-base/foxglove_bridge (and slam-toolbox for later) resolve before committing. |
+| ~~Lyrical is two months old — needed `ros-lyrical-*` packages not yet released~~ **Resolved 2026-09-18.** | `ros-lyrical-ros-base`, `-foxglove-bridge`, `-rmw-cyclonedds-cpp` confirmed in July. `ros-lyrical-slam-toolbox`, `-navigation2`, `-nav2-bringup`, `-ompl` all landed in the main `packages.ros.org` resolute/arm64 index on 2026-09-18 (tracked via [nav2#6123](https://github.com/ros-navigation/navigation2/issues/6123)). Nothing in this plan or the lidar/SLAM follow-on is blocked on package availability. |
 | ROS install method drifted since planning | Phase 0 step 8 says verify against current docs before running. |
 | Wheels-keep-spinning regression | Safety invariant section; explicit kill-the-publisher tests in Phases 4 and 5 acceptance. |
 | Dashboard silently degrades | Dual-publish means dashboard code paths are untouched; each phase's acceptance includes a dashboard check. |

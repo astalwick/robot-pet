@@ -10,15 +10,34 @@ echo "=== Robo-Pet Setup ==="
 echo ""
 
 # Install base packages (idempotent - apt handles already-installed)
-echo "[1/15] Installing base packages..."
+echo "[1/17] Installing base packages..."
 sudo apt install -y git curl vim htop tmux python3-pip python3-venv python3-picamera2 python3-opencv opencv-data alsa-utils sox portaudio19-dev i2c-tools avahi-daemon python3-lgpio
 
+
+# Ubuntu Server ships a few daemons that do nothing for a robot and together
+# hold ~300 MB on the 4 GB Pi: snapd, fwupd, packagekit, and the unattended
+# apt timers (which also grab the apt lock and CPU at random). Disable rather
+# than purge so the ubuntu-server metapackage stays intact.
+echo "[2/17] Disabling Ubuntu baggage and adding zram swap..."
+sudo systemctl disable --now snapd.socket snapd.service snapd.seeded.service \
+    fwupd.service fwupd-refresh.timer packagekit.service \
+    unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+sudo systemctl mask snapd.service fwupd.service packagekit.service unattended-upgrades.service >/dev/null
+# Ubuntu Server has no swap; compressed zram turns an out-of-memory kill under
+# Nav2 + SLAM into a slowdown instead.
+sudo apt install -y zram-tools
+sudo tee /etc/default/zramswap >/dev/null <<'ZRAM'
+ALGO=zstd
+PERCENT=50
+ZRAM
+sudo systemctl restart zramswap.service
+
 # Add user to dialout group for serial port access (idempotent)
-echo "[2/15] Adding $USER to dialout group..."
+echo "[3/17] Adding $USER to dialout group..."
 sudo usermod -a -G dialout "$USER"
 
 # I2C for ToF sensors and future IMU (idempotent)
-echo "[3/15] Enabling I2C and adding $USER to i2c group..."
+echo "[4/17] Enabling I2C and adding $USER to i2c group..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if ! grep -q "^dtparam=i2c_arm=on" "$BOOT_CONFIG" 2>/dev/null; then
     echo "dtparam=i2c_arm=on" | sudo tee -a "$BOOT_CONFIG" >/dev/null
@@ -44,7 +63,7 @@ KERNEL=="gpiochip0", SYMLINK+="gpiochip4"
 UDEV
 
 # Add user to input and audio groups for controller/gamepad and ReSpeaker access (idempotent)
-echo "[4/15] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
+echo "[5/17] Adding $USER to input and audio groups and configuring ReSpeaker USB access..."
 sudo usermod -a -G input "$USER"
 sudo usermod -a -G audio "$USER"
 # Camera: Pi OS puts the default user in video/render; Ubuntu doesn't, and
@@ -77,7 +96,7 @@ systemctl --user start pipewire.socket pipewire-pulse.socket 2>/dev/null || \
     echo "    WARNING: could not start PipeWire user sockets until next login/reboot"
 
 # Free UART from Bluetooth for RoboClaw serial (idempotent)
-echo "[5/15] Configuring UART for RoboClaw..."
+echo "[6/17] Configuring UART for RoboClaw..."
 if ! grep -q "^enable_uart=1" "$BOOT_CONFIG" 2>/dev/null; then
     echo "enable_uart=1" | sudo tee -a "$BOOT_CONFIG" >/dev/null
     echo "    Added enable_uart=1 to $BOOT_CONFIG"
@@ -118,7 +137,7 @@ KERNEL=="ttyAMA0", SYMLINK+="serial0"
 UDEV
 
 # Cut power on halt/shutdown (Pi 4/5 EEPROM; idempotent)
-echo "[6/15] Configuring EEPROM power-off on halt..."
+echo "[7/17] Configuring EEPROM power-off on halt..."
 if command -v rpi-eeprom-config >/dev/null 2>&1; then
     EEPROM_CONFIG="$(mktemp)"
     sudo rpi-eeprom-config >"$EEPROM_CONFIG"
@@ -139,12 +158,12 @@ else
 fi
 
 # Create log directory (idempotent)
-echo "[7/15] Creating log directory at $LOG_DIR..."
+echo "[8/17] Creating log directory at $LOG_DIR..."
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$USER:$USER" "$LOG_DIR"
 
 # SSH login welcome (dynamic MOTD on Debian / Raspberry Pi OS)
-echo "[8/15] Installing login welcome message..."
+echo "[9/17] Installing login welcome message..."
 sudo tee /etc/update-motd.d/99-robot-pet >/dev/null <<'MOTD'
 #!/bin/bash
 # Robot-pet welcome — runs on SSH login (pam_motd)
@@ -203,7 +222,7 @@ sudo sed -i \
 sudo chmod +x /etc/update-motd.d/99-robot-pet
 
 # Configure interactive Bash sessions to start in robot-pet with the venv active.
-echo "[9/15] Configuring Bash login directory, venv, and dashboard autostart..."
+echo "[10/17] Configuring Bash login directory, venv, and dashboard autostart..."
 BASHRC="$HOME/.bashrc"
 BASH_LOGIN_START="# >>> robot-pet login setup >>>"
 BASH_LOGIN_END="# <<< robot-pet login setup <<<"
@@ -228,7 +247,7 @@ fi
 BASH_LOGIN
 
 # Install redeploy permissions for the dashboard action.
-echo "[10/15] Installing redeploy permissions..."
+echo "[11/17] Installing redeploy permissions..."
 chmod +x "$REPO_DIR/scripts/redeploy-robot.sh"
 chmod +x "$REPO_DIR/scripts/install-service.sh"
 chmod +x "$REPO_DIR/restart.sh"
@@ -282,10 +301,37 @@ sudo visudo -cf "$SUDOERS_TMP"
 sudo install -m 0440 "$SUDOERS_TMP" /etc/sudoers.d/robot-pet-redeploy
 rm "$SUDOERS_TMP"
 
+# ROS 2 Lyrical Luth from the official apt repo. Nav2 and slam_toolbox aren't
+# used until the lidar plan; installing them now gives a real memory number on
+# the 4 GB Pi instead of an estimate. universe is enabled by default on Ubuntu
+# Server images, which the ros-* packages need.
+echo "[12/17] Installing ROS 2 Lyrical..."
+if ! dpkg -s ros2-apt-source >/dev/null 2>&1; then
+    ROS_APT_SOURCE_VERSION="$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F '"tag_name"' | awk -F'"' '{print $4}')"
+    ROS_APT_SOURCE_DEB="$(mktemp --suffix=.deb)"
+    curl -fsSL -o "$ROS_APT_SOURCE_DEB" "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo "$VERSION_CODENAME")_all.deb"
+    sudo dpkg -i "$ROS_APT_SOURCE_DEB"
+    rm "$ROS_APT_SOURCE_DEB"
+    sudo apt update
+fi
+sudo apt install -y ros-lyrical-ros-base ros-lyrical-rmw-cyclonedds-cpp \
+    ros-lyrical-foxglove-bridge ros-lyrical-robot-state-publisher \
+    ros-lyrical-twist-mux ros-lyrical-demo-nodes-py \
+    ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup
+# Every ROS unit runs through scripts/ros-node.sh, which sources this. DDS
+# stays off the Wi-Fi: localhost discovery and a fixed domain.
+mkdir -p "$HOME/.config/robot-pet"
+cat >"$HOME/.config/robot-pet/ros.env" <<'ENV'
+ROS_DOMAIN_ID=17
+ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+ENV
+chmod +x "$REPO_DIR/scripts/ros-node.sh"
+
 # Set up Python venv (idempotent - only creates if missing or misconfigured).
 # --system-site-packages lets the venv import apt-installed Pi libraries
 # (picamera2, libcamera) that aren't reliably pip-installable.
-echo "[11/15] Setting up Python venv at $VENV_PATH..."
+echo "[13/17] Setting up Python venv at $VENV_PATH..."
 NEEDS_VENV_RECREATE=0
 if [[ -d "$VENV_PATH" ]]; then
   if ! grep -q "^include-system-site-packages = true" "$VENV_PATH/pyvenv.cfg" 2>/dev/null; then
@@ -301,7 +347,7 @@ if [[ "$NEEDS_VENV_RECREATE" == "1" ]]; then
 fi
 
 # Upgrade pip and install base packages (idempotent - pip handles already-installed)
-echo "[12/15] Installing Python packages..."
+echo "[14/17] Installing Python packages..."
 source "$VENV_PATH/bin/activate"
 python -m pip install --upgrade pip wheel setuptools
 python -m pip install -e "$REPO_DIR"
@@ -311,11 +357,11 @@ python -m pip install -e "$REPO_DIR"
 # otherwise make pip fall back to the ancient 0.4.0 (missing download_models).
 python -m pip install --no-deps --ignore-requires-python --upgrade 'openwakeword>=0.6.0'
 
-echo "[13/15] Running tests..."
+echo "[15/17] Running tests..."
 python -m unittest discover tests
 
 # Set ReSpeaker PCM volume and persist via alsa-restore.service on next boot
-echo "[14/15] Setting speaker volume..."
+echo "[16/17] Setting speaker volume..."
 if amixer -c 0 sset 'PCM' 100% >/dev/null; then
   sudo alsactl store || echo "    WARNING: could not persist ALSA mixer state; continuing"
 else
@@ -323,7 +369,7 @@ else
 fi
 
 # Install and enable systemd services
-echo "[15/15] Installing systemd services..."
+echo "[17/17] Installing systemd services..."
 for service_file in "$REPO_DIR/systemd/"*.service; do
   sudo install -m 0644 "$service_file" "/etc/systemd/system/$(basename "$service_file")"
 done

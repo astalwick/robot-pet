@@ -8,8 +8,11 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from ros_nodes.ros_messages import (
     INFRARED,
+    POWER_SUPPLY_TECHNOLOGY_LIPO,
     UNKNOWN_COVARIANCE,
+    battery_state_fields,
     imu_fields,
+    odometry_fields,
     quaternion_from_euler_degrees,
     range_fields,
 )
@@ -86,6 +89,42 @@ class ImuFieldsTest(unittest.TestCase):
         self.assertEqual(len(fields["orientation_covariance"]), 9)
         self.assertEqual(fields["angular_velocity_covariance"], UNKNOWN_COVARIANCE)
         self.assertEqual(fields["linear_acceleration_covariance"][0], -1.0)
+
+
+class OdometryFieldsTest(unittest.TestCase):
+    def test_pose_and_twist_land_in_planar_slots(self):
+        fields = odometry_fields(1.5, -0.25, math.pi / 2, 0.2, 0.8)
+        self.assertEqual(fields["frame_id"], "odom")
+        self.assertEqual(fields["child_frame_id"], "base_link")
+        self.assertEqual(fields["position"], (1.5, -0.25, 0.0))
+        self.assertAlmostEqual(fields["orientation"][2], math.sqrt(0.5))
+        self.assertAlmostEqual(fields["orientation"][3], math.sqrt(0.5))
+        self.assertEqual(fields["linear"], (0.2, 0.0, 0.0))
+        self.assertEqual(fields["angular"], (0.0, 0.0, 0.8))
+
+    def test_covariances_are_6x6_with_unused_axes_marked_huge(self):
+        fields = odometry_fields(0, 0, 0, 0, 0)
+        for covariance in (fields["pose_covariance"], fields["twist_covariance"]):
+            self.assertEqual(len(covariance), 36)
+            self.assertGreater(covariance[0], 0)
+            self.assertGreater(covariance[35], 0)
+            self.assertGreaterEqual(covariance[14], 1e6)
+
+
+class BatteryStateFieldsTest(unittest.TestCase):
+    def test_no_voltage_returns_none(self):
+        self.assertIsNone(battery_state_fields({"pack_voltage": None}))
+        self.assertIsNone(battery_state_fields({}))
+
+    def test_voltage_and_percentage(self):
+        fields = battery_state_fields({"pack_voltage": 11.7, "percent_estimate": 62})
+        self.assertEqual(fields["voltage"], 11.7)
+        self.assertAlmostEqual(fields["percentage"], 0.62)
+        self.assertEqual(fields["power_supply_technology"], POWER_SUPPLY_TECHNOLOGY_LIPO)
+        self.assertTrue(fields["present"])
+
+    def test_unknown_percentage_is_nan(self):
+        self.assertTrue(math.isnan(battery_state_fields({"pack_voltage": 11.7})["percentage"]))
 
 
 if __name__ == "__main__":

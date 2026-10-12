@@ -52,6 +52,15 @@ systemd restarts the node through `ros-node.sh` after a kill. Gotcha found:
 ROS's `setup.bash` reads unset variables, so the wrapper sources it before
 `set -u`.
 
+**Phase 3 complete 2026-10-12:** `sensors_node.py` dual-publishes the hub
+message plus `/range/<name>` (five topics) and `/imu`; conversions live in
+`ros_messages.py` with Mac tests. `robot-sensors.service` now runs through
+`ros-node.sh`. Verified on the Pi: `/imu` is a unit quaternion with rate
+covariances -1, Foxglove shows all six topics, dashboard unchanged. Finding:
+range topics run at ~10 Hz although config says 20, because each tick is
+I2C-bound (five ToF reads plus an IMU wait of up to 50 ms). Pre-existing, not
+a regression; fine for the safety gate and costmaps.
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was

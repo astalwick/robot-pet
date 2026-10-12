@@ -86,7 +86,7 @@ plan_service_restarts() {
       src/robot_camera.py)
         want_restart robot-camera.service
         ;;
-      src/robot_motion.py)
+      src/robot_motion.py | src/ros_nodes/motion_node.py)
         want_restart robot-motion.service
         ;;
       src/robot_battery.py)
@@ -103,8 +103,12 @@ plan_service_restarts() {
       src/robot_vision.py)
         want_restart robot-vision.service
         ;;
-      src/robot_sensors.py | src/ros_nodes/sensors_node.py | src/ros_nodes/ros_messages.py)
+      src/robot_sensors.py | src/ros_nodes/sensors_node.py)
         want_restart robot-sensors.service
+        ;;
+      src/ros_nodes/ros_messages.py)
+        want_restart robot-sensors.service
+        want_restart robot-motion.service
         ;;
       src/robot_voice.py | src/voice/*)
         want_restart robot-voice.service
@@ -166,6 +170,7 @@ plan_service_restarts() {
         # every ROS node runs through this wrapper
         want_restart robot-heartbeat.service
         want_restart robot-sensors.service
+        want_restart robot-motion.service
         ;;
       systemd/*)
         want_restart "$(basename "$path")"

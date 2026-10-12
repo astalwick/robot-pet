@@ -26,10 +26,10 @@ from config.sensors import (
     load_sensors_config,
 )
 from control.commands import MotionCommand, WheelSpeedCommand
-from control.differential_drive import DifferentialDriveMixer
+from control.differential_drive import DifferentialDriveMixer, body_twist_to_wheel_qpps, clamp, wheel_qpps_to_body_twist
 from control.motion_drive import DriveCommand, DriveCommandListener
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
-from control.odometry import DiffDriveOdometry
+from control.odometry import DiffDriveOdometry, Pose
 from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
@@ -128,6 +128,9 @@ class MotionRunner:
         self._latest_drive: DriveCommand | None = None
         self._latest_drive_at: float | None = None
         self._drive_listener: DriveCommandListener | None = None
+        # ROS /cmd_vel path, fed by motion_node.py. Same deadman as the socket.
+        self._latest_twist: MotionCommand | None = None
+        self._latest_twist_at: float | None = None
 
         self.intent_executor = MotionIntentExecutor()
         self.intent_bridge: MotionIntentBridge | None = None
@@ -173,8 +176,10 @@ class MotionRunner:
         self._last_left_position: int | None = None
         self._last_right_position: int | None = None
         self._odometry_available = False
+        self._last_position_at: float | None = None
         # Dead-reckoned pose (x, y, theta) from the same per-tick wheel deltas.
         self._odometry = DiffDriveOdometry(TRACK_WIDTH_METERS)
+        self._odometry_twist = MotionCommand(0.0, 0.0)
 
     def request_stop(self, *_args) -> None:
         self.stop_requested = True
@@ -234,6 +239,41 @@ class MotionRunner:
         if self.clock() - seen_at > DRIVE_COMMAND_STALE_SECONDS:
             return None
         return command
+
+    def on_twist_command(self, command: MotionCommand) -> None:
+        with self._drive_lock:
+            self._latest_twist = command
+            self._latest_twist_at = self.clock()
+
+    def _get_twist_command(self) -> MotionCommand | None:
+        with self._drive_lock:
+            command = self._latest_twist
+            seen_at = self._latest_twist_at
+        if command is None or seen_at is None:
+            return None
+        if self.clock() - seen_at > DRIVE_COMMAND_STALE_SECONDS:
+            return None
+        return command
+
+    def _twist_drive_command(self) -> DriveCommand | None:
+        twist = self._get_twist_command()
+        if twist is None:
+            return None
+        target = body_twist_to_wheel_qpps(twist.linear_x, twist.angular_z)
+        return DriveCommand(
+            left_qpps=target.left_qpps,
+            right_qpps=target.right_qpps,
+            wheels={
+                "left_command": clamp(target.left_qpps / self.config.qpps, -1.0, 1.0),
+                "right_command": clamp(target.right_qpps / self.config.qpps, -1.0, 1.0),
+            },
+            drive_status={"state": self.drive_state, "controller_reader_alive": None},
+            link_loop={},
+        )
+
+    def odometry_state(self) -> tuple[Pose, MotionCommand]:
+        """Latest dead-reckoned pose and body twist, for the ROS /odom publisher."""
+        return self._odometry.pose, self._odometry_twist
 
     def _telemetry_subscribe_loop(self) -> None:
         for snapshot in subscribe(self.config.telemetry_subscribe_socket, reconnect_interval=1.0):
@@ -351,8 +391,12 @@ class MotionRunner:
             self.loop_samples.append(now)
             stop_serviced = self._service_stop_requests()
             self._service_intent_requests(now)
+            # Encoders every tick so /odom and TF track the robot at loop rate;
+            # slam_toolbox interpolates the pose from TF for every lidar scan.
+            self._accumulate_odometry(motor)
 
-            drive = self._get_drive_command()
+            # The gamepad socket wins while both paths exist (Phase 5 retires it).
+            drive = self._get_drive_command() or self._twist_drive_command()
             if drive is None:
                 intent_command = self._tick_intent(now, gamepad_active=False)
                 if intent_command is None:
@@ -412,7 +456,7 @@ class MotionRunner:
 
             move_stop = None
             if self.intent_executor.active_move_distance_meters() is not None:
-                move_stop = self._encoder_move_should_stop(motor, now, commanding_forward, safety)
+                move_stop = self._encoder_move_should_stop(now, commanding_forward, safety)
                 if move_stop is not None:
                     left_qpps, right_qpps = 0, 0
 
@@ -480,6 +524,7 @@ class MotionRunner:
 
         self._set_wheel_speeds(motor, 0, 0, record=False)
         self._reset_slew()
+        self._odometry_twist = MotionCommand(0.0, 0.0)
         self._set_drive_state("stopped", stop_reason)
         return intent_failure
 
@@ -598,18 +643,16 @@ class MotionRunner:
             if self._telemetry_read_slot == 1:
                 self._last_pack_voltage = motor.get_battery_voltage()
                 return self._last_pack_voltage is not None
-            if self._telemetry_read_slot == 2:
-                currents = motor.get_currents()
-                if currents is None:
-                    return False
-                self._last_left_current, self._last_right_current = currents
-                return True
-            return self._accumulate_odometry(motor)
+            currents = motor.get_currents()
+            if currents is None:
+                return False
+            self._last_left_current, self._last_right_current = currents
+            return True
         except Exception as exc:
             log.warning("telemetry read failed: %s", exc)
             return False
         finally:
-            self._telemetry_read_slot = (self._telemetry_read_slot + 1) % 4
+            self._telemetry_read_slot = (self._telemetry_read_slot + 1) % 3
 
     def _invalidate_odometry_baseline(self) -> None:
         # Forget where the encoders were and stop publishing odometry until a
@@ -618,10 +661,13 @@ class MotionRunner:
         # RoboClaw connection starts (a reboot may have reset its counters).
         self._last_left_position = None
         self._last_right_position = None
+        self._last_position_at = None
         self._odometry_available = False
+        self._odometry_twist = MotionCommand(0.0, 0.0)
 
     def _accumulate_odometry(self, motor: Any) -> bool:
         left, right = motor.read_wheel_positions()
+        now = self.clock()
         if left is None or right is None:
             # Otherwise the next good read would fold all the travel during the
             # gap into a single delta, and the dashboard would dead-reckon that
@@ -636,8 +682,15 @@ class MotionRunner:
             self._left_distance_m += left_delta_m
             self._right_distance_m += right_delta_m
             self._odometry.update(left_delta_m, right_delta_m)
+            elapsed = now - self._last_position_at
+            if elapsed > 0:
+                self._odometry_twist = wheel_qpps_to_body_twist(
+                    left_delta_m * ENCODER_COUNTS_PER_METER / elapsed,
+                    right_delta_m * ENCODER_COUNTS_PER_METER / elapsed,
+                )
         self._last_left_position = left
         self._last_right_position = right
+        self._last_position_at = now
         self._odometry_available = True
         return True
 
@@ -758,7 +811,6 @@ class MotionRunner:
 
     def _encoder_move_should_stop(
         self,
-        motor: Any,
         now: float,
         commanding_forward: bool,
         safety: Any,
@@ -766,18 +818,19 @@ class MotionRunner:
         """Drive completion/failure for the active encoder-distance move.
 
         Returns the stop reason when the move has ended this loop (so the caller
-        commands zero speed), or None to keep going. Reads encoder positions,
+        commands zero speed), or None to keep going. Uses this tick's encoder
+        positions from _accumulate_odometry (None when that read failed),
         snapshots the start on the first loop, completes at the target travel,
         and fails on read error, a safety block of forward progress, or a
         no-progress stall.
         """
         distance = self.intent_executor.active_move_distance_meters()
+        left_now, right_now = self._last_left_position, self._last_right_position
 
         # A forward move that safety blocks is no longer making progress.
         if distance > 0 and commanding_forward and safety.blocked:
             travel_counts = None
             if self.encoder_move is not None:
-                left_now, right_now = motor.read_wheel_positions()
                 if left_now is not None and right_now is not None:
                     travel_counts = (
                         abs(_encoder_delta(left_now, self.encoder_move.left_start))
@@ -790,20 +843,18 @@ class MotionRunner:
             return "safety_blocked"
 
         if self.encoder_move is None:
-            left_start, right_start = motor.read_wheel_positions()
-            if left_start is None or right_start is None:
+            if left_now is None or right_now is None:
                 self._end_encoder_move("encoder_read_failed")
                 return "encoder_read_failed"
             self.encoder_move = EncoderMove(
                 target_counts=abs(distance) * ENCODER_COUNTS_PER_METER,
-                left_start=left_start,
-                right_start=right_start,
+                left_start=left_now,
+                right_start=right_now,
                 last_travel=0.0,
                 last_progress_at=now,
             )
             return None
 
-        left_now, right_now = motor.read_wheel_positions()
         if left_now is None or right_now is None:
             self._end_encoder_move("encoder_read_failed")
             return "encoder_read_failed"
@@ -1027,14 +1078,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def build_runner(args: argparse.Namespace, telemetry_publisher: Callable[[str, dict[str, Any]], bool] = publish_message) -> MotionRunner:
     try:
         drive_tuning = load_drive_tuning(args.drive_tuning_config)
     except DriveTuningConfigError as exc:
         log.error("%s", exc)
         raise SystemExit(1) from exc
-    runner = MotionRunner(
+    return MotionRunner(
         MotionConfig(
             port=args.port,
             address=args.address,
@@ -1054,8 +1104,13 @@ def main() -> None:
             telemetry_subscribe_socket=args.telemetry_subscribe_socket,
             drive_socket=args.drive_socket,
             motion_intent_socket=args.motion_intent_socket,
-        )
+        ),
+        telemetry_publisher=telemetry_publisher,
     )
+
+
+def main() -> None:
+    runner = build_runner(build_parser().parse_args())
     signal.signal(signal.SIGTERM, runner.request_stop)
     signal.signal(signal.SIGINT, runner.request_stop)
     log.info("motion service starting")

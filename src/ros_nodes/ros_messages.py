@@ -76,3 +76,48 @@ def imu_fields(imu: dict[str, Any]) -> dict[str, Any] | None:
         "angular_velocity_covariance": UNKNOWN_COVARIANCE,
         "linear_acceleration_covariance": UNKNOWN_COVARIANCE,
     }
+
+
+# sensor_msgs/BatteryState constants
+POWER_SUPPLY_STATUS_UNKNOWN = 0
+POWER_SUPPLY_HEALTH_UNKNOWN = 0
+POWER_SUPPLY_TECHNOLOGY_LIPO = 3
+
+# nav_msgs/Odometry covariances (6x6 row-major: x, y, z, roll, pitch, yaw).
+# Planar robot: large values on the axes we never estimate.
+UNUSED_AXIS = 1e6
+POSE_COVARIANCE = [0.0] * 36
+TWIST_COVARIANCE = [0.0] * 36
+for _index, _value in ((0, 0.01), (7, 0.01), (14, UNUSED_AXIS), (21, UNUSED_AXIS), (28, UNUSED_AXIS), (35, 0.03)):
+    POSE_COVARIANCE[_index] = _value
+    TWIST_COVARIANCE[_index] = _value
+
+
+def odometry_fields(x: float, y: float, theta: float, linear_x: float, angular_z: float) -> dict[str, Any]:
+    """Map the dead-reckoned pose and body twist to nav_msgs/Odometry and TF fields."""
+    return {
+        "frame_id": "odom",
+        "child_frame_id": "base_link",
+        "position": (x, y, 0.0),
+        "orientation": quaternion_from_euler_degrees(0.0, 0.0, math.degrees(theta)),
+        "linear": (linear_x, 0.0, 0.0),
+        "angular": (0.0, 0.0, angular_z),
+        "pose_covariance": POSE_COVARIANCE,
+        "twist_covariance": TWIST_COVARIANCE,
+    }
+
+
+def battery_state_fields(motor_battery: dict[str, Any]) -> dict[str, Any] | None:
+    """Map the hub motor_battery dict to sensor_msgs/BatteryState fields, or None without a reading."""
+    if motor_battery.get("pack_voltage") is None:
+        return None
+    percent = motor_battery.get("percent_estimate")
+    return {
+        "frame_id": "base_link",
+        "voltage": float(motor_battery["pack_voltage"]),
+        "percentage": percent / 100 if percent is not None else math.nan,
+        "power_supply_status": POWER_SUPPLY_STATUS_UNKNOWN,
+        "power_supply_health": POWER_SUPPLY_HEALTH_UNKNOWN,
+        "power_supply_technology": POWER_SUPPLY_TECHNOLOGY_LIPO,
+        "present": True,
+    }

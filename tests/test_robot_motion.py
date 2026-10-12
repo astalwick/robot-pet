@@ -12,6 +12,7 @@ from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
 from control.commands import MotionCommand, WheelSpeedCommand
 from control.motion_drive import DriveCommand
 from control.safety_gate import SafetyState
+from robot_model import TRACK_WIDTH_METERS
 from robot_motion import ENCODER_COUNTS_PER_METER, EncoderMove, MotionConfig, MotionRunner
 
 logging.getLogger("robot-motion").disabled = True
@@ -70,10 +71,16 @@ def drive_command(left_qpps=0, right_qpps=0):
     )
 
 
+def encoder_move_should_stop(runner, motor, now, commanding_forward, safety):
+    """One motor-loop tick's worth of encoder handling: read, then judge the move."""
+    runner._accumulate_odometry(motor)
+    return runner._encoder_move_should_stop(now, commanding_forward, safety)
+
+
 class RobotMotionTest(unittest.TestCase):
-    def _runner(self, motor):
+    def _runner(self, motor, **config):
         runner = MotionRunner(
-            MotionConfig(loop_interval=0.05),
+            MotionConfig(loop_interval=0.05, **config),
             motor_factory=lambda: motor,
             sleep=lambda _seconds: runner.request_stop(),
             clock=lambda: 0.0,
@@ -349,6 +356,109 @@ class RobotMotionTest(unittest.TestCase):
         runner._accumulate_odometry(motor)  # re-baseline at 1500, no delta
 
         self.assertAlmostEqual(runner._odometry_payload()["x"], x_before, places=6)
+
+    def test_fresh_twist_drives_wheels(self):
+        motor = FakeMotor()
+        # A huge slew limit lets the first tick reach the target.
+        runner = self._runner(motor, qpps_slew_limit=10_000_000.0)
+        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
+        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
+
+        runner._run_motor_loop(motor)
+
+        expected = round(0.2 * ENCODER_COUNTS_PER_METER)
+        self.assertIn((expected, expected), motor.commands)
+
+    def test_positive_angular_z_turns_left(self):
+        motor = FakeMotor()
+        # A huge slew limit lets the first tick reach the target.
+        runner = self._runner(motor, qpps_slew_limit=10_000_000.0)
+        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
+        runner.on_twist_command(MotionCommand(linear_x=0.0, angular_z=1.0))
+
+        runner._run_motor_loop(motor)
+
+        half_track = round(TRACK_WIDTH_METERS / 2 * ENCODER_COUNTS_PER_METER)
+        left, right = motor.commands[0]
+        self.assertLess(left, 0)
+        self.assertGreater(right, 0)
+        self.assertEqual((left, right), (-half_track, half_track))
+
+    def test_stale_twist_stops_motor(self):
+        motor = FakeMotor()
+        current_time = 0.0
+        sleeps = 0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time, sleeps
+            sleeps += 1
+            current_time += 0.6
+            if sleeps == 2:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, qpps_slew_limit=10_000_000.0),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
+        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
+
+        runner._run_motor_loop(motor)
+
+        expected = round(0.2 * ENCODER_COUNTS_PER_METER)
+        self.assertEqual(motor.commands[:2], [(expected, expected), (0, 0)])
+
+    def test_drive_socket_wins_over_twist(self):
+        motor = FakeMotor()
+        runner = self._runner(motor)
+        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=False))
+        runner.on_twist_command(MotionCommand(linear_x=0.2, angular_z=0.0))
+        runner._on_drive_command(drive_command(250, 250))
+
+        runner._run_motor_loop(motor)
+
+        self.assertEqual(motor.commands[0], (250, 250))
+
+    def test_twist_wheels_payload_is_normalized_by_qpps(self):
+        runner = self._runner(FakeMotor())
+        runner.on_twist_command(MotionCommand(linear_x=0.1, angular_z=0.0))
+
+        drive = runner._twist_drive_command()
+
+        expected = round(0.1 * ENCODER_COUNTS_PER_METER)
+        self.assertEqual((drive.left_qpps, drive.right_qpps), (expected, expected))
+        self.assertAlmostEqual(drive.wheels["left_command"], expected / runner.config.qpps)
+        self.assertAlmostEqual(drive.wheels["right_command"], expected / runner.config.qpps)
+        self.assertIsNone(drive.drive_status["controller_reader_alive"])
+        self.assertTrue(runner._gamepad_active_from_wheels(drive.wheels))
+
+    def test_odometry_state_reports_pose_and_twist_from_encoder_deltas(self):
+        motor = FakeMotor()
+        current_time = 0.0
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: None,
+            clock=lambda: current_time,
+            telemetry_publisher=lambda *_args: True,
+        )
+        counts = round(0.1 * ENCODER_COUNTS_PER_METER)
+        motor.positions = deque([(0, 0), (counts, counts)])
+
+        runner._accumulate_odometry(motor)
+        current_time = 0.5
+        runner._accumulate_odometry(motor)
+
+        pose, twist = runner.odometry_state()
+        self.assertAlmostEqual(pose.x, 0.1, places=3)
+        self.assertAlmostEqual(twist.linear_x, 0.2, places=2)
+        self.assertAlmostEqual(twist.angular_z, 0.0)
 
     def test_stale_drive_command_stops_motor(self):
         motor = FakeMotor()
@@ -835,7 +945,7 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        stopped = runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False))
+        stopped = encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False))
 
         self.assertFalse(stopped)
         self.assertEqual(completed, [])
@@ -849,8 +959,8 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
-        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 0.1, True, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [{"ok": True, "result": "completed", "traveled_m": 0.1}])
         self.assertIsNone(runner.encoder_move)
@@ -863,8 +973,8 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, -0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, False, SafetyState(blocked=False)))
-        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, False, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, False, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 0.1, False, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [{"ok": True, "result": "completed", "traveled_m": -0.1}])
 
@@ -879,9 +989,9 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, -0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, False, SafetyState(blocked=False)))
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.1, False, SafetyState(blocked=False)))
-        self.assertTrue(runner._encoder_move_should_stop(motor, 0.2, False, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, False, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.1, False, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 0.2, False, SafetyState(blocked=False)))
 
         self.assertEqual(completed[0]["ok"], True)
         self.assertEqual(completed[0]["result"], "completed")
@@ -893,7 +1003,7 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        self.assertTrue(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [{"ok": False, "error": "encoder_read_failed"}])
         self.assertIsNone(runner.encoder_move)
@@ -905,8 +1015,8 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
-        self.assertTrue(runner._encoder_move_should_stop(motor, 0.1, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 0.1, True, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [{"ok": False, "error": "encoder_read_failed"}])
 
@@ -916,8 +1026,8 @@ class RobotMotionTest(unittest.TestCase):
         runner = self._move_runner(motor, 0.1, completed)
         runner._last_safety_reason = "cliff_left_cliff"
 
-        stopped = runner._encoder_move_should_stop(
-            motor, 0.0, True, SafetyState(blocked=True, reason="cliff_left_cliff")
+        stopped = encoder_move_should_stop(
+            runner, motor, 0.0, True, SafetyState(blocked=True, reason="cliff_left_cliff")
         )
 
         self.assertTrue(stopped)
@@ -932,7 +1042,6 @@ class RobotMotionTest(unittest.TestCase):
                 }
             ],
         )
-        self.assertEqual(motor.position_calls, 0)
 
     def test_encoder_move_safety_block_includes_partial_travel(self):
         motor = FakeMotor()
@@ -942,9 +1051,9 @@ class RobotMotionTest(unittest.TestCase):
         runner = self._move_runner(motor, 0.1, completed)
         runner._last_safety_reason = "front_right_obstacle"
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
-        stopped = runner._encoder_move_should_stop(
-            motor, 0.1, True, SafetyState(blocked=True, reason="front_right_obstacle")
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
+        stopped = encoder_move_should_stop(
+            runner, motor, 0.1, True, SafetyState(blocked=True, reason="front_right_obstacle")
         )
 
         self.assertTrue(stopped)
@@ -966,8 +1075,8 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, -0.1, completed)
 
-        stopped = runner._encoder_move_should_stop(
-            motor, 0.0, False, SafetyState(blocked=True, reason="cliff_left_cliff")
+        stopped = encoder_move_should_stop(
+            runner, motor, 0.0, False, SafetyState(blocked=True, reason="cliff_left_cliff")
         )
 
         self.assertFalse(stopped)
@@ -980,9 +1089,9 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.5, True, SafetyState(blocked=False)))
-        self.assertTrue(runner._encoder_move_should_stop(motor, 1.0, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.5, True, SafetyState(blocked=False)))
+        self.assertTrue(encoder_move_should_stop(runner, motor, 1.0, True, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [{"ok": False, "error": "encoder_no_progress", "traveled_m": 0.0}])
 
@@ -992,9 +1101,9 @@ class RobotMotionTest(unittest.TestCase):
         completed = []
         runner = self._move_runner(motor, 0.1, completed)
 
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.0, True, SafetyState(blocked=False)))
-        self.assertFalse(runner._encoder_move_should_stop(motor, 0.9, True, SafetyState(blocked=False)))
-        self.assertFalse(runner._encoder_move_should_stop(motor, 1.5, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 0.9, True, SafetyState(blocked=False)))
+        self.assertFalse(encoder_move_should_stop(runner, motor, 1.5, True, SafetyState(blocked=False)))
 
         self.assertEqual(completed, [])
 

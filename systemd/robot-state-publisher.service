@@ -1,0 +1,18 @@
+[Unit]
+Description=Robot state publisher - static base_link -> sensor TF from urdf/robot.urdf
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+# $$ is systemd's escape for a literal $, so bash sees $(cat ...).
+ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_description:="$$(cat /home/pi/robot-pet/urdf/robot.urdf)"'
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

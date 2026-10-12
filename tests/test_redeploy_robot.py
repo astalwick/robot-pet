@@ -60,7 +60,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-voice.service")
         elif path == "src/robot_vision.py":
             want("robot-vision.service")
-        elif path == "src/robot_sensors.py":
+        elif path in ("src/robot_sensors.py", "src/ros_nodes/sensors_node.py", "src/ros_nodes/ros_messages.py"):
             want("robot-sensors.service")
         elif path == "src/robot_voice.py" or path.startswith("src/voice/"):
             want("robot-voice.service")
@@ -104,8 +104,11 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-voice.service")
             want("robot-sensors.service")
             want("robot-web-dashboard.service")
-        elif path == "src/ros_nodes/heartbeat_node.py" or path == "scripts/ros-node.sh":
+        elif path == "src/ros_nodes/heartbeat_node.py":
             want("robot-heartbeat.service")
+        elif path == "scripts/ros-node.sh":
+            want("robot-heartbeat.service")
+            want("robot-sensors.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -221,7 +224,11 @@ class TestRedeployRobot(unittest.TestCase):
 
     def test_ros_node_paths_restart_heartbeat(self):
         self.assertEqual(planned_services(["src/ros_nodes/heartbeat_node.py"]), {"robot-heartbeat.service"})
-        self.assertEqual(planned_services(["scripts/ros-node.sh"]), {"robot-heartbeat.service"})
+        self.assertEqual(planned_services(["src/ros_nodes/sensors_node.py"]), {"robot-sensors.service"})
+        self.assertEqual(planned_services(["src/ros_nodes/ros_messages.py"]), {"robot-sensors.service"})
+        self.assertEqual(
+            planned_services(["scripts/ros-node.sh"]), {"robot-heartbeat.service", "robot-sensors.service"}
+        )
 
     def test_dashboard_restart_does_not_kill_systemctl_child(self):
         body = (REPO_ROOT / "systemd" / "robot-web-dashboard.service").read_text()

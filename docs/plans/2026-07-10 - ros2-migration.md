@@ -46,6 +46,12 @@ pushed. Measured with the whole robot running plus Nav2 and slam_toolbox
 launched idle: ~2.8 GB available of 4 GB, plus 1.9 GB zram swap unused.
 venv interop (rclpy + message types + pip numpy) confirmed.
 
+**Phase 2 complete 2026-10-12:** heartbeat node, foxglove unit, sudoers
+loop, restart/redeploy wiring. Foxglove on the Mac shows `/robot/heartbeat`;
+systemd restarts the node through `ros-node.sh` after a kill. Gotcha found:
+ROS's `setup.bash` reads unset variables, so the wrapper sources it before
+`set -u`.
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was

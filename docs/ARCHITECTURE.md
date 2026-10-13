@@ -12,7 +12,7 @@ which sources `/opt/ros/lyrical/setup.bash`, loads
 discovery) and execs the repo venv's python.
 
 The migration plan and its phase-by-phase record live in
-[plans/2026-07-10 - ros2-migration.md](plans/2026-07-10%20-%20ros2-migration.md).
+[plans/done/2026-07-10 - ros2-migration.md](plans/done/2026-07-10%20-%20ros2-migration.md).
 
 ## Guiding Principle
 
@@ -144,7 +144,7 @@ A node in `src/ros_nodes/` is one `rclpy.node.Node` subclass plus a `main()`:
 
 1. Parse args, `rclpy.init()`, build the node and the service loop with
    `publish=node.publish`.
-2. Run the loop in a daemon thread; `rclpy.spin(node)` on the main thread.
+2. Run the loop with `ros_nodes/service_thread.py` (`start_service_thread`); `rclpy.spin(node)` on the main thread. If the loop ever dies, the helper shuts rclpy down so the process exits and systemd restarts it.
 3. Catch `(KeyboardInterrupt, ExternalShutdownException)`, stop the loop,
    join, clean up hardware, `rclpy.try_shutdown()`.
 

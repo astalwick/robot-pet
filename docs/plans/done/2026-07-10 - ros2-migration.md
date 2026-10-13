@@ -98,6 +98,15 @@ Footprint rear corrected to the measured 330 mm overall depth. Verified on the
 Pi: Foxglove TF shows every mount at its measured pose, pi battery on
 `/battery/pi`, dashboard unchanged.
 
+**Phase 7 complete 2026-10-12:** heartbeat node and unit deleted (redeploy now
+retires a unit whose repo file is gone via `install-service.sh`); dead `main()`
+shells dropped from `robot_sensors.py` / `robot_pi_battery.py`;
+`docs/ARCHITECTURE.md` rewritten for the ROS layout with the lidar-readiness
+checklist at the bottom; `messages.py` map, README and gamepad doc updated.
+Verified on the Pi: redeploy retired the heartbeat unit, `setup.sh` re-run
+clean, soak with gamepad, voice, dashboard and Foxglove live. Migration done;
+next is the lidar plan.
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was

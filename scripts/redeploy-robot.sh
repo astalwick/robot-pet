@@ -117,6 +117,12 @@ plan_service_restarts() {
         want_restart robot-motion.service
         want_restart robot-pi-battery.service
         ;;
+      src/ros_nodes/service_thread.py)
+        want_restart robot-sensors.service
+        want_restart robot-motion.service
+        want_restart gamepad-teleop.service
+        want_restart robot-pi-battery.service
+        ;;
       src/robot_voice.py | src/voice/*)
         want_restart robot-voice.service
         ;;

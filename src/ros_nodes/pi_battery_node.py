@@ -11,6 +11,7 @@ from sensor_msgs.msg import BatteryState
 from lib.log import setup_logging
 from robot_pi_battery import PiBatteryConfig, PiBatteryService, build_parser, run_loop
 from ros_nodes.ros_messages import pi_battery_state_fields
+from ros_nodes.service_thread import start_service_thread
 from telemetry.socket_client import publish_message
 
 log = setup_logging("robot-pi-battery")
@@ -57,8 +58,7 @@ def main() -> None:
     service = PiBatteryService(config, publish=node.publish)
 
     stop = threading.Event()
-    service_thread = threading.Thread(target=run_loop, args=(service, stop), daemon=True)
-    service_thread.start()
+    service_thread = start_service_thread(run_loop, service, stop)
     log.info("pi battery node starting")
     try:
         rclpy.spin(node)

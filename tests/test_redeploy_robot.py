@@ -69,6 +69,11 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-sensors.service")
             want("robot-motion.service")
             want("robot-pi-battery.service")
+        elif path == "src/ros_nodes/service_thread.py":
+            want("robot-sensors.service")
+            want("robot-motion.service")
+            want("gamepad-teleop.service")
+            want("robot-pi-battery.service")
         elif path == "src/robot_voice.py" or path.startswith("src/voice/"):
             want("robot-voice.service")
         elif path == "src/robot_web_dashboard.py" or path.startswith("src/web_dashboard_static/"):
@@ -240,6 +245,10 @@ class TestRedeployRobot(unittest.TestCase):
             {"robot-sensors.service", "robot-motion.service", "robot-pi-battery.service"},
         )
         self.assertEqual(planned_services(["src/ros_nodes/gamepad_teleop_node.py"]), {"gamepad-teleop.service"})
+        self.assertEqual(
+            planned_services(["src/ros_nodes/service_thread.py"]),
+            {"robot-sensors.service", "robot-motion.service", "gamepad-teleop.service", "robot-pi-battery.service"},
+        )
         self.assertEqual(planned_services(["config/twist_mux.yaml"]), {"robot-twist-mux.service"})
         self.assertEqual(planned_services(["src/ros_nodes/pi_battery_node.py"]), {"robot-pi-battery.service"})
         self.assertEqual(planned_services(["urdf/robot.urdf"]), {"robot-state-publisher.service"})

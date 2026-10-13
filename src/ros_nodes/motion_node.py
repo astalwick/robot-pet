@@ -7,7 +7,6 @@ telemetry as ROS messages, and broadcasts odom -> base_link at a fixed rate so
 slam_toolbox always has a fresh transform.
 """
 
-import threading
 from typing import Any
 
 import rclpy
@@ -22,6 +21,7 @@ from control.commands import MotionCommand
 from lib.log import setup_logging
 from robot_motion import MotionRunner, build_parser, build_runner
 from ros_nodes.ros_messages import battery_state_fields, odometry_fields
+from ros_nodes.service_thread import start_service_thread
 from telemetry.socket_client import publish_message
 
 # Not tied to the hub telemetry cadence: slam_toolbox interpolates the robot
@@ -95,8 +95,7 @@ def main() -> None:
     node = MotionNode()
     node.runner = build_runner(args, telemetry_publisher=node.publish_hub)
 
-    motor_thread = threading.Thread(target=node.runner.run_forever, daemon=True)
-    motor_thread.start()
+    motor_thread = start_service_thread(node.runner.run_forever)
     log.info("motion node starting")
     try:
         rclpy.spin(node)

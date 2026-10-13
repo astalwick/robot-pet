@@ -20,6 +20,7 @@ from config.sensors import DEFAULT_CONFIG_PATH
 from lib.log import setup_logging
 from robot_sensors import SensorsService, default_driver_factory, run_loop
 from ros_nodes.ros_messages import imu_fields, range_fields
+from ros_nodes.service_thread import start_service_thread
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
 from telemetry.socket_client import publish_message
 
@@ -85,8 +86,7 @@ def main() -> None:
     # The sensor loop keeps its own timing in a thread; rclpy.spin just keeps
     # the node alive and returns on SIGINT/SIGTERM.
     stop = threading.Event()
-    loop = threading.Thread(target=run_loop, args=(service, stop), daemon=True)
-    loop.start()
+    loop = start_service_thread(run_loop, service, stop)
     log.info("sensors node starting")
     try:
         rclpy.spin(node)

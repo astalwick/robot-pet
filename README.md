@@ -64,21 +64,23 @@ See `docs/tui-dashboard.md` and `docs/gamepad-teleop.md` for details.
 │   │   ├── controller.py  # Xbox 360 gamepad
 │   │   └── camera.py      # Pi camera (picamera2)
 │   ├── telemetry/         # Local JSON/socket telemetry helpers
+│   ├── ros_nodes/         # ROS nodes: motion, sensors, pi battery, gamepad teleop
 │   ├── lib/log.py         # Logging setup (journald-friendly)
+│   ├── robot_model.py         # Physical geometry (feeds urdf/robot.urdf)
 │   ├── robot_brain.py         # Orchestrator service (stub)
 │   ├── robot_telemetry.py     # Local telemetry hub
 │   ├── robot_camera.py        # Pi camera owner; serves MJPEG/snapshot on :8081
 │   ├── robot_vision.py        # Polls camera snapshots, runs face detection
 │   ├── robot_web_dashboard.py # Browser dashboard on :8080
 │   ├── robot_dashboard.py     # SSH Textual dashboard
-│   ├── gamepad_teleop.py      # Boot-ready gamepad teleop service
+│   ├── gamepad_teleop.py      # Gamepad teleop loop (run by ros_nodes/gamepad_teleop_node.py)
 │   └── web_dashboard_static/  # HTML/CSS/JS for the browser dashboard (no build step)
 ├── scripts/               # Manual tools and hardware diagnostics
 │   ├── diagnostics/       # Controller and RoboClaw bring-up scripts
 │   ├── test-motor.py
 │   └── redeploy-robot.sh
 └── docs/
-    ├── ARCHITECTURE.md    # System design, ROS2 migration path
+    ├── ARCHITECTURE.md    # System design, services, ROS topics
     ├── gamepad-teleop.md  # Teleop service, controls, tuning, foreground debug
     ├── tui-dashboard.md   # SSH TUI usage
     ├── phases/            # Long-term roadmap and BOM by phase
@@ -98,7 +100,7 @@ See `docs/phases/index.md` for the roadmap and `docs/phases/bom-by-phase.md` for
 
 ## Architecture
 
-Designed for eventual ROS2 migration. Drivers in `src/drivers/` are pure Python classes with no framework dependencies — they'll drop directly into ROS2 nodes. The current systemd services are temporary scaffolding that map naturally onto future ROS2 nodes (camera node, motion node, etc.).
+Ubuntu 26.04 + ROS 2 Lyrical on the Pi. Motion, sensors and battery run as ROS nodes (`src/ros_nodes/`, one systemd unit each, no colcon); the dashboards, camera, vision and voice are plain Python services on a local telemetry hub. Drivers in `src/drivers/` are pure Python with no framework imports.
 
 See `docs/ARCHITECTURE.md` for details.
 

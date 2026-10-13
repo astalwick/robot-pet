@@ -6,7 +6,7 @@ VENV_PATH="$REPO_DIR/.venv"
 LOG_DIR="/var/log/robot-pet"
 REPO_HTTPS="https://github.com/astalwick/robot-pet"
 
-# Start order; foxglove and the ROS heartbeat come last (nothing depends on them).
+# Start order; foxglove comes last (nothing depends on it).
 ROBOT_SERVICES=(
   robot-brain.service
   robot-telemetry.service
@@ -22,10 +22,8 @@ ROBOT_SERVICES=(
   robot-voice.service
   robot-web-dashboard.service
   robot-foxglove.service
-  robot-heartbeat.service
 )
 ROBOT_SERVICES_STOP_ORDER=(
-  robot-heartbeat.service
   robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
@@ -425,6 +423,8 @@ echo "    sudo systemctl status robot-voice"
 echo "    journalctl -u robot-voice -f"
 echo "    sudo systemctl status robot-web-dashboard"
 echo "    journalctl -u robot-web-dashboard -f"
+echo "    ./restart.sh            # all units; or name some: ./restart.sh motion sensors"
+echo "    ros2 topic list         # after: source /opt/ros/lyrical/setup.bash; set -a; source ~/.config/robot-pet/ros.env"
 echo ""
 echo "Open the web dashboard at http://<this-pi>:8080/"
 echo "Create /home/pi/.config/robot-pet/voice.env with ELEVENLABS_API_KEY and OPENAI_API_KEY before enabling Listen."

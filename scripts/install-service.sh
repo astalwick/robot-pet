@@ -5,4 +5,11 @@
 set -euo pipefail
 unit="$(basename "$1")"
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
-install -m 0644 "$repo_dir/systemd/$unit" "/etc/systemd/system/$unit"
+if [[ -f "$repo_dir/systemd/$unit" ]]; then
+  install -m 0644 "$repo_dir/systemd/$unit" "/etc/systemd/system/$unit"
+else
+  # The unit was deleted from the repo: stop it and take it out of systemd.
+  echo "retiring $unit"
+  systemctl disable --now "$unit"
+  rm -f "/etc/systemd/system/$unit"
+fi

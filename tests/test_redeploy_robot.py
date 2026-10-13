@@ -23,7 +23,6 @@ ALL_SERVICES = {
     "robot-sensors.service",
     "robot-web-dashboard.service",
     "robot-foxglove.service",
-    "robot-heartbeat.service",
 }
 
 
@@ -112,14 +111,11 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-voice.service")
             want("robot-sensors.service")
             want("robot-web-dashboard.service")
-        elif path == "src/ros_nodes/heartbeat_node.py":
-            want("robot-heartbeat.service")
         elif path in ("urdf/robot.urdf", "scripts/generate-urdf.py"):
             want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
         elif path == "scripts/ros-node.sh":
-            want("robot-heartbeat.service")
             want("robot-sensors.service")
             want("robot-motion.service")
             want("gamepad-teleop.service")
@@ -237,8 +233,6 @@ class TestRedeployRobot(unittest.TestCase):
             self.assertIn(f"  {unit}\n", body, unit)
         self.assertEqual(units, ALL_SERVICES)
 
-    def test_ros_node_paths_restart_heartbeat(self):
-        self.assertEqual(planned_services(["src/ros_nodes/heartbeat_node.py"]), {"robot-heartbeat.service"})
         self.assertEqual(planned_services(["src/ros_nodes/sensors_node.py"]), {"robot-sensors.service"})
         self.assertEqual(planned_services(["src/ros_nodes/motion_node.py"]), {"robot-motion.service"})
         self.assertEqual(
@@ -252,8 +246,7 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertEqual(
             planned_services(["scripts/ros-node.sh"]),
             {
-                "robot-heartbeat.service",
-                "robot-sensors.service",
+                            "robot-sensors.service",
                 "robot-motion.service",
                 "gamepad-teleop.service",
                 "robot-pi-battery.service",

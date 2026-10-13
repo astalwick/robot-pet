@@ -1,6 +1,6 @@
 # Gamepad Teleop
 
-Boot-ready gamepad teleop runs as `gamepad-teleop.service`. It waits for the Xbox 360 controller and `robot-motion`, then sends drive commands while RB is held. `robot-motion.service` owns the RoboClaw and applies safety gating from range sensors.
+Boot-ready gamepad teleop runs as `gamepad-teleop.service` (`src/ros_nodes/gamepad_teleop_node.py`). It waits for the Xbox 360 controller, then publishes `geometry_msgs/Twist` on `/cmd_vel_teleop` while RB is held. `robot-twist-mux.service` forwards that to `/cmd_vel`; `robot-motion.service` owns the RoboClaw and applies safety gating from range sensors.
 
 ## Safety Checklist
 
@@ -53,22 +53,18 @@ Gamepad wheel commands are published as `geometry_msgs/Twist` on `/cmd_vel_teleo
 
 ## Foreground Debugging
 
-Stop the services before running a foreground teleop process so only one process owns the RoboClaw:
+Stop the service before running the node in the foreground so only one process owns the controller:
 
 ```bash
-sudo systemctl stop gamepad-teleop robot-motion
+sudo systemctl stop gamepad-teleop
 cd ~/robot-pet
-source .venv/bin/activate
-PYTHONPATH=src python src/gamepad_teleop.py --speed-scale 0.15
+PYTHONPATH=src scripts/ros-node.sh src/ros_nodes/gamepad_teleop_node.py --speed-scale 0.15
 ```
 
 Useful flags:
 
 - `--config /home/pi/.config/robot-pet/drive_tuning.json`
 - `--device /dev/input/eventX`
-- `--port /dev/serial0`
-- `--address 0x80`
-- `--baud 38400`
 - `--qpps 2425`
 - `--speed-scale 0.25`
 - `--turbo-scale 0.75`
@@ -97,6 +93,6 @@ M2 = right
 positive left and right QPPS = robot-forward
 ```
 
-## ROS2 Note
+## Kinematics
 
-`MotionCommand(linear_x, angular_z)` is intentionally Twist-shaped. When ROS2 is introduced, the transport changes to `/cmd_vel`; the controller policy, mixer, and `MotorDriver` hardware backend should remain usable.
+The mixer produces wheel QPPS; `control/differential_drive.py` converts that to a body twist for `/cmd_vel_teleop` and back again in `robot-motion`. Positive `angular_z` is a left (counter-clockwise) turn.

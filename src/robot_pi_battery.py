@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Pi UPS battery telemetry service."""
+"""Pi UPS battery telemetry service. Run by ros_nodes/pi_battery_node.py."""
 
 from __future__ import annotations
 
 import argparse
-import signal
 import subprocess
 import threading
 from collections.abc import Callable
@@ -15,7 +14,6 @@ from drivers.ups_hat_e import UPS_ADDRESS, UpsHatEDriver
 from lib.log import setup_logging
 from telemetry.messages import pi_battery_message, pi_battery_update
 from telemetry.paths import DEFAULT_PUBLISH_SOCKET
-from telemetry.socket_client import publish_message
 
 
 log = setup_logging("robot-pi-battery")
@@ -127,33 +125,3 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
     return parser
 
-
-def main() -> None:
-    args = build_parser().parse_args()
-    config = PiBatteryConfig(
-        bus=args.bus,
-        address=args.address,
-        poll_interval=args.poll_interval,
-        warning_voltage=args.warning_voltage,
-        shutdown_voltage=args.shutdown_voltage,
-        telemetry_socket=args.telemetry_socket,
-    )
-    service = PiBatteryService(
-        config,
-        publish=lambda message: publish_message(config.telemetry_socket, message),
-    )
-
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-
-    log.info("pi battery service starting")
-    try:
-        run_loop(service, stop)
-    finally:
-        service.cleanup()
-    log.info("pi battery service stopped")
-
-
-if __name__ == "__main__":
-    main()

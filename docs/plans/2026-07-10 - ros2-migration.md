@@ -86,6 +86,18 @@ robot-motion's deadman as the backstop. Verified on the Pi: gamepad drive
 through DDS, stop on teleop kill and on dongle pull, dashboard panels as
 before. Arbitration still reads the muxed `/cmd_vel` (see the Phase 7 note).
 
+**Phase 6 complete 2026-10-12:** `scripts/generate-urdf.py` renders
+`urdf/robot.urdf` from `robot_model.py` (base_link box, wheels, one fixed frame
+per sensor mount, `imu_link` at the origin, commented `laser` placeholder); a
+test keeps the checked-in file in sync. `robot-state-publisher.service` runs the
+apt `robot_state_publisher` with the file passed as `robot_description`. Gotcha:
+rcl parses that value as YAML, so the URDF text must never contain `": "` or
+`" #"` (a comment with a colon killed the node with exit 250; a test now guards
+it). `pi_battery_node.py` dual-publishes `/battery/pi` as `BatteryState`.
+Footprint rear corrected to the measured 330 mm overall depth. Verified on the
+Pi: Foxglove TF shows every mount at its measured pose, pi battery on
+`/battery/pi`, dashboard unchanged.
+
 ### Two refinements made while writing this plan (signed off 2026-10-12)
 
 1. **"Hub becomes a bridge" → "nodes dual-publish".** The agreed intent was

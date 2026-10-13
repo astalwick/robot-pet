@@ -7,26 +7,21 @@ import time
 from typing import Any
 
 
-# --- ROS2 migration map --------------------------------------------------
+# --- Hub messages vs ROS topics ------------------------------------------
 #
-# These are hand-rolled JSON dicts over a Unix socket. Most of it is throwaway
-# scaffolding, but a few carry data that maps onto real ROS2 messages/topics.
-# When we migrate, port these and drop the rest:
+# These are JSON dicts over a Unix socket for the dashboards. The ones that
+# carry sensor or motion data are also published as ROS messages by the nodes
+# in ros_nodes/ (conversions live in ros_nodes/ros_messages.py):
 #
-#   odometry_message      -> nav_msgs/Odometry (+ TF odom->base_link)
-#   wheel_message         -> wheel joint state (sensor_msgs/JointState)
-#   sensors_update ranges -> sensor_msgs/Range per sensor; join each reading to
-#                            robot_model.SENSOR_MOUNTS by name for its frame_id
-#   motor_battery_message -> sensor_msgs/BatteryState
-#   pi_battery_message    -> sensor_msgs/BatteryState
-#   the drive command     -> geometry_msgs/Twist on /cmd_vel (done: gamepad-teleop
-#                            publishes /cmd_vel_teleop, twist_mux owns /cmd_vel;
-#                            the velocity<->qpps conversion lives in
-#                            control/differential_drive.py)
+#   odometry_message      -> nav_msgs/Odometry on /odom + TF odom->base_link
+#   sensors_update ranges -> sensor_msgs/Range on /range/<name>, frame_id = mount name
+#   sensors_update imu    -> sensor_msgs/Imu on /imu
+#   motor_battery_message -> sensor_msgs/BatteryState on /battery/motor
+#   pi_battery_message    -> sensor_msgs/BatteryState on /battery/pi
+#   drive command         -> geometry_msgs/Twist on /cmd_vel_teleop -> twist_mux -> /cmd_vel
 #
-# Scaffolding — expected to be replaced, not ported: voice_update, vision_update,
-# gamepad_teleop_update, robot_motion_update and the other dashboard-hub payloads.
-# This block only records intent; it changes no behavior.
+# wheel_message, voice_update, vision_update, gamepad_teleop_update,
+# robot_motion_update and the rest are dashboard-only and stay hub messages.
 
 
 BUTTON_FIELDS = (

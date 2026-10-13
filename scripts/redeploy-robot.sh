@@ -22,10 +22,8 @@ SERVICES=(
   robot-sensors.service
   robot-web-dashboard.service
   robot-foxglove.service
-  robot-heartbeat.service
 )
 STOP_SERVICES=(
-  robot-heartbeat.service
   robot-foxglove.service
   robot-vision.service
   gamepad-teleop.service
@@ -54,7 +52,6 @@ START_SERVICES=(
   robot-vision.service
   robot-voice.service
   robot-foxglove.service
-  robot-heartbeat.service
 )
 
 declare -A RESTART_SERVICES=()
@@ -173,9 +170,6 @@ plan_service_restarts() {
         want_restart robot-sensors.service
         want_restart robot-web-dashboard.service
         ;;
-      src/ros_nodes/heartbeat_node.py)
-        want_restart robot-heartbeat.service
-        ;;
       urdf/robot.urdf | scripts/generate-urdf.py)
         want_restart robot-state-publisher.service
         ;;
@@ -184,14 +178,14 @@ plan_service_restarts() {
         ;;
       scripts/ros-node.sh)
         # every ROS node runs through this wrapper
-        want_restart robot-heartbeat.service
         want_restart robot-sensors.service
         want_restart robot-motion.service
         want_restart gamepad-teleop.service
         want_restart robot-pi-battery.service
         ;;
       systemd/*)
-        want_restart "$(basename "$path")"
+        # a unit deleted from the repo is retired by install-service.sh instead
+        [[ -f "$path" ]] && want_restart "$(basename "$path")"
         ;;
     esac
   done
@@ -274,8 +268,10 @@ if [[ "$systemd_changed" -eq 1 ]]; then
     [[ "$path" == systemd/* ]] || continue
     service="$(basename "$path")"
     sudo -n "$REPO_DIR/scripts/install-service.sh" "$service"
-    echo "enabling $service"
-    sudo systemctl enable "$service"
+    if [[ -f "$path" ]]; then
+      echo "enabling $service"
+      sudo systemctl enable "$service"
+    fi
   done <<< "$changed_files"
   sudo systemctl daemon-reload
   echo ""

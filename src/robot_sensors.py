@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Range sensor service: polls ToF sensors and publishes telemetry."""
+"""Range sensor service: polls ToF sensors and publishes telemetry. Run by ros_nodes/sensors_node.py."""
 
 from __future__ import annotations
 
-import argparse
 import os
-import signal
 import threading
 import time
 from collections.abc import Callable
@@ -24,8 +22,6 @@ from drivers.imu import ImuDriver
 from drivers.range import RangeDriver
 from lib.log import setup_logging
 from telemetry.messages import imu_reading_to_dict, reading_to_dict, sensors_update
-from telemetry.paths import DEFAULT_PUBLISH_SOCKET
-from telemetry.socket_client import publish_message
 
 
 CONFIG_POLL_INTERVAL = 1.0
@@ -269,33 +265,3 @@ def run_loop(service: SensorsService, stop: threading.Event) -> None:
             sleep_seconds = CONFIG_POLL_INTERVAL
         stop.wait(sleep_seconds)
 
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Robot range sensor service.")
-    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH)
-    parser.add_argument("--telemetry-socket", default=DEFAULT_PUBLISH_SOCKET)
-    return parser
-
-
-def main() -> None:
-    args = build_parser().parse_args()
-    service = SensorsService(
-        config_path=args.config,
-        publish=lambda message: publish_message(args.telemetry_socket, message),
-        driver_factory=default_driver_factory,
-    )
-
-    stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-
-    log.info("sensors service starting")
-    try:
-        run_loop(service, stop)
-    finally:
-        service.cleanup()
-    log.info("sensors service stopped")
-
-
-if __name__ == "__main__":
-    main()

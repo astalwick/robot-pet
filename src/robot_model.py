@@ -39,8 +39,9 @@ TRACK_WIDTH_METERS = 0.306
 # Bumper front face sits 55 mm ahead of the drive axle (the base_link origin).
 BUMPER_FRONT_X_METERS = 0.055
 # Front edge is the cliff-sensor tips (9 mm ahead of the bumper); rear is the caster.
+# Overall depth including caster, speaker and wheels is 330 mm (docs/robot dimensions.md).
 FOOTPRINT_FRONT_X_METERS = 0.064
-FOOTPRINT_REAR_X_METERS = -0.285
+FOOTPRINT_REAR_X_METERS = FOOTPRINT_FRONT_X_METERS - 0.330
 FOOTPRINT_HALF_WIDTH_METERS = 0.331 / 2
 
 

@@ -3,8 +3,8 @@
 <robot name="robo_pet">
   <link name="base_link">
     <visual>
-      <origin xyz="-0.1105 0 0.0630" rpy="0 0 0"/>
-      <geometry><box size="0.3490 0.3310 0.1260"/></geometry>
+      <origin xyz="-0.1010 0 0.0630" rpy="0 0 0"/>
+      <geometry><box size="0.3300 0.3310 0.1260"/></geometry>
     </visual>
   </link>
 

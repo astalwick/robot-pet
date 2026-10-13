@@ -76,3 +76,9 @@ SENSOR_MOUNTS: tuple[SensorMount, ...] = (
     SensorMount("cliff_left", x=0.064, y=0.128, z=0.067, pitch=CLIFF_DOWN_PITCH),
     SensorMount("cliff_right", x=0.064, y=-0.128, z=0.067, pitch=CLIFF_DOWN_PITCH),
 )
+
+# RPLidar A1 on the mast. PLACEHOLDER, not measured yet: centred over the axle,
+# scan plane 300 mm up, 0 degree mark facing forward. Measure and fix (see
+# docs/plans/2026-10-12 - lidar.md phase 0); a wrong yaw shows up as a rotated
+# scan ring in Foxglove.
+LIDAR_MOUNT = SensorMount("laser", x=0.0, y=0.0, z=0.300)

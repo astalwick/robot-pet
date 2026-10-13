@@ -67,6 +67,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-pi-battery` | ROS node | `pi_battery_node.py`: UPS HAT E; publishes `/battery/pi` |
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
+| `robot-lidar` | ROS (apt) | `rplidar_ros`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -158,21 +159,14 @@ All services log to stdout/stderr; systemd captures to journald.
 - Several: `journalctl -u robot-motion -u robot-sensors -u gamepad-teleop -f`
 - Format: `LEVEL service-name: message`; timestamps come from journald.
 
-## Lidar readiness
+## Lidar
 
-What the lidar plan needs, and nothing else should have to move:
-
-1. apt `ros-lyrical-slam-toolbox` (already installed by `setup.sh`).
-2. A lidar driver node publishing `sensor_msgs/LaserScan` on `/scan` with
-   `frame_id=laser`, as a unit through `scripts/ros-node.sh` or apt.
-3. Measure the lidar mount, add it to `robot_model.py`, uncomment the `laser`
-   block in `scripts/generate-urdf.py`, regenerate.
-4. One systemd unit launching `slam_toolbox` (online async) with a params file
-   in `config/`; add it to the service lists.
-5. Foxglove map panel on `/map`; `ros2 run tf2_tools view_frames` should show
-   `map -> odom -> base_link -> laser`.
-6. `ODOM_PUBLISH_HZ` in `motion_node.py` is 20; raise toward 30 if scan
-   matching complains.
+The lidar work is tracked in
+[plans/2026-10-12 - lidar.md](plans/2026-10-12%20-%20lidar.md). Done so far:
+`robot-lidar.service` publishes `/scan` in the `laser` frame, and the URDF has
+a `laser` frame from `LIDAR_MOUNT` (a placeholder pose until the mount is
+measured). Still to do: slam_toolbox as a unit with a params file in `config/`,
+then `map -> odom -> base_link -> laser` in Foxglove.
 
 Known-future items the exit criterion does not cover:
 

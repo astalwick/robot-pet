@@ -1,0 +1,22 @@
+[Unit]
+Description=Robot lidar - RPLidar A1 publishing /scan in the laser frame
+After=network-online.target
+Wants=network-online.target
+# Without the lidar plugged in, start is a clean no-op (so setup/redeploy/restart
+# stay simple). The udev rule in setup.sh starts this unit when the lidar appears
+# and stops it when it is unplugged; the driver itself idles forever on a missing
+# port instead of exiting, so Restart= alone would not recover it.
+ConditionPathExists=/dev/rplidar
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/rplidar -p serial_baudrate:=115200 -p frame_id:=laser -p angle_compensate:=true'
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

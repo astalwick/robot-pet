@@ -16,6 +16,7 @@ ROBOT_SERVICES=(
   robot-pi-battery.service
   robot-motion.service
   robot-twist-mux.service
+  robot-lidar.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -25,6 +26,7 @@ ROBOT_SERVICES=(
 )
 ROBOT_SERVICES_STOP_ORDER=(
   robot-foxglove.service
+  robot-lidar.service
   robot-vision.service
   gamepad-teleop.service
   robot-twist-mux.service
@@ -108,8 +110,15 @@ sudo usermod -a -G render "$USER"
 sudo tee /etc/udev/rules.d/99-robot-pet-respeaker.rules >/dev/null <<'UDEV'
 SUBSYSTEM=="usb", ATTR{idVendor}=="2886", ATTR{idProduct}=="001e", GROUP="audio", MODE="0660"
 UDEV
+# RPLidar A1 (CP2102 USB-UART): stable /dev/rplidar path, and systemd starts
+# robot-lidar.service when it appears and stops it when it goes away.
+sudo tee /etc/udev/rules.d/99-robot-pet-rplidar.rules >/dev/null <<'UDEV'
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="rplidar", TAG+="systemd", ENV{SYSTEMD_WANTS}="robot-lidar.service"
+ACTION=="remove", SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="10c4", ENV{ID_MODEL_ID}=="ea60", RUN+="/usr/bin/systemctl --no-block stop robot-lidar.service"
+UDEV
 sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --subsystem-match=usb --attr-match=idVendor=2886 --attr-match=idProduct=001e
+sudo udevadm trigger --action=add --subsystem-match=tty
 sudo udevadm trigger /dev/gpiochip0 2>/dev/null || true
 
 # Ubuntu's portaudio is built with a PulseAudio backend, and Pa_Initialize
@@ -322,7 +331,7 @@ fi
 sudo apt install -y ros-lyrical-ros-base ros-lyrical-rmw-cyclonedds-cpp \
     ros-lyrical-foxglove-bridge ros-lyrical-robot-state-publisher \
     ros-lyrical-twist-mux ros-lyrical-demo-nodes-py \
-    ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup
+    ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup ros-lyrical-rplidar-ros
 # Every ROS unit runs through scripts/ros-node.sh, which sources this. DDS
 # stays off the Wi-Fi: localhost discovery and a fixed domain.
 mkdir -p "$HOME/.config/robot-pet"

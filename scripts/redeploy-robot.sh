@@ -15,6 +15,7 @@ SERVICES=(
   robot-pi-battery.service
   robot-motion.service
   robot-twist-mux.service
+  robot-lidar.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -25,6 +26,7 @@ SERVICES=(
 )
 STOP_SERVICES=(
   robot-foxglove.service
+  robot-lidar.service
   robot-vision.service
   gamepad-teleop.service
   robot-twist-mux.service
@@ -47,6 +49,7 @@ START_SERVICES=(
   robot-pi-battery.service
   robot-motion.service
   robot-twist-mux.service
+  robot-lidar.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service

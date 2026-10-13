@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from robot_model import SENSOR_MOUNTS, TRACK_WIDTH_METERS, WHEEL_RADIUS_METERS
+from robot_model import LIDAR_MOUNT, SENSOR_MOUNTS, TRACK_WIDTH_METERS, WHEEL_RADIUS_METERS
 
 spec = importlib.util.spec_from_file_location("generate_urdf", os.path.join(ROOT, "scripts", "generate-urdf.py"))
 generate_urdf = importlib.util.module_from_spec(spec)
@@ -48,6 +48,12 @@ class GenerateUrdfTest(unittest.TestCase):
         origins = joint_origins(self.root)
         self.assertEqual(origins["left_wheel"][0], (0.0, round(TRACK_WIDTH_METERS / 2, 4), round(WHEEL_RADIUS_METERS, 4)))
         self.assertEqual(origins["right_wheel"][0], (0.0, -round(TRACK_WIDTH_METERS / 2, 4), round(WHEEL_RADIUS_METERS, 4)))
+
+    def test_laser_frame_sits_at_the_lidar_mount(self):
+        # rplidar_ros publishes /scan with frame_id=laser (robot-lidar.service).
+        xyz, rpy = joint_origins(self.root)["laser"]
+        self.assertEqual(xyz, (round(LIDAR_MOUNT.x, 4), round(LIDAR_MOUNT.y, 4), round(LIDAR_MOUNT.z, 4)))
+        self.assertEqual(rpy[2], round(LIDAR_MOUNT.yaw, 4))
 
     def test_imu_frame_matches_the_imu_message_frame_id(self):
         self.assertIn("imu_link", joint_origins(self.root))

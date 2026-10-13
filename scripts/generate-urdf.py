@@ -3,7 +3,7 @@
 
 robot_state_publisher turns this into the static base_link -> sensor TF frames
 that Foxglove and slam_toolbox use. Only geometry that robot_model knows about
-is here; the lidar mount stays commented out until it is measured.
+is here, including the lidar mount (a placeholder until it is measured).
 """
 
 import math
@@ -16,6 +16,7 @@ from robot_model import (  # noqa: E402
     FOOTPRINT_FRONT_X_METERS,
     FOOTPRINT_HALF_WIDTH_METERS,
     FOOTPRINT_REAR_X_METERS,
+    LIDAR_MOUNT,
     SENSOR_MOUNTS,
     TRACK_WIDTH_METERS,
     WHEEL_RADIUS_METERS,
@@ -73,16 +74,11 @@ def render_urdf() -> str:
 """)
     parts.append(fixed_joint("imu_link", 0.0, 0.0, 0.0))
     parts.append("""
-  <!-- Lidar - uncomment and fill in once the mount is measured (see the ros2-migration plan).
+  <!-- RPLidar A1 scan frame; the mount pose is LIDAR_MOUNT in robot_model.py -->
   <link name="laser"/>
-  <joint name="base_to_laser" type="fixed">
-    <parent link="base_link"/>
-    <child link="laser"/>
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-  </joint>
-  -->
-</robot>
 """)
+    parts.append(fixed_joint("laser", LIDAR_MOUNT.x, LIDAR_MOUNT.y, LIDAR_MOUNT.z, yaw=LIDAR_MOUNT.yaw))
+    parts.append("</robot>\n")
     return "".join(parts)
 
 

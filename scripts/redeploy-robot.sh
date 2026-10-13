@@ -16,6 +16,7 @@ SERVICES=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
+  robot-slam.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -26,6 +27,7 @@ SERVICES=(
 )
 STOP_SERVICES=(
   robot-foxglove.service
+  robot-slam.service
   robot-lidar.service
   robot-vision.service
   gamepad-teleop.service
@@ -50,6 +52,7 @@ START_SERVICES=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
+  robot-slam.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -184,6 +187,9 @@ plan_service_restarts() {
         ;;
       config/twist_mux.yaml)
         want_restart robot-twist-mux.service
+        ;;
+      config/slam_toolbox.yaml)
+        want_restart robot-slam.service
         ;;
       scripts/ros-node.sh)
         # every ROS node runs through this wrapper

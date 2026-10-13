@@ -17,6 +17,7 @@ ALL_SERVICES = {
     "robot-motion.service",
     "robot-twist-mux.service",
     "robot-lidar.service",
+    "robot-slam.service",
     "robot-camera.service",
     "gamepad-teleop.service",
     "robot-vision.service",

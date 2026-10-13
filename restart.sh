@@ -10,6 +10,7 @@ ALL_SERVICES=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
+  robot-slam.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -20,6 +21,7 @@ ALL_SERVICES=(
 )
 STOP_ORDER=(
   robot-foxglove.service
+  robot-slam.service
   robot-lidar.service
   robot-vision.service
   gamepad-teleop.service
@@ -45,6 +47,7 @@ START_ORDER=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
+  robot-slam.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -82,6 +85,7 @@ normalize_service() {
     gamepad-teleop|gamepad|teleop) echo gamepad-teleop.service; return ;;
     twist-mux|mux) echo robot-twist-mux.service; return ;;
     lidar) echo robot-lidar.service; return ;;
+    slam) echo robot-slam.service; return ;;
     vision) echo robot-vision.service; return ;;
     voice) echo robot-voice.service; return ;;
     sensors) echo robot-sensors.service; return ;;
@@ -93,7 +97,7 @@ normalize_service() {
     return
   fi
   echo "Unknown service: $1" >&2
-  echo "Known services: brain telemetry state-publisher battery pi-battery motion twist-mux camera gamepad-teleop lidar vision voice sensors dashboard foxglove" >&2
+  echo "Known services: brain telemetry state-publisher battery pi-battery motion twist-mux camera gamepad-teleop lidar slam vision voice sensors dashboard foxglove" >&2
   exit 1
 }
 

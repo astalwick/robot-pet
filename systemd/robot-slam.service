@@ -1,0 +1,18 @@
+[Unit]
+Description=Robot SLAM - slam_toolbox builds /map from /scan and odom
+After=network-online.target robot-lidar.service robot-motion.service robot-state-publisher.service
+Wants=network-online.target
+# slam_toolbox is a lifecycle node; its stock launch file configures and activates it.
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/pi/robot-pet/config/slam_toolbox.yaml'
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

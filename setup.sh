@@ -17,6 +17,7 @@ ROBOT_SERVICES=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
+  robot-slam.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -26,6 +27,7 @@ ROBOT_SERVICES=(
 )
 ROBOT_SERVICES_STOP_ORDER=(
   robot-foxglove.service
+  robot-slam.service
   robot-lidar.service
   robot-vision.service
   gamepad-teleop.service

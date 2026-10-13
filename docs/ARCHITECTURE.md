@@ -68,6 +68,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
 | `robot-lidar` | ROS (apt) | `rplidar_driver`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device |
+| `robot-slam` | ROS (apt) | `slam_toolbox` online async, params in `config/slam_toolbox.yaml`; `/scan` + `odom` -> `/map` and TF `map -> odom` |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -163,10 +164,10 @@ All services log to stdout/stderr; systemd captures to journald.
 
 The lidar work is tracked in
 [plans/2026-10-12 - lidar.md](plans/2026-10-12%20-%20lidar.md). Done so far:
-`robot-lidar.service` publishes `/scan` in the `laser` frame, and the URDF has
-a `laser` frame from `LIDAR_MOUNT` (a placeholder pose until the mount is
-measured). Still to do: slam_toolbox as a unit with a params file in `config/`,
-then `map -> odom -> base_link -> laser` in Foxglove.
+`robot-lidar.service` publishes `/scan` in the `laser` frame, the URDF has a
+`laser` frame from `LIDAR_MOUNT` (a placeholder pose until the mount is
+measured), and `robot-slam.service` runs slam_toolbox in mapping mode, so the
+TF tree is `map -> odom -> base_link -> laser` and `/map` rebuilds every boot.
 
 Known-future items the exit criterion does not cover:
 

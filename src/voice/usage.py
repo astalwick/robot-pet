@@ -16,9 +16,14 @@ from voice.elevenlabs_io import ELEVEN_FLASH_MODEL, SCRIBE_MODEL
 
 OPENAI_MODEL = DEFAULT_OPENAI_MODEL
 
-# Pay-as-you-go API pricing in USD. Sourced 2026-07-31.
+# Pay-as-you-go API pricing in USD. Sourced 2026-10-12.
 # OpenAI GPT pricing: https://openai.com/api/pricing/  (per 1M tokens)
 LLM_PRICE_BY_MODEL = {
+    "gpt-6-luna": {
+        "input": 0.10,
+        "cached_input": 0.01,
+        "output": 0.50,
+    },
     "gpt-5.6-luna": {
         "input": 0.20,
         "cached_input": 0.02,

@@ -51,8 +51,8 @@ class VoiceUsageTest(unittest.TestCase):
 
         # 1 minute of STT at $0.39/hour ($0.0065/minute).
         self.assertAlmostEqual(snapshot["stt"]["usd"], 0.0065)
-        # 0.8M uncached input @ $0.20 + 0.2M cached @ $0.02 + 1M output @ $1.20.
-        self.assertAlmostEqual(snapshot["llm"]["usd"], 0.16 + 0.004 + 1.20)
+        # 0.8M uncached input @ $0.10 + 0.2M cached @ $0.01 + 1M output @ $0.50.
+        self.assertAlmostEqual(snapshot["llm"]["usd"], 0.08 + 0.002 + 0.50)
         # 1000 chars at $0.05/1000.
         self.assertAlmostEqual(snapshot["tts"]["usd"], 0.050)
         self.assertAlmostEqual(

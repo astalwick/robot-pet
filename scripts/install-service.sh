@@ -9,7 +9,10 @@ if [[ -f "$repo_dir/systemd/$unit" ]]; then
   install -m 0644 "$repo_dir/systemd/$unit" "/etc/systemd/system/$unit"
 else
   # The unit was deleted from the repo: stop it and take it out of systemd.
+  # Tolerate a unit that is already gone so a retried redeploy still passes.
   echo "retiring $unit"
-  systemctl disable --now "$unit"
+  systemctl stop "$unit" 2>/dev/null || true
+  systemctl disable "$unit" 2>/dev/null || true
   rm -f "/etc/systemd/system/$unit"
+  systemctl daemon-reload
 fi

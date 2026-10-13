@@ -185,7 +185,9 @@ plan_service_restarts() {
         ;;
       systemd/*)
         # a unit deleted from the repo is retired by install-service.sh instead
-        [[ -f "$path" ]] && want_restart "$(basename "$path")"
+        if [[ -f "$path" ]]; then
+          want_restart "$(basename "$path")"
+        fi
         ;;
     esac
   done

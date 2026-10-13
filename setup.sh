@@ -331,7 +331,7 @@ fi
 sudo apt install -y ros-lyrical-ros-base ros-lyrical-rmw-cyclonedds-cpp \
     ros-lyrical-foxglove-bridge ros-lyrical-robot-state-publisher \
     ros-lyrical-twist-mux ros-lyrical-demo-nodes-py \
-    ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup ros-lyrical-rplidar-ros
+    ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup ros-lyrical-rplidar-driver
 # Every ROS unit runs through scripts/ros-node.sh, which sources this. DDS
 # stays off the Wi-Fi: localhost discovery and a fixed domain.
 mkdir -p "$HOME/.config/robot-pet"

@@ -4,14 +4,15 @@ After=network-online.target
 Wants=network-online.target
 # Without the lidar plugged in, start is a clean no-op (so setup/redeploy/restart
 # stay simple). The udev rule in setup.sh starts this unit when the lidar appears
-# and stops it when it is unplugged; the driver itself idles forever on a missing
-# port instead of exiting, so Restart= alone would not recover it.
+# and stops it when it is unplugged.
+# rplidar_node is a lifecycle node; the package's launch file drives it through
+# configure/activate for us. publish_tf is off because the URDF owns the laser frame.
 ConditionPathExists=/dev/rplidar
 
 [Service]
 Type=simple
 User=pi
-ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 run rplidar_ros rplidar_composition --ros-args -p serial_port:=/dev/rplidar -p serial_baudrate:=115200 -p frame_id:=laser -p angle_compensate:=true'
+ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 launch rplidar_driver rplidar_with_args.launch.py serial_port:=/dev/rplidar serial_baudrate:=115200 frame_id:=laser angle_compensate:=true publish_tf:=false'
 Restart=always
 RestartSec=2
 TimeoutStopSec=10

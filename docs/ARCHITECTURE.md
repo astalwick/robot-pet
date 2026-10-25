@@ -212,7 +212,10 @@ from `robot_model.py` and the lidar as the costmap obstacle source. Their
 `/cmd_vel_nav` is the lowest `twist_mux` input, below the gamepad. The servers
 are launched but not activated: their costmaps need the `map` frame, which
 only exists once the lidar is scanning, and the lidar follows the motor rail.
-The nav bridge activates them once the robot is scanning and has a map pose.
+The nav bridge activates them once the robot is scanning and has a map pose,
+and pauses them again five seconds after the scans stop (without scans the
+`map -> odom` transform stops advancing, and once it falls out of TF's 10 s
+cache every costmap lookup fails and logs). So Nav2 comes up per trip.
 The bridge is also the only Nav2 action client: `navigate_to` (a place name,
 or map x/y from a click on the dashboard map) returns at once, asks for the
 motor rail, and sends one `NavigateToPose` goal once the lidar and Nav2 are

@@ -77,8 +77,12 @@ MAP_PNG_MIN_INTERVAL = 2.0
 SCAN_WAIT_SECONDS = 20.0
 # a navigate_to waits this long for the lidar and Nav2 before it fails
 GOAL_START_SECONDS = 30.0
-# how often to ask the lifecycle manager to bring Nav2 up while it is down
-NAV2_STARTUP_RETRY_SECONDS = 15.0
+# how often at most to ask the lifecycle manager to bring Nav2 up or pause it
+NAV2_MANAGE_RETRY_SECONDS = 15.0
+# pause Nav2 this long after the last scan: without scans the map -> odom
+# transform stops moving forward, and once it is older than TF's 10 s cache
+# every map -> base_link lookup fails and planner_server logs an error a second
+NAV2_PAUSE_SECONDS = 5.0
 SERVICE_WAIT_SECONDS = 10.0
 # The covariance AMCL starts from when we hand it a remembered pose.
 INITIAL_POSE_XY_VARIANCE = 0.25
@@ -116,9 +120,12 @@ class NavNode(Node):
         # a goal waiting for the lidar and Nav2: (serial, x, y, yaw, asked_at)
         self.goal_request: tuple | None = None
         self.nav_lock = False
-        # whether bt_navigator is active, and when we last asked for a bringup
-        self.nav2_active = False
-        self.nav2_startup_time = 0.0
+        # bt_navigator's lifecycle label (None while it is not up), and the
+        # label and time of our last lifecycle request, so a refused one is
+        # only retried every so often
+        self.nav2_state: str | None = None
+        self.nav2_managed_state: str | None = None
+        self.nav2_manage_time = 0.0
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -159,7 +166,7 @@ class NavNode(Node):
             self.cancel_goal("gamepad")
 
     def on_bt_navigator_state(self, future) -> None:
-        self.nav2_active = future.result().current_state.label == "active"
+        self.nav2_state = future.result().current_state.label
 
     def on_amcl_state(self, future) -> None:
         active = future.result().current_state.label == "active"
@@ -177,9 +184,9 @@ class NavNode(Node):
         if self.bt_navigator_state_client.service_is_ready():
             self.bt_navigator_state_client.call_async(GetState.Request()).add_done_callback(self.on_bt_navigator_state)
         else:
-            self.nav2_active = False
+            self.nav2_state = None
         self.update_pose()
-        self.start_nav2_when_ready()
+        self.manage_nav2()
         self.send_pending_goal()
         self.update_map_png()
         self.remember_pose()
@@ -327,7 +334,10 @@ class NavNode(Node):
         return False
 
     def scanning(self) -> bool:
-        return self.last_scan_time is not None and time.monotonic() - self.last_scan_time < 1.0
+        return self.scan_age() < 1.0
+
+    def scan_age(self) -> float:
+        return math.inf if self.last_scan_time is None else time.monotonic() - self.last_scan_time
 
     def try_map(self, name: str) -> bool:
         log.info("relocalize: trying %s", name)
@@ -462,22 +472,33 @@ class NavNode(Node):
     def navigating(self) -> bool:
         return self.goal is not None and self.goal["state"] == "navigating"
 
-    def start_nav2_when_ready(self) -> None:
-        """Activate the Nav2 navigation servers once the map frame exists; their
-        costmaps give up after a minute without it, and the lidar that makes it
-        is only on with the motor rail."""
-        if self.nav2_active or not self.scanning() or self.pose is None:
+    def manage_nav2(self) -> None:
+        """Keep the Nav2 navigation servers active while the lidar scans and
+        paused while it does not. Their costmaps need the map frame, which only
+        the lidar provides, and the lidar follows the motor rail: so Nav2 comes
+        up for each trip and pauses a few seconds after the rail goes off."""
+        if not self.nav2_manage_client.service_is_ready():
             return
-        if time.monotonic() - self.nav2_startup_time < NAV2_STARTUP_RETRY_SECONDS or not self.nav2_manage_client.service_is_ready():
+        if self.nav2_state == self.nav2_managed_state and time.monotonic() - self.nav2_manage_time < NAV2_MANAGE_RETRY_SECONDS:
             return
-        self.nav2_startup_time = time.monotonic()
-        log.info("bringing up the Nav2 navigation servers")
-        request = ManageLifecycleNodes.Request(command=ManageLifecycleNodes.Request.STARTUP)
-        self.nav2_manage_client.call_async(request).add_done_callback(self.on_nav2_startup)
+        if self.nav2_state == "active":
+            if self.scan_age() > NAV2_PAUSE_SECONDS:
+                self.cancel_goal("lidar_unavailable")
+                self.send_nav2_command("pausing", ManageLifecycleNodes.Request.PAUSE)
+        elif self.nav2_state == "unconfigured" and self.scanning() and self.pose is not None:
+            self.send_nav2_command("bringing up", ManageLifecycleNodes.Request.STARTUP)
+        elif self.nav2_state == "inactive" and self.scanning() and self.pose is not None:
+            self.send_nav2_command("resuming", ManageLifecycleNodes.Request.RESUME)
 
-    def on_nav2_startup(self, future) -> None:
+    def send_nav2_command(self, what: str, command: int) -> None:
+        self.nav2_managed_state = self.nav2_state
+        self.nav2_manage_time = time.monotonic()
+        log.info("%s the Nav2 navigation servers", what)
+        self.nav2_manage_client.call_async(ManageLifecycleNodes.Request(command=command)).add_done_callback(self.on_nav2_managed)
+
+    def on_nav2_managed(self, future) -> None:
         if not future.result().success:
-            log.warning("Nav2 navigation servers did not come up (see robot-nav); retrying in %.0fs", NAV2_STARTUP_RETRY_SECONDS)
+            log.warning("the Nav2 lifecycle manager refused (see robot-nav); retrying in %.0fs", NAV2_MANAGE_RETRY_SECONDS)
 
     def navigate_to(self, request: dict) -> dict:
         """Send a NavigateToPose goal for a saved place or a map x, y."""
@@ -522,7 +543,7 @@ class NavNode(Node):
             self.goal_request = None
             self.end_goal(serial, "failed", "nav2_unavailable" if self.scanning() else "lidar_unavailable")
             return
-        if not self.scanning() or not self.nav2_active or not self.nav_client.server_is_ready():
+        if not self.scanning() or self.nav2_state != "active" or not self.nav_client.server_is_ready():
             return
         self.goal_request = None
 

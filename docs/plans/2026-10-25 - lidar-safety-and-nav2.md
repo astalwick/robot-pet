@@ -216,7 +216,15 @@ and the dashboard:
   backup, wait). Footprint polygon from `robot_model.py`'s numbers, frames
   `map`/`odom`/`base_link`, `enable_stamped_cmd_vel: false`. Limits as in the
   table. `nav.launch.py` starts those four nodes and
-  `lifecycle_manager_navigation` in both modes.
+  `lifecycle_manager_navigation` in both modes. *Changed while building:*
+  the manager does not autostart. Nav2's costmaps wait at most a minute for
+  the `map` frame and then the whole bringup aborts, and on this robot the
+  lidar that makes the frame follows the motor rail, so at boot there is no
+  map frame. The bridge sends STARTUP once it is scanning with a pose, and
+  PAUSE five seconds after scans stop (a stale `map -> odom` transform makes
+  every costmap lookup fail and log once it leaves TF's 10 s cache), then
+  RESUME on the next trip. A `navigate_to` therefore queues until the lidar
+  and Nav2 are up, failing after 30 s.
 - `twist_mux.yaml`: lock `/nav_lock` (timeout 0.5, priority 50).
   `motion_node.py` publishes `std_msgs/Bool /nav_lock` on its 20 Hz timer from
   `runner.nav_lock_active()`: true while an intent runs and for 2 s after an

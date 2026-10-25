@@ -17,22 +17,27 @@ const STATUS_CLASSES = {
 // diagnostic_msgs/DiagnosticStatus levels: OK, WARN, ERROR, STALE
 const DIAGNOSTIC_CLASSES = ['ok', 'warn', 'err', 'muted'];
 
-let lidarActive = false;
-let lidarPowerBusy = false;
+// Like the voice toggle: a click flips what we want right away, and the button
+// says "Turning on/off" until telemetry agrees. It stays clickable throughout.
+let lidarWantActive = false;
+let lidarTelemetryActive = false;
+let lidarDriverRunning = false;
 
 export function renderLidar(snapshot, sources) {
   const lidar = snapshot.lidar;
-  const powerButton = document.getElementById('lidar-power-button');
   if (!lidar || (sources.lidar || {}).stale !== false) {
     setRows('lidar-rows', [row('status', '', 'STALE', 'err')]);
-    powerButton.disabled = true;
+    lidarDriverRunning = false;
+    updateLidarPowerButton();
     return;
   }
 
-  lidarActive = lidar.lidar_active;
-  powerButton.textContent = lidar.lidar_active ? 'Turn off' : 'Turn on';
-  // On and off go through the driver, so it has to be running.
-  powerButton.disabled = lidarPowerBusy || !lidar.service_active;
+  // When the lidar changes state, that's the new truth, whether or not a click
+  // did it (a driver restart comes back on).
+  if (lidar.lidar_active !== lidarTelemetryActive) lidarWantActive = lidar.lidar_active;
+  lidarTelemetryActive = lidar.lidar_active;
+  lidarDriverRunning = lidar.service_active;
+  updateLidarPowerButton();
 
   const rows = [
     row('status', '', lidar.status.replace('_', ' ').toUpperCase(), STATUS_CLASSES[lidar.status]),
@@ -53,30 +58,45 @@ export function renderLidar(snapshot, sources) {
   setRows('lidar-rows', rows);
 }
 
+// The panel re-renders on every snapshot. Rewriting the button when nothing
+// changed swaps its text node mid-click and the browser drops the click.
+function updateLidarPowerButton() {
+  const button = document.getElementById('lidar-power-button');
+  let text = lidarWantActive ? 'Turn off' : 'Turn on';
+  if (lidarWantActive !== lidarTelemetryActive) text = lidarWantActive ? 'Turning on' : 'Turning off';
+  // On and off go through the driver, so it has to be running.
+  const disabled = !lidarDriverRunning;
+  if (button.textContent !== text) button.textContent = text;
+  if (button.disabled !== disabled) button.disabled = disabled;
+}
+
 export function bindLidarHandlers(bindOn) {
   bindOn('lidar-power-button', 'click', onLidarPower);
   bindOn('lidar-foxglove-button', 'click', onOpenFoxglove);
 }
 
-async function onLidarPower(event) {
-  const button = event.currentTarget;
-  const verb = lidarActive ? 'turn off' : 'turn on';
-  lidarPowerBusy = true;
-  button.disabled = true;
+async function onLidarPower() {
+  lidarWantActive = !lidarWantActive;
+  updateLidarPowerButton();
+  const verb = lidarWantActive ? 'turn on' : 'turn off';
+  let error = null;
   try {
     const response = await fetch('/lidar/power', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on: !lidarActive }),
+      body: JSON.stringify({ on: lidarWantActive }),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      appendLog(`lidar ${verb} failed: ${body.error || response.statusText}`);
+      error = body.error || response.statusText;
     }
   } catch (exc) {
-    appendLog(`lidar ${verb} failed: ${exc}`);
-  } finally {
-    lidarPowerBusy = false;
+    error = exc;
+  }
+  if (error) {
+    appendLog(`lidar ${verb} failed: ${error}`);
+    lidarWantActive = lidarTelemetryActive;
+    updateLidarPowerButton();
   }
 }
 

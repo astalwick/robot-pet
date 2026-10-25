@@ -227,6 +227,11 @@ class AssistantToolsTest(unittest.TestCase):
                 "check_surroundings",
                 "face_me",
                 "inspect_speaker_direction",
+                "navigate_to",
+                "check_navigation",
+                "cancel_navigation",
+                "create_place",
+                "where_am_i",
                 "start_goal",
             },
         )

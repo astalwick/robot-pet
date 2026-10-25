@@ -883,7 +883,7 @@ async def voice_command_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "accepted": True})
 
 
-NAV_COMMANDS = {"nav_status", "set_mode", "save_map", "localize", "create_place"}
+NAV_COMMANDS = {"nav_status", "set_mode", "save_map", "localize", "create_place", "navigate_to", "nav_cancel"}
 
 
 async def nav_command_handler(request: web.Request) -> web.Response:

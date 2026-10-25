@@ -290,6 +290,7 @@ async def run_agent_goal(
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+    nav_caller: Callable[..., dict[str, Any]] | None = None,
     speak_progress: Callable[[str], Awaitable[None]] | None = None,
     is_speaking: Callable[[], bool] | None = None,
     on_event: Callable[[dict[str, object]], None] | None = None,
@@ -306,6 +307,7 @@ async def run_agent_goal(
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
         speaker_direction_caller=speaker_direction_caller,
+        nav_caller=nav_caller,
     )
 
     # The one detached narration task. We hold the handle so every exit path can

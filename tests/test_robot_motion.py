@@ -1049,6 +1049,50 @@ class RobotMotionTest(unittest.TestCase):
         self.assertFalse(runner.intent_executor.is_active())
         self.assertEqual(completed, [{"ok": False, "error": "stopped"}])
 
+    def _clocked_runner(self, motor):
+        current_time = [0.0]
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: current_time[0],
+            telemetry_publisher=lambda *_args: True,
+        )
+        return runner, current_time
+
+    def test_nav_lock_follows_an_intent_and_holds_after_it_ends(self):
+        runner, current_time = self._clocked_runner(FakeMotor())
+        self.assertFalse(runner.nav_lock_active())
+
+        runner.intent_executor.start("express", now=0.0, kind="wiggle")
+        runner.pending_intent_complete = lambda _payload: None
+        self.assertTrue(runner.nav_lock_active())
+
+        runner.intent_executor.cancel()
+        runner._fail_pending_intent("roboclaw_unavailable")
+        self.assertTrue(runner.nav_lock_active())
+        current_time[0] = 1.9
+        self.assertTrue(runner.nav_lock_active())
+        current_time[0] = 2.1
+        self.assertFalse(runner.nav_lock_active())
+
+    def test_nav_lock_holds_after_a_stop_with_nothing_running(self):
+        runner, current_time = self._clocked_runner(FakeMotor())
+
+        class StopBridge:
+            def take_stop(self):
+                return True
+
+            def discard_pending(self):
+                pass
+
+        runner.intent_bridge = StopBridge()
+        current_time[0] = 10.0
+        self.assertTrue(runner._service_stop_requests())
+        self.assertTrue(runner.nav_lock_active())
+        current_time[0] = 12.1
+        self.assertFalse(runner.nav_lock_active())
+
 
 if __name__ == "__main__":
     unittest.main()

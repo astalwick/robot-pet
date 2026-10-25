@@ -21,10 +21,12 @@ from control.motion_intent import MOTION_INTENT_CLIENT_TIMEOUT_SECONDS, request_
 from drivers.respeaker import MIC_BLOCKSIZE, WAKE_MIC_QUEUE_SIZE, ReSpeakerAudio, ReSpeakerDoA
 from drivers.status_leds import StatusLeds
 from lib.log import setup_logging
+from robot_nav import request_nav
 from telemetry.messages import encode_json_line, voice_update
 from telemetry.paths import (
     DEFAULT_CAMERA_PORT,
     DEFAULT_MOTION_INTENT_SOCKET,
+    DEFAULT_NAV_SOCKET,
     DEFAULT_PUBLISH_SOCKET,
     DEFAULT_SUBSCRIBE_SOCKET,
     DEFAULT_VOICE_COMMAND_SOCKET,
@@ -212,6 +214,7 @@ class RobotVoiceService:
         camera_url: str = DEFAULT_CAMERA_SNAPSHOT_URL,
         profile_every: int = 0,
         telemetry_subscribe_socket: str = DEFAULT_SUBSCRIBE_SOCKET,
+        nav_socket: str = DEFAULT_NAV_SOCKET,
     ) -> None:
         self.config_path = config_path
         self.telemetry_socket = telemetry_socket
@@ -221,6 +224,7 @@ class RobotVoiceService:
         self.camera_url = camera_url
         self.profile_every = profile_every
         self.telemetry_subscribe_socket = telemetry_subscribe_socket
+        self.nav_socket = nav_socket
         self.session: VoiceSession | None = None
         self.openai_client: Any = None
         self.usage = UsageTotals()
@@ -616,6 +620,7 @@ class RobotVoiceService:
             robot_inspection_caller=lambda: read_telemetry_snapshot(self.telemetry_subscribe_socket),
             face_me_caller=self.face_me_caller,
             speaker_direction_caller=self.doa_snapshot,
+            nav_caller=lambda cmd, **params: request_nav(self.nav_socket, cmd, **params),
             personalities=self.personalities,
             profile_every=self.profile_every,
             usage=self.usage,
@@ -1115,6 +1120,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--telemetry-subscribe-socket", default=DEFAULT_SUBSCRIBE_SOCKET)
     parser.add_argument("--command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--motion-intent-socket", default=DEFAULT_MOTION_INTENT_SOCKET)
+    parser.add_argument("--nav-socket", default=DEFAULT_NAV_SOCKET)
     parser.add_argument("--camera-url", default=DEFAULT_CAMERA_SNAPSHOT_URL)
     parser.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)
     parser.add_argument("--profile-every", type=int, default=0, help="Log voice stage timings every N frames/events")
@@ -1135,6 +1141,7 @@ async def run_service(args: argparse.Namespace) -> None:
         camera_url=args.camera_url,
         profile_every=args.profile_every,
         telemetry_subscribe_socket=args.telemetry_subscribe_socket,
+        nav_socket=args.nav_socket,
     )
     await service.run(stop_event)
 

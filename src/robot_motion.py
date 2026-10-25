@@ -52,6 +52,9 @@ from telemetry.socket_client import publish_message, subscribe
 log = setup_logging("robot-motion")
 
 DRIVE_COMMAND_STALE_SECONDS = 0.5
+# /nav_lock stays up this long after an intent ends or a stop lands, so Nav2
+# does not pick the wheels back up the instant the robot says "stop".
+NAV_LOCK_HOLD_SECONDS = 2.0
 
 # Encoder-distance move physics. Distance completion is derived from these
 # physical facts rather than a single opaque counts-per-meter constant: goBILDA
@@ -144,6 +147,7 @@ class MotionRunner:
         self._intent_wait_started_at: float | None = None
         self._intent_snap_stop = False
         self.encoder_move: EncoderMove | None = None
+        self.nav_lock_until = 0.0
 
         # Mixes intent motion commands into wheel speeds using the same loaded
         # tuning as gamepad teleop, so voice/agent moves match teleop speeds.
@@ -740,7 +744,19 @@ class MotionRunner:
         self.intent_executor.cancel()
         self._fail_pending_intent("stopped")
         self.intent_bridge.discard_pending()
+        self._hold_nav_lock()
         return True
+
+    def nav_lock_active(self) -> bool:
+        """True while a voice/agent intent owns the wheels, and for a moment
+        after. motion_node.py publishes this as /nav_lock for twist_mux, which
+        then drops Nav2's /cmd_vel_nav; the nav bridge cancels its goal."""
+        if self.intent_executor.is_active() or self.pending_intent_complete is not None:
+            return True
+        return self.clock() < self.nav_lock_until
+
+    def _hold_nav_lock(self) -> None:
+        self.nav_lock_until = self.clock() + NAV_LOCK_HOLD_SECONDS
 
     def _tick_intent(self, now: float, gamepad_active: bool) -> MotionCommand | None:
         if not self.intent_executor.is_active():
@@ -759,6 +775,7 @@ class MotionRunner:
             complete = self.pending_intent_complete
             self.pending_intent_complete = None
             self.encoder_move = None
+            self._hold_nav_lock()
             if tick.result == "completed":
                 payload = {"ok": True, "result": "completed"}
             else:
@@ -846,6 +863,7 @@ class MotionRunner:
         complete = self.pending_intent_complete
         self.pending_intent_complete = None
         self.encoder_move = None
+        self._hold_nav_lock()
         if complete is not None:
             payload = {"ok": True, "result": "completed"}
             if details:
@@ -862,6 +880,7 @@ class MotionRunner:
             return
         complete = self.pending_intent_complete
         self.pending_intent_complete = None
+        self._hold_nav_lock()
         payload = {"ok": False, "error": reason}
         if details:
             payload.update(details)

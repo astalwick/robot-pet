@@ -15,11 +15,13 @@ import asyncio
 import base64
 import json
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from lib.log import setup_logging
+from robot_nav import nearest_place, places_on_map
 from voice.camera_overlay import annotate_snapshot
 from voice.model_frames import save_model_frame
 
@@ -37,7 +39,18 @@ CHECK_HEALTH_TOOL_NAME = "check_health"
 CHECK_SURROUNDINGS_TOOL_NAME = "check_surroundings"
 FACE_ME_TOOL_NAME = "face_me"
 START_GOAL_TOOL_NAME = "start_goal"
+NAVIGATE_TO_TOOL_NAME = "navigate_to"
+CHECK_NAVIGATION_TOOL_NAME = "check_navigation"
+CANCEL_NAVIGATION_TOOL_NAME = "cancel_navigation"
+CREATE_PLACE_TOOL_NAME = "create_place"
+WHERE_AM_I_TOOL_NAME = "where_am_i"
 MOTION_TOOL_NAMES = (EXPRESS_TOOL_NAME, MOVE_TOOL_NAME, TURN_TOOL_NAME)
+
+# check_navigation polls the nav bridge this often; the model asks how long to wait.
+CHECK_NAVIGATION_POLL_SECONDS = 0.5
+CHECK_NAVIGATION_MAX_WAIT_SECONDS = 60.0
+# where_am_i calls the robot "at" a place when it is within this distance of it.
+AT_PLACE_METERS = 2.0
 
 
 EXPRESS_TOOL = {
@@ -280,6 +293,103 @@ INSPECT_SPEAKER_DIRECTION_TOOL_NAME = "inspect_speaker_direction"
 POST_MOTION_CAMERA_TOOLS = frozenset({MOVE_TOOL_NAME, TURN_TOOL_NAME, FACE_ME_TOOL_NAME})
 
 
+NAVIGATE_TO_TOOL = {
+    "type": "function",
+    "name": NAVIGATE_TO_TOOL_NAME,
+    "description": (
+        "Drive to a saved place on the current map by name, planning around obstacles "
+        "(for example 'kitchen'). Returns right away while the robot is still driving; call "
+        "check_navigation to wait for it to arrive. An unknown place returns the places that "
+        "exist. A new navigate_to replaces the goal in progress. Fails if the robot does not "
+        "know where it is yet."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "place": {"type": "string", "description": "A saved place name, exactly as where_am_i or an earlier error listed it."},
+        },
+        "required": ["place"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CHECK_NAVIGATION_TOOL = {
+    "type": "function",
+    "name": CHECK_NAVIGATION_TOOL_NAME,
+    "description": (
+        "Wait for the navigation goal in progress, up to wait_seconds, and report its state: "
+        "navigating (still driving, with the distance remaining), arrived, cancelled or failed. "
+        "Returns early the moment the goal ends. Use wait_seconds 0 for an instant check."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "wait_seconds": {"type": "number", "description": "How long to wait before reporting, 0 to 60."},
+        },
+        "required": ["wait_seconds"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CANCEL_NAVIGATION_TOOL = {
+    "type": "function",
+    "name": CANCEL_NAVIGATION_TOOL_NAME,
+    "description": (
+        "Cancel the navigation goal in progress so the robot stays where it is. "
+        "stop also cancels navigation; use this when only the trip should end."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+CREATE_PLACE_TOOL = {
+    "type": "function",
+    "name": CREATE_PLACE_TOOL_NAME,
+    "description": (
+        "Remember the robot's current spot on the map under a name, so navigate_to can "
+        "drive back to it later. Lowercase letters, digits, spaces, - and _ only. Only "
+        "works once the robot knows where it is on a saved map."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "The place name, for example 'kitchen' or 'living room'."},
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+WHERE_AM_I_TOOL = {
+    "type": "function",
+    "name": WHERE_AM_I_TOOL_NAME,
+    "description": (
+        "Where the robot is: the map it is on, whether it has localized, the nearest saved "
+        "place and how far away it is, and the names of all places on this map. "
+        "Does not move the robot."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
 INSPECT_SPEAKER_DIRECTION_TOOL = {
     "type": "function",
     "name": INSPECT_SPEAKER_DIRECTION_TOOL_NAME,
@@ -316,6 +426,11 @@ ROBOT_TOOLS = [
     (CHECK_SURROUNDINGS_TOOL,           True,           True),
     (FACE_ME_TOOL,                      True,           True),
     (INSPECT_SPEAKER_DIRECTION_TOOL,    True,           True),
+    (NAVIGATE_TO_TOOL,                  True,           True),
+    (CHECK_NAVIGATION_TOOL,             True,           True),
+    (CANCEL_NAVIGATION_TOOL,            True,           True),
+    (CREATE_PLACE_TOOL,                 True,           True),
+    (WHERE_AM_I_TOOL,                   True,           True),
     (START_GOAL_TOOL,                   True,           False),
     (WEB_SEARCH_TOOL,                   True,           True),
 ]
@@ -535,6 +650,53 @@ def check_surroundings_snapshot(snapshot: dict[str, Any] | None) -> dict[str, An
     return {key: full[key] for key in ("ok", "sensors", "vision")}
 
 
+def where_am_i_output(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """The where_am_i tool result, from the hub snapshot's nav source."""
+    nav = (snapshot or {}).get("nav")
+    if not _telemetry_value_available(snapshot or {}, "nav", nav):
+        return {"ok": False, "error": "nav_unavailable"}
+    places = nav.get("places") or {}
+    output = {
+        "ok": True,
+        "mode": nav.get("mode"),
+        "map": nav.get("map"),
+        "localized": nav.get("localized") is True,
+        "pose": nav.get("pose"),
+        "places_on_map": places_on_map(places, nav.get("map")),
+        "at_place": None,
+        "nearest_place": None,
+    }
+    if nav.get("mode") == "mapping":
+        output["note"] = "building a new map; save it before saving places"
+    elif not output["localized"]:
+        output["note"] = "not localized yet on this map"
+    pose = nav.get("pose")
+    if output["localized"] and pose:
+        nearest = nearest_place(places, nav.get("map"), pose["x"], pose["y"])
+        if nearest is not None:
+            name, distance = nearest
+            output["nearest_place"] = {"name": name, "distance_m": round(distance, 1)}
+            if distance <= AT_PLACE_METERS:
+                output["at_place"] = name
+    return output
+
+
+def wait_for_navigation(nav_caller: Callable[..., Any], wait_seconds: float, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Poll the nav bridge until the goal ends or wait_seconds pass; the
+    check_navigation tool result."""
+    deadline = time.monotonic() + max(0.0, min(float(wait_seconds), CHECK_NAVIGATION_MAX_WAIT_SECONDS))
+    while True:
+        status = nav_caller("nav_status")
+        if not status.get("ok"):
+            return status
+        goal = status.get("goal")
+        if goal is None:
+            return {"ok": True, "goal": None, "note": "no navigation goal has been given"}
+        if goal.get("state") != "navigating" or time.monotonic() >= deadline:
+            return {"ok": True, "goal": goal, "pose": status.get("pose")}
+        sleep(CHECK_NAVIGATION_POLL_SECONDS)
+
+
 @dataclass
 class RobotToolCall:
     name: str
@@ -570,6 +732,8 @@ class VoiceToolContext:
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None
     face_me_caller: Callable[[], dict[str, Any]] | None = None
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None
+    # nav_caller(cmd, **params) -> the nav bridge's reply (robot_nav.request_nav)
+    nav_caller: Callable[..., dict[str, Any]] | None = None
     end_session_pending: list[bool] | None = None
 
 
@@ -859,6 +1023,9 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
         if context.motion_intent_caller is None:
             return _result(call, False, {"ok": False, "error": "motion_caller_missing"})
         result = await asyncio.to_thread(context.motion_intent_caller, name)
+        if context.nav_caller is not None:
+            cancelled = await asyncio.to_thread(context.nav_caller, "nav_cancel")
+            result = {**result, "navigation_cancelled": cancelled.get("accepted") is True}
         return _result(call, result.get("ok") is not False, result)
 
     if name == LOOK_TOOL_NAME:
@@ -912,6 +1079,31 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
             return _result(call, False, {"ok": False, "error": "speaker_direction_unavailable"})
         snapshot = await asyncio.to_thread(context.speaker_direction_caller)
         return _result(call, True, speaker_direction_output(snapshot))
+
+    if name == WHERE_AM_I_TOOL_NAME:
+        if context.robot_inspection_caller is None:
+            return _result(call, False, {"ok": False, "error": "telemetry_unavailable"})
+        snapshot = await asyncio.to_thread(context.robot_inspection_caller)
+        result = where_am_i_output(snapshot)
+        return _result(call, result.get("ok") is not False, result)
+
+    if name in (NAVIGATE_TO_TOOL_NAME, CHECK_NAVIGATION_TOOL_NAME, CANCEL_NAVIGATION_TOOL_NAME, CREATE_PLACE_TOOL_NAME):
+        if context.nav_caller is None:
+            return _result(call, False, {"ok": False, "error": "nav_unavailable"})
+        if name == NAVIGATE_TO_TOOL_NAME:
+            result = await asyncio.to_thread(context.nav_caller, "navigate_to", place=call.arguments.get("place"))
+        elif name == CHECK_NAVIGATION_TOOL_NAME:
+            wait_seconds = call.arguments.get("wait_seconds")
+            if not isinstance(wait_seconds, (int, float)) or isinstance(wait_seconds, bool):
+                wait_seconds = 0.0
+            result = await asyncio.to_thread(wait_for_navigation, context.nav_caller, wait_seconds)
+        elif name == CANCEL_NAVIGATION_TOOL_NAME:
+            result = await asyncio.to_thread(context.nav_caller, "nav_cancel")
+        else:
+            result = await asyncio.to_thread(context.nav_caller, "create_place", name=call.arguments.get("name"))
+        # the bridge says accepted: false (busy, no goal) with ok: true; that is a refusal here
+        ok = result.get("ok") is not False and result.get("accepted") is not False
+        return _result(call, ok, result)
 
     return _result(call, False, {"ok": False, "error": "unsupported tool"})
 

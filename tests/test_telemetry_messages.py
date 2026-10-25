@@ -99,7 +99,8 @@ class TelemetryMessagesTest(unittest.TestCase):
 
     def test_nav_update_carries_mode_map_and_pose(self):
         places = {"kitchen": {"map": "main", "x": 1.0, "y": 2.0, "yaw": 0.0}}
-        message = nav_update("localize", "main", ["main", "upstairs"], True, "localizing", {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, places, True, now=12.0)
+        goal = {"target": "kitchen", "x": 1.0, "y": 2.0, "state": "navigating", "remaining_m": 3.2}
+        message = nav_update("localize", "main", ["main", "upstairs"], True, "localizing", {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, places, True, goal, now=12.0)
 
         self.assertEqual(message["type"], "source_update")
         self.assertEqual(message["source"], "nav")
@@ -111,6 +112,7 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["activity"], "localizing")
         self.assertEqual(message["places"], places)
         self.assertTrue(message["motor_power_requested"])
+        self.assertEqual(message["goal"], goal)
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")

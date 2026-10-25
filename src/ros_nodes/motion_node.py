@@ -17,6 +17,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, LaserScan
+from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 
 from control.commands import MotionCommand
@@ -42,6 +43,8 @@ class MotionNode(Node):
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
         self.odom_publisher = self.create_publisher(Odometry, "/odom", 10)
         self.battery_publisher = self.create_publisher(BatteryState, "/battery/motor", 10)
+        # twist_mux lock: true while an intent drives, so Nav2 cannot talk over it
+        self.nav_lock_publisher = self.create_publisher(Bool, "/nav_lock", 10)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.create_timer(1.0 / ODOM_PUBLISH_HZ, self.publish_odometry)
 
@@ -79,6 +82,7 @@ class MotionNode(Node):
         rotation = transform.transform.rotation
         rotation.x, rotation.y, rotation.z, rotation.w = fields["orientation"]
         self.tf_broadcaster.sendTransform(transform)
+        self.nav_lock_publisher.publish(Bool(data=self.runner.nav_lock_active()))
 
     def publish_hub(self, socket_path: str, message: dict[str, Any]) -> bool:
         """MotionRunner's telemetry_publisher: hub first, then the ROS copies."""

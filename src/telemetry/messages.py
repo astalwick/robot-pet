@@ -686,13 +686,17 @@ def nav_update(
     map_info: dict[str, Any] | None,
     places: dict[str, dict[str, Any]],
     motor_power_requested: bool,
+    goal: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """The nav bridge's hub message.
 
     mode is "mapping" or "localize"; map_name is the saved map in use (None
     while mapping). pose is {x, y, yaw} in the map frame. activity names what
-    the bridge is busy with ("localizing", "saving"), or None.
+    the bridge is busy with ("localizing", "saving"), or None. goal is the
+    current or last navigation goal {target, x, y, state, remaining_m}, state
+    one of navigating / arrived / cancelled / failed, plus a reason once it has
+    ended early (stopped, replaced, rejected, ...), or None if there was none.
     """
     return {
         "type": "source_update",
@@ -707,4 +711,5 @@ def nav_update(
         "map_info": map_info,
         "places": places,
         "motor_power_requested": motor_power_requested,
+        "goal": goal,
     }

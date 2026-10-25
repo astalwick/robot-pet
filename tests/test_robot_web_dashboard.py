@@ -460,6 +460,14 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(resp.status, 200)
         self.assertEqual(send.call_args.args, (self.state.nav_socket, {"cmd": "save_map", "name": "main"}))
 
+    async def test_nav_goal_commands_are_forwarded(self):
+        requests = [{"cmd": "navigate_to", "x": 1.5, "y": -2.0}, {"cmd": "nav_cancel"}]
+        for request in requests:
+            with mock.patch("robot_web_dashboard.send_voice_command", return_value={"ok": True, "accepted": True}) as send:
+                async with self.client.post("/nav/command", json=request) as resp:
+                    self.assertEqual(resp.status, 200, request)
+            self.assertEqual(send.call_args.args, (self.state.nav_socket, request))
+
     async def test_nav_command_rejects_unknown_commands_before_forwarding(self):
         with mock.patch("robot_web_dashboard.send_voice_command") as send:
             async with self.client.post("/nav/command", json={"cmd": "self_destruct"}) as resp:

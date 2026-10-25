@@ -18,6 +18,12 @@ scans, and for each saved map loads it, scatters the particles and spins the
 robot once with a `turn` intent. The first map whose AMCL covariance gets
 tight wins. Saving a map goes straight to localize mode on that map with
 slam's last pose, so no spin is needed.
+
+Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
+NavigateToPose action, started by nav.launch.py in both modes. One goal at a
+time; a new one replaces it. The goal is cancelled when robot-motion raises
+/nav_lock (a voice intent or a stop), when the gamepad moves, or on a mode
+switch. The hub message carries the goal and its state.
 """
 
 import argparse
@@ -29,15 +35,19 @@ import time
 from pathlib import Path
 
 import rclpy
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from action_msgs.msg import GoalStatus
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
+from nav2_msgs.action import NavigateToPose
 from nav2_msgs.srv import LoadMap
 from nav_msgs.msg import OccupancyGrid
+from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -90,6 +100,12 @@ class NavNode(Node):
         self.amcl_active: bool | None = None
         # one localize or save at a time
         self.busy = threading.Lock()
+        # the current or last navigation goal (see nav_update); the serial
+        # tells a late Nav2 callback for an old goal from the current one
+        self.goal: dict | None = None
+        self.goal_serial = 0
+        self.goal_handle = None
+        self.nav_lock = False
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -100,6 +116,9 @@ class NavNode(Node):
         self.amcl_state_client = self.create_client(GetState, "/amcl/get_state")
         self.load_map_client = self.create_client(LoadMap, "/map_server/load_map")
         self.global_localization_client = self.create_client(Empty, "/reinitialize_global_localization")
+        self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        self.create_subscription(Bool, "/nav_lock", self.on_nav_lock, 10)
+        self.create_subscription(Twist, "/cmd_vel_teleop", self.on_teleop, 10)
         self.create_timer(0.5, self.tick)
         self.server = robot_nav.NavSocketServer(args.nav_socket, self.handle_request)
         self.server.start()
@@ -114,6 +133,15 @@ class NavNode(Node):
 
     def on_scan(self, scan: LaserScan) -> None:
         self.last_scan_time = time.monotonic()
+
+    def on_nav_lock(self, message: Bool) -> None:
+        self.nav_lock = message.data
+        if message.data:
+            self.cancel_goal("stopped")
+
+    def on_teleop(self, twist: Twist) -> None:
+        if twist.linear.x != 0.0 or twist.angular.z != 0.0:
+            self.cancel_goal("gamepad")
 
     def on_amcl_state(self, future) -> None:
         active = future.result().current_state.label == "active"
@@ -200,7 +228,8 @@ class NavNode(Node):
             "pose": self.pose,
             "map_info": self.map_info,
             "places": self.places,
-            "motor_power_requested": self.motor_power_requested,
+            "motor_power_requested": self.motor_power_requested or self.navigating(),
+            "goal": self.goal,
         }
 
     # --- localize mode -----------------------------------------------------
@@ -325,6 +354,13 @@ class NavNode(Node):
             return self.start_activity("localizing", self.relocalize, maps)
         if cmd == "create_place":
             return self.create_place(request.get("name"))
+        if cmd == "navigate_to":
+            return self.navigate_to(request)
+        if cmd == "nav_cancel":
+            if not self.navigating():
+                return {"ok": True, "accepted": False, "reason": "no_goal"}
+            self.cancel_goal("cancelled")
+            return {"ok": True, "accepted": True}
         return {"ok": False, "error": "unknown_cmd"}
 
     def set_mode(self, mode, map_name) -> dict:
@@ -345,6 +381,7 @@ class NavNode(Node):
         self.mode, self.map_name = mode, map_name
         self.localized = False
         self.amcl_covariance = None
+        self.cancel_goal("mode_change")
         # The old AMCL may still answer "active" for a moment. Count it as seen
         # so the edge we act on is the new one coming up.
         self.amcl_active = True
@@ -392,6 +429,99 @@ class NavNode(Node):
         robot_nav.save_places(self.places, self.args.places)
         log.info("saved place %s on %s", name, self.map_name)
         return {"ok": True, "place": self.places[name]}
+
+    # --- navigation goals ----------------------------------------------------
+
+    def navigating(self) -> bool:
+        return self.goal is not None and self.goal["state"] == "navigating"
+
+    def navigate_to(self, request: dict) -> dict:
+        """Send a NavigateToPose goal for a saved place or a map x, y."""
+        place_name = request.get("place")
+        if place_name is not None:
+            place = self.places.get(place_name)
+            if place is None:
+                return {"ok": False, "error": "unknown_place", "places": robot_nav.places_on_map(self.places, self.map_name)}
+            if self.mode != "localize" or not self.localized:
+                return {"ok": False, "error": "not_localized"}
+            if place["map"] != self.map_name:
+                return {"ok": False, "error": "place_on_other_map", "map": place["map"]}
+            x, y, yaw = place["x"], place["y"], place["yaw"]
+        else:
+            x, y, yaw = request.get("x"), request.get("y"), request.get("yaw")
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                return {"ok": False, "error": "bad_goal"}
+            if self.mode == "localize" and not self.localized:
+                return {"ok": False, "error": "not_localized"}
+            if yaw is None:
+                # no heading asked for: arrive facing the way we came
+                yaw = robot_nav.yaw_toward(self.pose["x"], self.pose["y"], x, y) if self.pose else 0.0
+        if self.busy.locked():
+            return {"ok": True, "accepted": False, "reason": self.activity or "busy"}
+        if self.nav_lock:
+            return {"ok": True, "accepted": False, "reason": "wheels_busy"}
+        if not self.nav_client.server_is_ready():
+            return {"ok": False, "error": "nav2_unavailable"}
+
+        self.cancel_goal("replaced")
+        self.goal_serial += 1
+        serial = self.goal_serial
+        self.goal = {"target": place_name, "x": float(x), "y": float(y), "state": "navigating", "remaining_m": None}
+        log.info("navigating to %s (%.2f, %.2f)", place_name or "a point", x, y)
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = "map"
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(x)
+        goal.pose.pose.position.y = float(y)
+        goal.pose.pose.orientation.z = math.sin(yaw / 2)
+        goal.pose.pose.orientation.w = math.cos(yaw / 2)
+        future = self.nav_client.send_goal_async(goal, feedback_callback=lambda message: self.on_goal_feedback(serial, message))
+        future.add_done_callback(lambda done: self.on_goal_response(serial, done))
+        return {"ok": True, "accepted": True, "goal": self.goal}
+
+    def on_goal_response(self, serial: int, future) -> None:
+        handle = future.result()
+        if serial != self.goal_serial or not self.navigating():
+            # cancelled or replaced before Nav2 even answered; don't let it run
+            if handle.accepted:
+                handle.cancel_goal_async()
+            return
+        if not handle.accepted:
+            self.end_goal(serial, "failed", "rejected")
+            return
+        self.goal_handle = handle
+        handle.get_result_async().add_done_callback(lambda done: self.on_goal_result(serial, done))
+
+    def on_goal_feedback(self, serial: int, message) -> None:
+        if serial == self.goal_serial and self.navigating():
+            self.goal["remaining_m"] = round(message.feedback.distance_remaining, 2)
+
+    def on_goal_result(self, serial: int, future) -> None:
+        result = future.result()
+        if result.status == GoalStatus.STATUS_SUCCEEDED:
+            self.end_goal(serial, "arrived")
+        elif result.status == GoalStatus.STATUS_CANCELED:
+            self.end_goal(serial, "cancelled")
+        else:
+            self.end_goal(serial, "failed", result.result.error_msg or f"status {result.status}")
+
+    def end_goal(self, serial: int, state: str, reason: str | None = None) -> None:
+        """Mark the goal over, unless it was already (a cancel beat Nav2's result)."""
+        if serial != self.goal_serial or not self.navigating():
+            return
+        self.goal["state"] = state
+        if reason:
+            self.goal["reason"] = reason
+        log.info("navigation %s%s", state, f": {reason}" if reason else "")
+
+    def cancel_goal(self, reason: str) -> None:
+        if not self.navigating():
+            return
+        self.end_goal(self.goal_serial, "cancelled", reason)
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
+            self.goal_handle = None
 
 
 def build_parser() -> argparse.ArgumentParser:

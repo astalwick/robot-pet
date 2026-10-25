@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sys
 import tempfile
@@ -85,6 +86,24 @@ class NavMathTest(unittest.TestCase):
         # 90 degrees about z
         self.assertAlmostEqual(robot_nav.yaw_from_quaternion(0, 0, 0.7071068, 0.7071068), 1.5707963, places=5)
         self.assertAlmostEqual(robot_nav.yaw_from_quaternion(0, 0, 1, 0), 3.1415927, places=5)
+
+    def test_yaw_toward_faces_the_target(self):
+        self.assertAlmostEqual(robot_nav.yaw_toward(0, 0, 1, 0), 0.0)
+        self.assertAlmostEqual(robot_nav.yaw_toward(0, 0, 0, 2), math.pi / 2)
+        self.assertAlmostEqual(robot_nav.yaw_toward(1, 1, 0, 1), math.pi)
+
+    def test_nearest_place_only_looks_at_this_map(self):
+        places = {
+            "kitchen": {"map": "main", "x": 1.0, "y": 0.0, "yaw": 0.0},
+            "living room": {"map": "main", "x": 4.0, "y": 0.0, "yaw": 0.0},
+            "bedroom": {"map": "upstairs", "x": 0.1, "y": 0.0, "yaw": 0.0},
+        }
+        name, distance = robot_nav.nearest_place(places, "main", 0.0, 0.0)
+        self.assertEqual(name, "kitchen")
+        self.assertAlmostEqual(distance, 1.0)
+        self.assertEqual(robot_nav.nearest_place(places, "upstairs", 5.0, 0.0), ("bedroom", 4.9))
+        self.assertIsNone(robot_nav.nearest_place(places, None, 0.0, 0.0))
+        self.assertEqual(robot_nav.places_on_map(places, "main"), ["kitchen", "living room"])
 
     def test_valid_names(self):
         self.assertTrue(robot_nav.valid_map_name("main"))

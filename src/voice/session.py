@@ -52,6 +52,7 @@ class VoiceSession:
         robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
         face_me_caller: Callable[[], dict[str, Any]] | None = None,
         speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+        nav_caller: Callable[..., dict[str, Any]] | None = None,
         wake_audio: list[bytes] | None = None,
     ) -> None:
         self.config = config
@@ -67,6 +68,7 @@ class VoiceSession:
         self.robot_inspection_caller = robot_inspection_caller
         self.face_me_caller = face_me_caller
         self.speaker_direction_caller = speaker_direction_caller
+        self.nav_caller = nav_caller
         self.wake_audio = wake_audio
         self.profile_every = profile_every
         self.usage = usage if usage is not None else UsageTotals()
@@ -163,6 +165,7 @@ class VoiceSession:
                     robot_inspection_caller=self.robot_inspection_caller,
                     face_me_caller=self.face_me_caller,
                     speaker_direction_caller=self.speaker_direction_caller,
+                    nav_caller=self.nav_caller,
                     progress_speaker=progress_speaker,
                     character_prose=lambda: self.character_prose,
                     openai_model=self.config.openai_model,

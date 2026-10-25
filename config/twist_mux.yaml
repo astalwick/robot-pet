@@ -9,7 +9,17 @@ twist_mux:
         timeout: 0.5
         priority: 100
       nav:
-        # Reserved for Nav2; nothing publishes here yet.
+        # Nav2's controller and behavior servers (config/nav.launch.py remaps
+        # their cmd_vel here).
         topic: /cmd_vel_nav
         timeout: 0.5
         priority: 10
+    locks:
+      nav_lock:
+        # robot-motion publishes true while a voice/agent intent drives and
+        # for a moment after a stop, so Nav2 cannot talk over it. The lock
+        # engages when the publisher goes quiet too (timeout), which keeps
+        # Nav2 off the wheels while robot-motion is down.
+        topic: /nav_lock
+        timeout: 0.5
+        priority: 50

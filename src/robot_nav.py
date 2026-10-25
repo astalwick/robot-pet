@@ -117,6 +117,30 @@ def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
+def yaw_toward(from_x: float, from_y: float, to_x: float, to_y: float) -> float:
+    """The heading that faces (to_x, to_y) from (from_x, from_y)."""
+    return math.atan2(to_y - from_y, to_x - from_x)
+
+
+def places_on_map(places: dict[str, dict[str, Any]], map_name: str | None) -> list[str]:
+    return sorted(name for name, place in places.items() if place.get("map") == map_name)
+
+
+def nearest_place(
+    places: dict[str, dict[str, Any]], map_name: str | None, x: float, y: float
+) -> tuple[str, float] | None:
+    """(name, distance in m) of the closest saved place on this map, or None."""
+    candidates = [
+        (math.hypot(place["x"] - x, place["y"] - y), name)
+        for name, place in places.items()
+        if place.get("map") == map_name
+    ]
+    if not candidates:
+        return None
+    distance, name = min(candidates)
+    return name, distance
+
+
 def render_map_png(width: int, height: int, data, path: str) -> None:
     """Write an OccupancyGrid as a grayscale PNG: free white, occupied black,
     unknown gray. Grid row 0 is the bottom of the map, image row 0 the top."""

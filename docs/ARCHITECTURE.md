@@ -206,11 +206,23 @@ particles and spins the robot once with a `turn` intent; the first map whose
 pose covariance gets tight wins. That is how a robot carried to another floor
 works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
 
-Known-future items:
+Both modes also run the Nav2 navigation servers (planner, controller,
+behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint
+from `robot_model.py` and the lidar as the costmap obstacle source. Their
+`/cmd_vel_nav` is the lowest `twist_mux` input, below the gamepad. The nav
+bridge is the only Nav2 action client: `navigate_to` (a place name, or map
+x/y from a click on the dashboard map) sends one `NavigateToPose` goal and
+returns at once; the goal's state (`navigating` with metres remaining,
+`arrived`, `cancelled`, `failed`, plus a reason) rides the hub as `nav.goal`.
+A new goal replaces the old one; `nav_cancel`, a mode switch or any gamepad
+input cancels it.
 
-- **`/cmd_vel` arbitration policy.** `twist_mux` already reserves `/cmd_vel_nav`.
-  What is undecided is where voice motion intents rank against a nav goal:
-  today intents run inside the motion node and any non-zero muxed `/cmd_vel`
-  interrupts them, which is right for the gamepad and wrong once Nav2 publishes.
-- **Async nav goals for the LLM.** `navigateTo(place)` cannot ride the
-  blocking motion-intent request/reply; it needs its own plan.
+Voice intents win over Nav2 through `/nav_lock`: the motion node publishes it
+true while an intent runs and for two seconds after a stop, `twist_mux` mutes
+`/cmd_vel_nav` while it is true, and the bridge cancels the goal (reason
+`stopped`) and refuses new ones (`wheels_busy`) while the lock is held. So
+"stop" halts the wheels and the trip in the same moment, and "go to the
+kitchen" mid-route simply replaces the goal. The voice tools are
+`navigate_to`, `check_navigation` (polls the bridge up to a minute),
+`cancel_navigation`, `create_place` and `where_am_i` (map, localized, nearest
+place); `stop` also sends `nav_cancel`.

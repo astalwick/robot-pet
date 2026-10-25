@@ -1,12 +1,18 @@
 import math
 import unittest
+from pathlib import Path
 
 from robot_model import (
     ENCODER_COUNTS_PER_METER,
     ENCODER_COUNTS_PER_WHEEL_REVOLUTION,
+    FOOTPRINT_FRONT_X_METERS,
+    FOOTPRINT_HALF_WIDTH_METERS,
+    FOOTPRINT_REAR_X_METERS,
     SENSOR_MOUNTS,
     WHEEL_DIAMETER_METERS,
 )
+
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
 
 class RobotModelTest(unittest.TestCase):
@@ -24,6 +30,16 @@ class RobotModelTest(unittest.TestCase):
         self.assertLess(mounts["forward_right"].y, 0)
         self.assertGreater(mounts["cliff_left"].y, 0)
         self.assertLess(mounts["cliff_right"].y, 0)
+
+    def test_nav2_costmaps_use_the_robot_footprint(self):
+        # PyYAML is not installed on the dev machines, so match the text.
+        front, rear, half = FOOTPRINT_FRONT_X_METERS, FOOTPRINT_REAR_X_METERS, FOOTPRINT_HALF_WIDTH_METERS
+        footprint = f'footprint: "[[{front}, {half}], [{front}, -{half}], [{rear}, -{half}], [{rear}, {half}]]"'
+        nav2 = (CONFIG_DIR / "nav2.yaml").read_text()
+        self.assertEqual(nav2.count(footprint), 2, footprint)  # local and global costmap
+        # Our motion node speaks plain Twist; both cmd_vel publishers must agree.
+        self.assertEqual(nav2.count("enable_stamped_cmd_vel: false"), 2)
+        self.assertIn("/nav_lock", (CONFIG_DIR / "twist_mux.yaml").read_text())
 
     def test_cliff_sensors_pitch_downward(self):
         for mount in SENSOR_MOUNTS:

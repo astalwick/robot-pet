@@ -1,8 +1,9 @@
 import { row, setRows, fmt, escapeHtml } from './dom.js';
 import { appendLog } from './logs.js';
 
-// The map panel: the live occupancy grid from the nav bridge with the robot
-// and the saved places drawn on it, plus the mode / map / place controls.
+// The map panel: the live occupancy grid from the nav bridge with the robot,
+// the saved places and the navigation goal drawn on it, plus the mode / map /
+// place controls. Clicking the map sends the robot there.
 
 let mapImage = null;
 let mapSerial = null;
@@ -29,6 +30,7 @@ export function renderNav(snapshot, sources) {
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),
+    row('goal', '', goalText(nav.goal), goalClass(nav.goal)),
   ];
   setRows('nav-rows', rows);
 
@@ -36,6 +38,20 @@ export function renderNav(snapshot, sources) {
   mapInfo = nav.map_info;
   drawMap();
   updateNavControls();
+}
+
+function goalText(goal) {
+  if (!goal) return '--';
+  const target = goal.target || `${fmt(goal.x, '', 1)}, ${fmt(goal.y, '', 1)}`;
+  if (goal.state === 'navigating') {
+    return `${target}, ${goal.remaining_m == null ? '?' : fmt(goal.remaining_m, ' m', 1)} left`;
+  }
+  return `${goal.state} ${target}${goal.reason ? ` (${goal.reason})` : ''}`;
+}
+
+function goalClass(goal) {
+  if (!goal) return 'muted';
+  return { navigating: 'warn', arrived: 'ok', failed: 'err' }[goal.state] || 'muted';
 }
 
 function loadMap(info) {
@@ -66,6 +82,17 @@ function drawMap() {
   const nav = latestNav;
   ctx.font = '11px sans-serif';
   ctx.textBaseline = 'middle';
+  if (nav.goal && nav.goal.state === 'navigating') {
+    const [px, py] = toPixel(nav.goal.x, nav.goal.y);
+    ctx.strokeStyle = '#4ade80';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px - 5, py - 5);
+    ctx.lineTo(px + 5, py + 5);
+    ctx.moveTo(px - 5, py + 5);
+    ctx.lineTo(px + 5, py - 5);
+    ctx.stroke();
+  }
   for (const [name, place] of Object.entries(nav.places || {})) {
     if (place.map !== nav.map) continue;
     const [px, py] = toPixel(place.x, place.y);
@@ -102,6 +129,7 @@ function updateNavControls() {
   setDisabled('nav-save-map-button', !mapping);
   setDisabled('nav-localize-button', !localize);
   setDisabled('nav-save-place-button', !(localize && nav.localized && nav.pose));
+  setDisabled('nav-cancel-button', !(nav && nav.goal && nav.goal.state === 'navigating'));
 
   const select = document.getElementById('nav-map-select');
   const maps = nav ? nav.maps : [];
@@ -122,6 +150,22 @@ export function bindNavHandlers(bindOn) {
   bindOn('nav-save-map-button', 'click', onSaveMap);
   bindOn('nav-localize-button', 'click', onLocalize);
   bindOn('nav-save-place-button', 'click', onSavePlace);
+  bindOn('nav-cancel-button', 'click', () => sendNav({ cmd: 'nav_cancel' }));
+  bindOn('nav-map', 'click', onMapClick);
+}
+
+// A click on the map drives the robot to that spot. The canvas is scaled to
+// the panel width, so go from CSS pixels back to image pixels, then undo
+// drawMap's toPixel.
+function onMapClick(event) {
+  if (!mapInfo || navStale) return;
+  const canvas = event.currentTarget;
+  const rect = canvas.getBoundingClientRect();
+  const px = ((event.clientX - rect.left) * canvas.width) / rect.width;
+  const py = ((event.clientY - rect.top) * canvas.height) / rect.height;
+  const x = px * mapInfo.resolution + mapInfo.origin_x;
+  const y = (mapInfo.height - py) * mapInfo.resolution + mapInfo.origin_y;
+  sendNav({ cmd: 'navigate_to', x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
 }
 
 function onSaveMap() {

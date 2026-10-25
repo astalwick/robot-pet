@@ -31,21 +31,29 @@ from voice.assistant import (
     stream_openai_words,
 )
 from voice.tools import (
+    CANCEL_NAVIGATION_TOOL_NAME,
     CHECK_HEALTH_TOOL_NAME,
+    CHECK_NAVIGATION_TOOL_NAME,
     CHECK_SURROUNDINGS_TOOL_NAME,
+    CREATE_PLACE_TOOL_NAME,
     END_SESSION_TOOL_NAME,
     FACE_ME_TOOL_NAME,
     INSPECT_SPEAKER_DIRECTION_TOOL_NAME,
     LOOK_TOOL_NAME,
     MOVE_TOOL_NAME,
+    NAVIGATE_TO_TOOL_NAME,
+    STOP_TOOL_NAME,
     RobotToolCall,
     START_GOAL_TOOL_NAME,
     VoiceToolContext,
+    WHERE_AM_I_TOOL_NAME,
     agent_observation,
     attach_motion_observation,
     dispatch_tool,
     inspect_robot_snapshot,
     parse_tool_arguments,
+    wait_for_navigation,
+    where_am_i_output,
 )
 from voice.conversation import ConversationHistory
 from config.voice import VoiceConfig
@@ -5258,6 +5266,173 @@ class RobotToolDispatchTest(unittest.TestCase):
 
             self.assertTrue(pending[0])
             self.assertEqual(result.output, {"ok": True, "ended": True})
+
+        asyncio.run(run())
+
+    def test_navigate_to_sends_the_place_to_the_nav_bridge(self):
+        async def run():
+            requests = []
+
+            def nav_caller(cmd, **params):
+                requests.append((cmd, params))
+                return {"ok": True, "accepted": True, "goal": {"target": "kitchen", "state": "navigating"}}
+
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), nav_caller=nav_caller)
+            result = await dispatch_tool(self._call(NAVIGATE_TO_TOOL_NAME, arguments={"place": "kitchen"}), context)
+
+            self.assertEqual(requests, [("navigate_to", {"place": "kitchen"})])
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output["goal"]["target"], "kitchen")
+
+        asyncio.run(run())
+
+    def test_nav_tools_treat_a_bridge_refusal_as_not_ok(self):
+        async def run():
+            def nav_caller(cmd, **params):
+                return {"ok": True, "accepted": False, "reason": "wheels_busy"}
+
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), nav_caller=nav_caller)
+            result = await dispatch_tool(self._call(NAVIGATE_TO_TOOL_NAME, arguments={"place": "kitchen"}), context)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.output["reason"], "wheels_busy")
+
+        asyncio.run(run())
+
+    def test_nav_tools_without_a_nav_caller(self):
+        async def run():
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"))
+            for name, arguments in (
+                (NAVIGATE_TO_TOOL_NAME, {"place": "kitchen"}),
+                (CHECK_NAVIGATION_TOOL_NAME, {"wait_seconds": 0}),
+                (CANCEL_NAVIGATION_TOOL_NAME, {}),
+                (CREATE_PLACE_TOOL_NAME, {"name": "kitchen"}),
+            ):
+                result = await dispatch_tool(self._call(name, arguments=arguments), context)
+                self.assertFalse(result.ok)
+                self.assertEqual(result.output, {"ok": False, "error": "nav_unavailable"})
+
+        asyncio.run(run())
+
+    def test_cancel_and_create_place_forward_to_the_bridge(self):
+        async def run():
+            requests = []
+
+            def nav_caller(cmd, **params):
+                requests.append((cmd, params))
+                return {"ok": True, "accepted": True}
+
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), nav_caller=nav_caller)
+            await dispatch_tool(self._call(CANCEL_NAVIGATION_TOOL_NAME), context)
+            await dispatch_tool(self._call(CREATE_PLACE_TOOL_NAME, arguments={"name": "living room"}), context)
+            self.assertEqual(requests, [("nav_cancel", {}), ("create_place", {"name": "living room"})])
+
+        asyncio.run(run())
+
+    def test_stop_also_cancels_navigation(self):
+        async def run():
+            requests = []
+
+            def motion_intent_caller(name):
+                requests.append(name)
+                return {"ok": True, "result": "stopped"}
+
+            def nav_caller(cmd, **params):
+                requests.append(cmd)
+                return {"ok": True, "accepted": True}
+
+            context = VoiceToolContext(
+                voice_state=VoiceState("test-voice"),
+                motion_intent_caller=motion_intent_caller,
+                nav_caller=nav_caller,
+            )
+            result = await dispatch_tool(self._call(STOP_TOOL_NAME), context)
+
+            self.assertEqual(requests, ["stop", "nav_cancel"])
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output, {"ok": True, "result": "stopped", "navigation_cancelled": True})
+
+        asyncio.run(run())
+
+    def test_check_navigation_polls_until_the_goal_ends(self):
+        replies = [
+            {"ok": True, "goal": {"state": "navigating", "remaining_m": 3.0}, "pose": None},
+            {"ok": True, "goal": {"state": "navigating", "remaining_m": 1.0}, "pose": None},
+            {"ok": True, "goal": {"state": "arrived", "remaining_m": 0.1}, "pose": {"x": 1.0, "y": 2.0}},
+        ]
+        sleeps = []
+        result = wait_for_navigation(lambda cmd: replies.pop(0), 30, sleep=sleeps.append)
+        self.assertEqual(result["goal"]["state"], "arrived")
+        self.assertEqual(result["pose"], {"x": 1.0, "y": 2.0})
+        self.assertEqual(sleeps, [0.5, 0.5])
+
+    def test_check_navigation_with_no_wait_reports_right_away(self):
+        sleeps = []
+        result = wait_for_navigation(
+            lambda cmd: {"ok": True, "goal": {"state": "navigating", "remaining_m": 3.0}, "pose": None},
+            0,
+            sleep=sleeps.append,
+        )
+        self.assertEqual(result["goal"]["state"], "navigating")
+        self.assertEqual(sleeps, [])
+
+    def test_check_navigation_with_no_goal(self):
+        result = wait_for_navigation(lambda cmd: {"ok": True, "goal": None}, 10, sleep=lambda seconds: None)
+        self.assertEqual(result["goal"], None)
+        self.assertIn("no navigation goal", result["note"])
+
+    def test_check_navigation_passes_a_bridge_error_through(self):
+        result = wait_for_navigation(lambda cmd: {"ok": False, "error": "nav_socket_unavailable"}, 10)
+        self.assertEqual(result, {"ok": False, "error": "nav_socket_unavailable"})
+
+    def test_where_am_i_names_the_nearest_place(self):
+        snapshot = {
+            "nav": {
+                "mode": "localize",
+                "map": "main",
+                "localized": True,
+                "pose": {"x": 1.0, "y": 1.0, "yaw": 0.0},
+                "places": {
+                    "kitchen": {"map": "main", "x": 1.5, "y": 1.0},
+                    "living room": {"map": "main", "x": 6.0, "y": 1.0},
+                    "bedroom": {"map": "upstairs", "x": 1.0, "y": 1.0},
+                },
+            },
+            "sources": {"nav": {"stale": False}},
+        }
+        output = where_am_i_output(snapshot)
+        self.assertTrue(output["ok"])
+        self.assertEqual(output["map"], "main")
+        self.assertEqual(output["places_on_map"], ["kitchen", "living room"])
+        self.assertEqual(output["nearest_place"], {"name": "kitchen", "distance_m": 0.5})
+        self.assertEqual(output["at_place"], "kitchen")
+
+    def test_where_am_i_far_from_everything_and_not_localized(self):
+        nav = {"mode": "localize", "map": "main", "localized": True, "pose": {"x": 0.0, "y": 0.0, "yaw": 0.0},
+               "places": {"kitchen": {"map": "main", "x": 10.0, "y": 0.0}}}
+        output = where_am_i_output({"nav": nav, "sources": {"nav": {"stale": False}}})
+        self.assertEqual(output["nearest_place"], {"name": "kitchen", "distance_m": 10.0})
+        self.assertIsNone(output["at_place"])
+
+        nav["localized"] = False
+        output = where_am_i_output({"nav": nav, "sources": {"nav": {"stale": False}}})
+        self.assertFalse(output["localized"])
+        self.assertIsNone(output["nearest_place"])
+        self.assertIn("not localized", output["note"])
+
+    def test_where_am_i_without_a_nav_bridge(self):
+        self.assertEqual(where_am_i_output({"sources": {}}), {"ok": False, "error": "nav_unavailable"})
+        stale = {"nav": {"mode": "mapping"}, "sources": {"nav": {"stale": True}}}
+        self.assertEqual(where_am_i_output(stale), {"ok": False, "error": "nav_unavailable"})
+
+    def test_where_am_i_tool_reads_the_telemetry_snapshot(self):
+        async def run():
+            snapshot = {"nav": {"mode": "mapping", "map": None, "localized": False, "pose": None, "places": {}},
+                        "sources": {"nav": {"stale": False}}}
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), robot_inspection_caller=lambda: snapshot)
+            result = await dispatch_tool(self._call(WHERE_AM_I_TOOL_NAME), context)
+            self.assertTrue(result.ok)
+            self.assertEqual(result.output["mode"], "mapping")
+            self.assertIn("new map", result.output["note"])
 
         asyncio.run(run())
 

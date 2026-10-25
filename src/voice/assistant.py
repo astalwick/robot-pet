@@ -475,6 +475,7 @@ async def stream_openai_words(
     playback_event: asyncio.Event | None = None,
     openai_model: str = OPENAI_MODEL,
     on_event: Callable[[dict[str, object]], None] | None = None,
+    nav_caller: Callable[..., dict[str, Any]] | None = None,
 ) -> AsyncIterator[str | AgentGoalRequest]:
     pending = ""
     response_input: object = openai_input
@@ -488,6 +489,7 @@ async def stream_openai_words(
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
         speaker_direction_caller=speaker_direction_caller,
+        nav_caller=nav_caller,
         end_session_pending=end_session_pending,
     )
 
@@ -668,6 +670,7 @@ async def run_assistant_turn(
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+    nav_caller: Callable[..., dict[str, Any]] | None = None,
     openai_model: str = OPENAI_MODEL,
     on_event: Callable[[dict[str, object]], None] | None = None,
 ) -> str | AgentGoalRequest:
@@ -691,6 +694,7 @@ async def run_assistant_turn(
         playback_event,
         openai_model,
         on_event,
+        nav_caller,
     )
 
     async def captured_openai_words() -> AsyncIterator[str]:
@@ -759,6 +763,7 @@ class TurnOrchestrator:
         robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
         face_me_caller: Callable[[], dict[str, Any]] | None = None,
         speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+        nav_caller: Callable[..., dict[str, Any]] | None = None,
         progress_speaker: Callable[..., Any] | None = None,
         character_prose: str | Callable[[], str] | None = None,
         openai_model: str = OPENAI_MODEL,
@@ -782,6 +787,7 @@ class TurnOrchestrator:
         self.robot_inspection_caller = robot_inspection_caller
         self.face_me_caller = face_me_caller
         self.speaker_direction_caller = speaker_direction_caller
+        self.nav_caller = nav_caller
         self.progress_speaker = progress_speaker
         self.character_prose = character_prose
         self.openai_model = openai_model
@@ -1136,6 +1142,7 @@ class TurnOrchestrator:
                 robot_inspection_caller=self.robot_inspection_caller,
                 face_me_caller=self.face_me_caller,
                 speaker_direction_caller=self.speaker_direction_caller,
+                nav_caller=self.nav_caller,
                 speak_progress=self.speak_progress,
                 is_speaking=lambda: self.current_playback() is not None,
                 on_event=self.on_event,
@@ -1213,6 +1220,7 @@ class TurnOrchestrator:
                     robot_inspection_caller=self.robot_inspection_caller,
                     face_me_caller=self.face_me_caller,
                     speaker_direction_caller=self.speaker_direction_caller,
+                    nav_caller=self.nav_caller,
                     openai_model=self.openai_model,
                     on_event=self.on_event,
                 ),
@@ -1612,6 +1620,7 @@ async def handle_scribe_events(
     robot_inspection_caller: Callable[[], dict[str, Any] | None] | None = None,
     face_me_caller: Callable[[], dict[str, Any]] | None = None,
     speaker_direction_caller: Callable[[], dict[str, Any]] | None = None,
+    nav_caller: Callable[..., dict[str, Any]] | None = None,
     progress_speaker: Callable[..., Any] | None = None,
     character_prose: str | Callable[[], str] | None = None,
     openai_model: str = OPENAI_MODEL,
@@ -1638,6 +1647,7 @@ async def handle_scribe_events(
         robot_inspection_caller=robot_inspection_caller,
         face_me_caller=face_me_caller,
         speaker_direction_caller=speaker_direction_caller,
+        nav_caller=nav_caller,
         progress_speaker=progress_speaker,
         character_prose=character_prose,
         openai_model=openai_model,

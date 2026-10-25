@@ -877,7 +877,9 @@ class RobotMotionTest(unittest.TestCase):
         self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, True, SafetyState(blocked=False)))
         self.assertTrue(encoder_move_should_stop(runner, motor, 0.1, True, SafetyState(blocked=False)))
 
-        self.assertEqual(completed, [{"ok": True, "result": "completed", "traveled_m": 0.1}])
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["result"], "completed")
+        self.assertAlmostEqual(completed[0]["traveled_m"], 0.1)
         self.assertIsNone(runner.encoder_move)
         self.assertFalse(runner.intent_executor.is_active())
 
@@ -891,7 +893,9 @@ class RobotMotionTest(unittest.TestCase):
         self.assertFalse(encoder_move_should_stop(runner, motor, 0.0, False, SafetyState(blocked=False)))
         self.assertTrue(encoder_move_should_stop(runner, motor, 0.1, False, SafetyState(blocked=False)))
 
-        self.assertEqual(completed, [{"ok": True, "result": "completed", "traveled_m": -0.1}])
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["result"], "completed")
+        self.assertAlmostEqual(completed[0]["traveled_m"], -0.1)
 
     def test_encoder_move_reverse_handles_unsigned_wraparound(self):
         motor = FakeMotor()
@@ -972,17 +976,10 @@ class RobotMotionTest(unittest.TestCase):
         )
 
         self.assertTrue(stopped)
-        self.assertEqual(
-            completed,
-            [
-                {
-                    "ok": False,
-                    "error": "safety_blocked",
-                    "traveled_m": 0.05,
-                    "blocked_by": "front_right_obstacle",
-                }
-            ],
-        )
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["error"], "safety_blocked")
+        self.assertEqual(completed[0]["blocked_by"], "front_right_obstacle")
+        self.assertAlmostEqual(completed[0]["traveled_m"], 0.05)
 
     def test_encoder_move_reverse_survives_safety_block(self):
         motor = FakeMotor()

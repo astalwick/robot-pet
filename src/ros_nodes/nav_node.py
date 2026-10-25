@@ -23,7 +23,8 @@ Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
 modes but does not activate them: their costmaps need the map frame, and the
 lidar that makes it follows the motor rail, so this node brings them up once
-the robot is scanning and has a map pose. A goal asks for the rail (through
+the robot is scanning and has a map pose, and pauses them again a few seconds
+after the scans stop (see manage_nav2). A goal asks for the rail (through
 motor_power_requested) and is sent once the lidar and Nav2 are up. One goal
 at a time; a new one replaces it. The goal is cancelled when robot-motion
 raises /nav_lock (a voice intent or a stop), when the gamepad moves, or on a
@@ -396,7 +397,7 @@ class NavNode(Node):
         if cmd == "nav_cancel":
             if not self.navigating():
                 return {"ok": True, "accepted": False, "reason": "no_goal"}
-            self.cancel_goal("cancelled")
+            self.cancel_goal("requested")
             return {"ok": True, "accepted": True}
         return {"ok": False, "error": "unknown_cmd"}
 

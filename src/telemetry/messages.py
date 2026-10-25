@@ -464,9 +464,11 @@ def lidar_update(
     diagnostics_age_seconds: float | None,
     now: float | None = None,
 ) -> dict[str, Any]:
-    # Diagnostics left over from a driver that has since stopped would only confuse.
+    # Numbers left over from a driver that has since stopped would only confuse.
     if diagnostics_age_seconds is None or diagnostics_age_seconds > LIDAR_SCAN_STALE_SECONDS:
         diagnostics = []
+    if scan_age_seconds is None or scan_age_seconds > LIDAR_SCAN_STALE_SECONDS:
+        scan_hz = points = valid_points = None
     return {
         "type": "source_update",
         "source": "lidar",

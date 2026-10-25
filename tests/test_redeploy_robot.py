@@ -172,7 +172,7 @@ class TestRedeployRobot(unittest.TestCase):
 
     def test_restart_planning_diffs_from_last_deployed_rev(self):
         body = SCRIPT.read_text()
-        self.assertIn('changed_files="$(git diff --name-only "$baseline_rev" "$new_rev")"', body)
+        self.assertIn('changed_files="$(git diff --no-renames --name-only "$baseline_rev" "$new_rev")"', body)
 
     def test_skips_pip_without_pyproject_change(self):
         body = SCRIPT.read_text()

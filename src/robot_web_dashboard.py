@@ -335,9 +335,14 @@ def restart_robot_motion() -> subprocess.CompletedProcess[str]:
     )
 
 
-def run_lidar_service(verb: str) -> subprocess.CompletedProcess[str]:
+def run_lidar_transition(transition: str) -> subprocess.CompletedProcess[str]:
+    # The dashboard isn't a ROS process, so it borrows the ROS env for this one call.
+    command = (
+        "source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a"
+        f" && exec ros2 lifecycle set /rplidar_node {transition}"
+    )
     return subprocess.run(
-        ["sudo", "systemctl", verb, "robot-lidar.service"],
+        ["bash", "-c", command],
         check=False,
         capture_output=True,
         text=True,
@@ -870,7 +875,11 @@ async def voice_command_handler(request: web.Request) -> web.Response:
 
 
 async def lidar_power_handler(request: web.Request) -> web.Response:
-    """Start or stop the lidar driver. Stopping it also stops the motor."""
+    """Turn the lidar on or off by activating or deactivating rplidar_node.
+
+    The driver keeps running either way. Stopping robot-lidar instead would let
+    the A1's motor spin, since it runs whenever no driver holds the port.
+    """
     state: WebDashboardState = request.app["state"]
     try:
         payload = await request.json()
@@ -881,19 +890,19 @@ async def lidar_power_handler(request: web.Request) -> web.Response:
     if not isinstance(on, bool):
         return web.json_response({"error": "on must be true or false"}, status=400)
 
-    verb = "start" if on else "stop"
-    state.log_hub.publish(f"Lidar: {verb}ing robot-lidar...")
+    transition = "activate" if on else "deactivate"
+    state.log_hub.publish(f"Lidar: turning {'on' if on else 'off'}...")
     try:
-        result = await asyncio.to_thread(run_lidar_service, verb)
+        result = await asyncio.to_thread(run_lidar_transition, transition)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        state.log_hub.publish(f"Lidar {verb} failed: {exc}")
+        state.log_hub.publish(f"Lidar {transition} failed: {exc}")
         return web.json_response({"error": str(exc)}, status=500)
     if result.returncode != 0:
         output = (result.stderr or result.stdout).strip()
-        state.log_hub.publish(f"Lidar {verb} failed: {output}")
+        state.log_hub.publish(f"Lidar {transition} failed: {output}")
         return web.json_response({"error": output}, status=500)
 
-    state.log_hub.publish(f"Lidar: robot-lidar {'started' if on else 'stopped'}.")
+    state.log_hub.publish(f"Lidar: {'on' if on else 'off'}.")
     return web.json_response({"ok": True})
 
 

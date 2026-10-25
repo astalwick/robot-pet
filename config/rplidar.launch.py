@@ -33,6 +33,9 @@ def generate_launch_description() -> LaunchDescription:
                 "serial_baudrate": 115200,
                 "frame_id": "laser",
                 "angle_compensate": True,
+                # rplidar_with_args.launch.py set these two; keep the scans identical
+                "intensities_as_angles": True,
+                "interpolated_rays": True,
                 # the URDF owns the laser frame
                 "publish_tf": False,
             }

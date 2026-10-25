@@ -64,17 +64,18 @@ class TelemetryMessagesTest(unittest.TestCase):
     def test_lidar_status_reports_the_worst_problem_first(self):
         fault = [{"name": "rplidar", "level": 2, "message": "Hardware unresponsive", "values": {}}]
         warning = [{"name": "rplidar", "level": 1, "message": "slow", "values": {}}]
-        self.assertEqual(lidar_status(False, False, None, []), "unplugged")
-        self.assertEqual(lidar_status(True, False, None, fault), "off")
-        self.assertEqual(lidar_status(True, True, 0.1, fault), "fault")
-        self.assertEqual(lidar_status(True, True, None, warning), "no_scans")
-        self.assertEqual(lidar_status(True, True, 10.0, []), "no_scans")
-        self.assertEqual(lidar_status(True, True, 0.1, warning), "warning")
-        self.assertEqual(lidar_status(True, True, 0.1, []), "ok")
+        self.assertEqual(lidar_status(False, False, False, None, []), "unplugged")
+        self.assertEqual(lidar_status(True, False, False, None, fault), "driver_stopped")
+        self.assertEqual(lidar_status(True, True, False, None, fault), "off")
+        self.assertEqual(lidar_status(True, True, True, 0.1, fault), "fault")
+        self.assertEqual(lidar_status(True, True, True, None, warning), "no_scans")
+        self.assertEqual(lidar_status(True, True, True, 10.0, []), "no_scans")
+        self.assertEqual(lidar_status(True, True, True, 0.1, warning), "warning")
+        self.assertEqual(lidar_status(True, True, True, 0.1, []), "ok")
 
-    def test_lidar_update_drops_numbers_from_a_stopped_driver(self):
+    def test_lidar_update_drops_numbers_once_the_lidar_is_off(self):
         fault = [{"name": "rplidar", "level": 2, "message": "Hardware unresponsive", "values": {}}]
-        message = lidar_update(True, False, False, 7.4, 55.0, 1450, 961, fault, 55.0, now=12.0)
+        message = lidar_update(True, True, False, False, 7.4, 55.0, 1450, 961, fault, 55.0, now=12.0)
 
         self.assertEqual(message["source"], "lidar")
         self.assertEqual(message["time"], 12.0)
@@ -86,9 +87,10 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["scan_age_seconds"], 55.0)
 
     def test_lidar_update_carries_scan_fields(self):
-        message = lidar_update(True, True, True, 7.2, 0.1, 360, 290, [], 0.5)
+        message = lidar_update(True, True, True, True, 7.2, 0.1, 360, 290, [], 0.5)
 
         self.assertEqual(message["status"], "ok")
+        self.assertTrue(message["lidar_active"])
         self.assertTrue(message["slam_active"])
         self.assertEqual(message["scan_hz"], 7.2)
         self.assertEqual(message["points"], 360)

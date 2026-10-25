@@ -7,6 +7,8 @@ Wants=network-online.target
 # and stops it when it is unplugged.
 # rplidar_node is a lifecycle node; config/rplidar.launch.py configures and
 # activates it once, then leaves deactivate/activate to whoever needs the lidar.
+# Turn the lidar off with a deactivate, not by stopping this unit: the A1's motor
+# spins whenever no driver holds the serial port.
 ConditionPathExists=/dev/rplidar
 
 [Service]
@@ -16,11 +18,6 @@ ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /
 Restart=always
 RestartSec=2
 TimeoutStopSec=10
-# The A1's motor runs whenever the USB adapter's DTR line is low. Opening the
-# port raises DTR, but closing it drops DTR again, so the motor spins back up
-# the moment the driver exits. stty opens the port (raising DTR) and turns off
-# hupcl so DTR stays up after it closes. "-" because the lidar may be unplugged.
-ExecStopPost=-/usr/bin/stty -F /dev/rplidar -hupcl
 StandardOutput=journal
 StandardError=journal
 

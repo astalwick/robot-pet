@@ -431,6 +431,7 @@ DIAGNOSTIC_ERROR = 2
 def lidar_status(
     device_present: bool,
     service_active: bool,
+    lidar_active: bool,
     scan_age_seconds: float | None,
     diagnostics: list[dict[str, Any]],
 ) -> str:
@@ -440,7 +441,10 @@ def lidar_status(
     """
     if not device_present:
         return "unplugged"
+    # With no driver holding the port, the A1's motor spins regardless.
     if not service_active:
+        return "driver_stopped"
+    if not lidar_active:
         return "off"
     worst_level = max((status["level"] for status in diagnostics), default=0)
     if worst_level >= DIAGNOSTIC_ERROR:
@@ -455,6 +459,7 @@ def lidar_status(
 def lidar_update(
     device_present: bool,
     service_active: bool,
+    lidar_active: bool,
     slam_active: bool,
     scan_hz: float | None,
     scan_age_seconds: float | None,
@@ -473,9 +478,10 @@ def lidar_update(
         "type": "source_update",
         "source": "lidar",
         "time": now if now is not None else time.time(),
-        "status": lidar_status(device_present, service_active, scan_age_seconds, diagnostics),
+        "status": lidar_status(device_present, service_active, lidar_active, scan_age_seconds, diagnostics),
         "device_present": device_present,
         "service_active": service_active,
+        "lidar_active": lidar_active,
         "slam_active": slam_active,
         "scan_hz": scan_hz,
         "scan_age_seconds": scan_age_seconds,

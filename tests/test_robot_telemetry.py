@@ -332,7 +332,7 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         await reader.readline()
 
         self.assertTrue(
-            publish_message(self.publish_socket, lidar_update(True, True, False, 7.2, 0.1, 360, 290, [], None))
+            publish_message(self.publish_socket, lidar_update(True, True, True, False, 7.2, 0.1, 360, 290, [], None))
         )
         snapshot = await self._read_until(reader, lambda item: item.get("lidar") is not None)
 

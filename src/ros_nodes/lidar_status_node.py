@@ -2,8 +2,9 @@
 """ROS lidar status node: watches the apt rplidar driver for the dashboard.
 
 The driver (robot-lidar.service) only speaks ROS, so this node listens to its
-/scan and /diagnostics and twice a second sends a lidar_update to the hub,
-alongside whether the lidar and SLAM services are running.
+/scan and /diagnostics, asks for its lifecycle state (active means the lidar is
+on), and twice a second sends a lidar_update to the hub, alongside whether the
+lidar and SLAM services are running.
 """
 
 import argparse
@@ -14,6 +15,7 @@ from collections import deque
 
 import rclpy
 from diagnostic_msgs.msg import DiagnosticArray
+from lifecycle_msgs.srv import GetState
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -40,6 +42,8 @@ class LidarStatusNode(Node):
         self.valid_points: int | None = None
         self.diagnostics: list[dict] = []
         self.diagnostics_time: float | None = None
+        self.lidar_active = False
+        self.state_client = self.create_client(GetState, "/rplidar_node/get_state")
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
         self.create_subscription(DiagnosticArray, "/diagnostics", self.on_diagnostics, 10)
         self.create_timer(0.5, self.publish_status)
@@ -65,7 +69,15 @@ class LidarStatusNode(Node):
         ]
         self.diagnostics_time = time.monotonic()
 
+    def on_driver_state(self, future) -> None:
+        self.lidar_active = future.result().current_state.label == "active"
+
     def publish_status(self) -> None:
+        # The answer lands in on_driver_state, in time for the next update.
+        if self.state_client.service_is_ready():
+            self.state_client.call_async(GetState.Request()).add_done_callback(self.on_driver_state)
+        else:
+            self.lidar_active = False
         now = time.monotonic()
         scan_hz = None
         if len(self.scan_times) >= 2:
@@ -73,6 +85,7 @@ class LidarStatusNode(Node):
         message = lidar_update(
             device_present=os.path.exists(LIDAR_DEVICE),
             service_active=service_active("robot-lidar.service"),
+            lidar_active=self.lidar_active,
             slam_active=service_active("robot-slam.service"),
             scan_hz=scan_hz,
             scan_age_seconds=now - self.scan_times[-1] if self.scan_times else None,

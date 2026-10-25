@@ -9,6 +9,7 @@ const STATUS_CLASSES = {
   warning: 'warn',
   fault: 'err',
   no_scans: 'err',
+  driver_stopped: 'err',
   off: 'muted',
   unplugged: 'muted',
 };
@@ -16,7 +17,7 @@ const STATUS_CLASSES = {
 // diagnostic_msgs/DiagnosticStatus levels: OK, WARN, ERROR, STALE
 const DIAGNOSTIC_CLASSES = ['ok', 'warn', 'err', 'muted'];
 
-let lidarServiceActive = false;
+let lidarActive = false;
 let lidarPowerBusy = false;
 
 export function renderLidar(snapshot, sources) {
@@ -28,12 +29,13 @@ export function renderLidar(snapshot, sources) {
     return;
   }
 
-  lidarServiceActive = lidar.service_active;
-  powerButton.textContent = lidar.service_active ? 'Turn off' : 'Turn on';
-  powerButton.disabled = lidarPowerBusy || !lidar.device_present;
+  lidarActive = lidar.lidar_active;
+  powerButton.textContent = lidar.lidar_active ? 'Turn off' : 'Turn on';
+  // On and off go through the driver, so it has to be running.
+  powerButton.disabled = lidarPowerBusy || !lidar.service_active;
 
   const rows = [
-    row('status', '', lidar.status.toUpperCase(), STATUS_CLASSES[lidar.status]),
+    row('status', '', lidar.status.replace('_', ' ').toUpperCase(), STATUS_CLASSES[lidar.status]),
     row('device', '', lidar.device_present ? 'plugged in' : 'not found', lidar.device_present ? 'ok' : 'muted'),
     row('driver', '', lidar.service_active ? 'running' : 'stopped', lidar.service_active ? 'ok' : 'muted'),
     row('scan rate', '', fmt(lidar.scan_hz, ' Hz', 1)),
@@ -58,14 +60,14 @@ export function bindLidarHandlers(bindOn) {
 
 async function onLidarPower(event) {
   const button = event.currentTarget;
-  const verb = lidarServiceActive ? 'stop' : 'start';
+  const verb = lidarActive ? 'turn off' : 'turn on';
   lidarPowerBusy = true;
   button.disabled = true;
   try {
     const response = await fetch('/lidar/power', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ on: !lidarServiceActive }),
+      body: JSON.stringify({ on: !lidarActive }),
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));

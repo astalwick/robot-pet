@@ -67,7 +67,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-pi-battery` | ROS node | `pi_battery_node.py`: UPS HAT E; publishes `/battery/pi` |
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
-| `robot-lidar` | ROS (apt) | `rplidar_driver`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device |
+| `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; lifecycle `deactivate`/`activate` turns the lidar off/on |
 | `robot-slam` | ROS (apt) | `slam_toolbox` online async, params in `config/slam_toolbox.yaml`; `/scan` + `odom` -> `/map` and TF `map -> odom` |
 | `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/SLAM units; publishes lidar health to the hub for the dashboard |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |

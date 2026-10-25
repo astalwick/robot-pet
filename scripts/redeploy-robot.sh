@@ -197,6 +197,9 @@ plan_service_restarts() {
       config/slam_toolbox.yaml)
         want_restart robot-slam.service
         ;;
+      config/rplidar.launch.py)
+        want_restart robot-lidar.service
+        ;;
       scripts/ros-node.sh)
         # every ROS node runs through this wrapper
         want_restart robot-sensors.service

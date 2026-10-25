@@ -67,9 +67,9 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-pi-battery` | ROS node | `pi_battery_node.py`: UPS HAT E; publishes `/battery/pi` |
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
-| `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; lifecycle `deactivate`/`activate` turns the lidar off/on |
+| `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; starts configured but inactive, lifecycle `activate`/`deactivate` turns the lidar on/off |
 | `robot-slam` | ROS (apt) | `slam_toolbox` online async, params in `config/slam_toolbox.yaml`; `/scan` + `odom` -> `/map` and TF `map -> odom` |
-| `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/SLAM units; publishes lidar health to the hub for the dashboard |
+| `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/SLAM units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -91,7 +91,10 @@ message fields so they stay testable without rclpy.
 
 The apt lidar driver only speaks ROS, so `robot-lidar-status` goes the other
 way: it summarizes `/scan` and `/diagnostics` into a `lidar` hub message, and
-the dashboard's Lidar panel reads that like any other panel.
+the dashboard's Lidar panel reads that like any other panel. It is also the
+only thing that turns the lidar on and off by itself: the lidar follows the
+motor rail, so it spins only while the robot can move. The dashboard button is
+a manual override that holds until the rail next switches.
 
 ### Motion and safety
 

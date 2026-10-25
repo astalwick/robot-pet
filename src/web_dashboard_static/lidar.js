@@ -33,7 +33,7 @@ export function renderLidar(snapshot, sources) {
   }
 
   // When the lidar changes state, that's the new truth, whether or not a click
-  // did it (a driver restart comes back on).
+  // did it (robot-lidar-status switches it with the motor rail).
   if (lidar.lidar_active !== lidarTelemetryActive) lidarWantActive = lidar.lidar_active;
   lidarTelemetryActive = lidar.lidar_active;
   lidarDriverRunning = lidar.service_active;

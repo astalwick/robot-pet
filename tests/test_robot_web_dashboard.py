@@ -490,10 +490,10 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await resp.json(), reply)
 
     async def test_map_png_serves_the_bridge_image_or_404(self):
+        self.state.map_png_path = os.path.join(self.tmpdir.name, "map.png")
         async with self.client.get("/map.png") as resp:
             self.assertEqual(resp.status, 404)
 
-        self.state.map_png_path = os.path.join(self.tmpdir.name, "map.png")
         with open(self.state.map_png_path, "wb") as file_obj:
             file_obj.write(b"\x89PNG fake")
         async with self.client.get("/map.png") as resp:

@@ -309,6 +309,12 @@ main {
   margin-top: 0.5rem;
 }
 
+.lidar-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 .voice-timeline-toggle {
   display: none;
 }

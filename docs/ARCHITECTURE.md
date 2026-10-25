@@ -69,6 +69,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
 | `robot-lidar` | ROS (apt) | `rplidar_driver`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device |
 | `robot-slam` | ROS (apt) | `slam_toolbox` online async, params in `config/slam_toolbox.yaml`; `/scan` + `odom` -> `/map` and TF `map -> odom` |
+| `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/SLAM units; publishes lidar health to the hub for the dashboard |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -87,6 +88,10 @@ publish the ROS message. The hub is still what the dashboards, robot-battery
 and robot-voice read; ROS is what Foxglove and, later, SLAM and Nav2 read.
 `ros_nodes/ros_messages.py` holds the pure conversions from hub dicts to ROS
 message fields so they stay testable without rclpy.
+
+The apt lidar driver only speaks ROS, so `robot-lidar-status` goes the other
+way: it summarizes `/scan` and `/diagnostics` into a `lidar` hub message, and
+the dashboard's Lidar panel reads that like any other panel.
 
 ### Motion and safety
 

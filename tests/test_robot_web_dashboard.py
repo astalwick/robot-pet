@@ -454,6 +454,32 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                 payload = await resp.json()
         self.assertEqual(payload["reason"], "not_armed")
 
+    async def test_lidar_power_starts_and_stops_the_driver(self):
+        with mock.patch("robot_web_dashboard.run_lidar_service") as run_lidar_service:
+            run_lidar_service.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            async with self.client.post("/lidar/power", json={"on": True}) as resp:
+                self.assertEqual(resp.status, 200)
+            async with self.client.post("/lidar/power", json={"on": False}) as resp:
+                self.assertEqual(resp.status, 200)
+
+        self.assertEqual(run_lidar_service.call_args_list, [mock.call("start"), mock.call("stop")])
+
+    async def test_lidar_power_reports_systemctl_failure(self):
+        with mock.patch("robot_web_dashboard.run_lidar_service") as run_lidar_service:
+            run_lidar_service.return_value = mock.Mock(returncode=1, stdout="", stderr="Access denied")
+            async with self.client.post("/lidar/power", json={"on": True}) as resp:
+                self.assertEqual(resp.status, 500)
+                payload = await resp.json()
+
+        self.assertEqual(payload["error"], "Access denied")
+
+    async def test_lidar_power_requires_a_boolean(self):
+        with mock.patch("robot_web_dashboard.run_lidar_service") as run_lidar_service:
+            async with self.client.post("/lidar/power", json={"on": "yes"}) as resp:
+                self.assertEqual(resp.status, 400)
+
+        run_lidar_service.assert_not_called()
+
     async def test_get_config_sensors_returns_fields_and_default_values(self):
         async with self.client.get("/config/sensors") as resp:
             self.assertEqual(resp.status, 200)
@@ -758,6 +784,7 @@ class DashboardJsTest(unittest.TestCase):
         self.logs_js = self._module("logs.js")
         self.main_js = self._module("main.js")
         self.path_history_js = self._module("path-history.js")
+        self.lidar_js = self._module("lidar.js")
         self.dashboard_html = (static_dir / "index.html").read_text()
         self.dashboard_css = (static_dir / "dashboard.css").read_text()
 
@@ -781,6 +808,21 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("awaiting odometry", self.path_history_js)
         self.assertIn("awaiting imu", self.path_history_js)
         self.assertIn("stale telemetry", self.path_history_js)
+
+    def test_lidar_panel_sits_below_range_sensors(self):
+        html = self.dashboard_html
+        self.assertLess(html.index('id="sensors-panel"'), html.index('id="lidar-panel"'))
+        self.assertLess(html.index('id="lidar-panel"'), html.index('id="imu-panel"'))
+        self.assertIn('id="lidar-power-button"', html)
+        self.assertIn("Open Foxglove for SLAM", html)
+        self.assertIn("renderLidar(snapshot, sources)", self.telemetry_js)
+        self.assertIn("bindLidarHandlers(on)", self.main_js)
+
+    def test_foxglove_link_targets_this_robot_in_the_desktop_app(self):
+        self.assertIn("window.location.hostname", self.lidar_js)
+        self.assertIn("ds=foxglove-websocket", self.lidar_js)
+        self.assertIn("openIn=desktop", self.lidar_js)
+        self.assertIn("'/lidar/power'", self.lidar_js)
 
     def test_camera_url_uses_window_location_hostname(self):
         self.assertIn("window.location.hostname", self.camera_js)

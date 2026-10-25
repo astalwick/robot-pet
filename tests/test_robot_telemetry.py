@@ -15,6 +15,7 @@ from telemetry.messages import (
     decode_json_line,
     gamepad_update,
     gamepad_teleop_update,
+    lidar_update,
     motor_rail_update,
     pi_battery_update,
     robot_motion_update,
@@ -161,6 +162,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pi_battery", snapshot["sources"])
         self.assertTrue(snapshot["sources"]["pi_battery"]["stale"])
         self.assertIsNone(snapshot["pi_battery"])
+
+    async def test_snapshot_lists_lidar_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("lidar", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["lidar"]["stale"])
+        self.assertIsNone(snapshot["lidar"])
 
     async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()
@@ -318,6 +326,21 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["pi_battery"]["pack_voltage"], 16.0)
         self.assertEqual(snapshot["pi_battery"]["percent"], 73)
         self.assertFalse(snapshot["sources"]["pi_battery"]["stale"])
+
+    async def test_lidar_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        self.assertTrue(
+            publish_message(self.publish_socket, lidar_update(True, True, False, 7.2, 0.1, 360, 290, [], None))
+        )
+        snapshot = await self._read_until(reader, lambda item: item.get("lidar") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["lidar"]["status"], "ok")
+        self.assertEqual(snapshot["lidar"]["scan_hz"], 7.2)
+        self.assertFalse(snapshot["sources"]["lidar"]["stale"])
 
     async def test_snapshot_composes_motion_and_gamepad_fields_from_owners(self):
         self.assertTrue(

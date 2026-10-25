@@ -1,0 +1,18 @@
+[Unit]
+Description=Robot Lidar Status - lidar health for the dashboard
+After=robot-telemetry.service
+Wants=robot-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/scripts/ros-node.sh /home/pi/robot-pet/src/ros_nodes/lidar_status_node.py
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -12,6 +12,7 @@ import {
 import { renderFaceOverlay } from './camera.js';
 import { renderVoice } from './voice.js';
 import { renderCost } from './cost.js';
+import { renderLidar } from './lidar.js';
 import { updateVoiceTimeline } from './voice-timeline.js';
 import { updateVoiceTurnStats } from './voice-turn-stats.js';
 import { updatePathHistory } from './path-history.js';
@@ -78,6 +79,7 @@ function render(snapshot) {
   renderVoice(snapshot, sources);
   renderCost(snapshot);
   renderSensors(snapshot, sources);
+  renderLidar(snapshot, sources);
   updatePathHistory(snapshot);
   updateVoiceTimeline((snapshot.voice || {}).timeline);
   updateVoiceTurnStats((snapshot.voice || {}).timeline);

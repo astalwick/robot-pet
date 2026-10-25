@@ -18,6 +18,7 @@ ALL_SERVICES = {
     "robot-twist-mux.service",
     "robot-lidar.service",
     "robot-slam.service",
+    "robot-lidar-status.service",
     "robot-camera.service",
     "gamepad-teleop.service",
     "robot-vision.service",
@@ -57,6 +58,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-battery.service")
         elif path in ("src/robot_pi_battery.py", "src/ros_nodes/pi_battery_node.py"):
             want("robot-pi-battery.service")
+        elif path == "src/ros_nodes/lidar_status_node.py":
+            want("robot-lidar-status.service")
         elif path == "src/ros_nodes/gamepad_teleop_node.py":
             want("gamepad-teleop.service")
         elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
@@ -127,6 +130,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-motion.service")
             want("gamepad-teleop.service")
             want("robot-pi-battery.service")
+            want("robot-lidar-status.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -253,14 +257,16 @@ class TestRedeployRobot(unittest.TestCase):
         )
         self.assertEqual(planned_services(["config/twist_mux.yaml"]), {"robot-twist-mux.service"})
         self.assertEqual(planned_services(["src/ros_nodes/pi_battery_node.py"]), {"robot-pi-battery.service"})
+        self.assertEqual(planned_services(["src/ros_nodes/lidar_status_node.py"]), {"robot-lidar-status.service"})
         self.assertEqual(planned_services(["urdf/robot.urdf"]), {"robot-state-publisher.service"})
         self.assertEqual(
             planned_services(["scripts/ros-node.sh"]),
             {
-                            "robot-sensors.service",
+                "robot-sensors.service",
                 "robot-motion.service",
                 "gamepad-teleop.service",
                 "robot-pi-battery.service",
+                "robot-lidar-status.service",
             },
         )
 

@@ -335,6 +335,16 @@ def restart_robot_motion() -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_lidar_service(verb: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", verb, "robot-lidar.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
 def restart_web_dashboard() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["sudo", "systemctl", "restart", "--no-block", "robot-web-dashboard.service"],
@@ -859,6 +869,34 @@ async def voice_command_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "accepted": True})
 
 
+async def lidar_power_handler(request: web.Request) -> web.Response:
+    """Start or stop the lidar driver. Stopping it also stops the motor."""
+    state: WebDashboardState = request.app["state"]
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
+
+    on = payload.get("on") if isinstance(payload, dict) else None
+    if not isinstance(on, bool):
+        return web.json_response({"error": "on must be true or false"}, status=400)
+
+    verb = "start" if on else "stop"
+    state.log_hub.publish(f"Lidar: {verb}ing robot-lidar...")
+    try:
+        result = await asyncio.to_thread(run_lidar_service, verb)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        state.log_hub.publish(f"Lidar {verb} failed: {exc}")
+        return web.json_response({"error": str(exc)}, status=500)
+    if result.returncode != 0:
+        output = (result.stderr or result.stdout).strip()
+        state.log_hub.publish(f"Lidar {verb} failed: {output}")
+        return web.json_response({"error": output}, status=500)
+
+    state.log_hub.publish(f"Lidar: robot-lidar {'started' if on else 'stopped'}.")
+    return web.json_response({"ok": True})
+
+
 async def voice_personalities_handler(request: web.Request) -> web.Response:
     return web.json_response({"personalities": sorted(load_personalities().keys())})
 
@@ -902,6 +940,7 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_get("/config/{name}", config_get)
     app.router.add_post("/config/{name}", config_apply)
     app.router.add_post("/voice/command", voice_command_handler)
+    app.router.add_post("/lidar/power", lidar_power_handler)
     app.router.add_get("/voice/personalities", voice_personalities_handler)
     app.router.add_get("/api/model-frames", model_frames_list_handler)
     app.router.add_get("/model-frames/{name}", model_frame_file_handler)

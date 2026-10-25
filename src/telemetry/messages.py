@@ -22,6 +22,9 @@ from typing import Any
 #
 # wheel_message, voice_update, vision_update, gamepad_teleop_update,
 # robot_motion_update and the rest are dashboard-only and stay hub messages.
+#
+# lidar_update goes the other way: lidar_status_node.py summarizes the apt
+# driver's /scan and /diagnostics into a hub message for the dashboard.
 
 
 BUTTON_FIELDS = (
@@ -414,6 +417,70 @@ def imu_reading_to_dict(reading: Any) -> dict[str, Any]:
         "yaw_degrees": reading.yaw_degrees,
         "pitch_degrees": reading.pitch_degrees,
         "roll_degrees": reading.roll_degrees,
+    }
+
+
+# The A1 scans at 5-7 Hz, so a few seconds without one means it has stopped.
+LIDAR_SCAN_STALE_SECONDS = 3.0
+
+# diagnostic_msgs/DiagnosticStatus levels
+DIAGNOSTIC_WARN = 1
+DIAGNOSTIC_ERROR = 2
+
+
+def lidar_status(
+    device_present: bool,
+    service_active: bool,
+    scan_age_seconds: float | None,
+    diagnostics: list[dict[str, Any]],
+) -> str:
+    """One word for the lidar's health, worst first.
+
+    A driver error wins over "no_scans" so the panel says why the scans stopped.
+    """
+    if not device_present:
+        return "unplugged"
+    if not service_active:
+        return "off"
+    worst_level = max((status["level"] for status in diagnostics), default=0)
+    if worst_level >= DIAGNOSTIC_ERROR:
+        return "fault"
+    if scan_age_seconds is None or scan_age_seconds > LIDAR_SCAN_STALE_SECONDS:
+        return "no_scans"
+    if worst_level == DIAGNOSTIC_WARN:
+        return "warning"
+    return "ok"
+
+
+def lidar_update(
+    device_present: bool,
+    service_active: bool,
+    slam_active: bool,
+    scan_hz: float | None,
+    scan_age_seconds: float | None,
+    points: int | None,
+    valid_points: int | None,
+    diagnostics: list[dict[str, Any]],
+    diagnostics_age_seconds: float | None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    # Diagnostics left over from a driver that has since stopped would only confuse.
+    if diagnostics_age_seconds is None or diagnostics_age_seconds > LIDAR_SCAN_STALE_SECONDS:
+        diagnostics = []
+    return {
+        "type": "source_update",
+        "source": "lidar",
+        "time": now if now is not None else time.time(),
+        "status": lidar_status(device_present, service_active, scan_age_seconds, diagnostics),
+        "device_present": device_present,
+        "service_active": service_active,
+        "slam_active": slam_active,
+        "scan_hz": scan_hz,
+        "scan_age_seconds": scan_age_seconds,
+        "points": points,
+        "valid_points": valid_points,
+        "diagnostics": diagnostics,
+        "diagnostics_age_seconds": diagnostics_age_seconds,
     }
 
 

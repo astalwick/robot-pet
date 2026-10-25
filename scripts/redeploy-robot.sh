@@ -17,6 +17,7 @@ SERVICES=(
   robot-twist-mux.service
   robot-lidar.service
   robot-slam.service
+  robot-lidar-status.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -27,6 +28,7 @@ SERVICES=(
 )
 STOP_SERVICES=(
   robot-foxglove.service
+  robot-lidar-status.service
   robot-slam.service
   robot-lidar.service
   robot-vision.service
@@ -53,6 +55,7 @@ START_SERVICES=(
   robot-twist-mux.service
   robot-lidar.service
   robot-slam.service
+  robot-lidar-status.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -103,6 +106,9 @@ plan_service_restarts() {
         ;;
       src/robot_pi_battery.py | src/ros_nodes/pi_battery_node.py)
         want_restart robot-pi-battery.service
+        ;;
+      src/ros_nodes/lidar_status_node.py)
+        want_restart robot-lidar-status.service
         ;;
       src/ros_nodes/gamepad_teleop_node.py)
         want_restart gamepad-teleop.service
@@ -197,6 +203,7 @@ plan_service_restarts() {
         want_restart robot-motion.service
         want_restart gamepad-teleop.service
         want_restart robot-pi-battery.service
+        want_restart robot-lidar-status.service
         ;;
       systemd/*)
         # a unit deleted from the repo is retired by install-service.sh instead

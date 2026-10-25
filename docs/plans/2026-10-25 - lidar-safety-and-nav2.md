@@ -2,146 +2,211 @@
 
 Goal: the lidar is part of the robot instead of a sensor that spins next to it.
 It runs only when the robot can move, it stops the robot before it hits things
-the ToFs cannot see, the house map survives a reboot, the robot works out where
-it is on that map by itself, and both the dashboard and the voice assistant can
-send it to a named place. Voice motion intents can stop or redirect a nav goal.
+the ToFs cannot see, the house maps survive a reboot, the robot works out which
+floor it is on and where, and both the dashboard and the voice assistant can
+send it to a named place. Voice motion intents stop or redirect a nav goal.
 
 Picks up where [2026-10-12 - lidar.md](2026-10-12%20-%20lidar.md) stopped. The
 drivetrain is calibrated (`WHEEL_DIAMETER_METERS` 0.1002, `TRACK_WIDTH_METERS`
 0.320, both 2026-10-25), which was the precondition for everything below.
 
 Work happens on the `ros2-nav2` branch. For this plan Claude may commit, push,
-redeploy and restart; Arlen drives the robot for the on-floor checks and makes
-the decisions marked **Arlen**.
+redeploy and restart; Arlen drives the robot for the on-floor checks. While the
+drive rail is switched off at the wall, nothing here can be driven, so the
+on-robot checks Claude can do are: units start, topics and services exist,
+lifecycle transitions take, tests pass. Floor checks are listed per phase for
+Arlen.
+
+Answers already in hand: the robot lives on **several floors** (so "which map"
+is built, not deferred); first places are **kitchen** and **living room**.
+
+## Review against the codebase (2026-10-25, before starting)
+
+The first draft was written from memory of the code. Reading it back against
+the actual code and the two earlier plans changed the shape in these places:
+
+| Draft said | Actually | Change |
+|---|---|---|
+| Phase 0: a tick watchdog exits the sensors process when a read hangs. | The 2026-10-25 hang was a thread stuck in the kernel (`i2c_dw_xfer_common`, uninterruptible). Neither `os._exit` nor systemd's SIGKILL can reap a thread in that state; the process only dies when the I2C transfer returns. The dashboard already shows the `sensors` source stale. | **Phase 0 dropped.** A userland watchdog would be code that cannot do its job. If the hang recurs the fix is on the bus (mux reset line, clock stretching), not in Python. |
+| `lidar_status_node.py` "already subscribes to the hub". | It only publishes to the hub. | Phase 1 adds a hub subscriber thread. |
+| A `lidar_requested` hub flag from relocalization and nav keeps the lidar on. | The motion runner already sets `drive_status.motion_power_requested` for any intent and any non-zero `/cmd_vel`, and `robot_battery` turns the rail on for it. Relocalization spins with a `turn` intent; Nav2 drives through `/cmd_vel`. | One rule only: **the lidar follows the motor rail**. The nav bridge asks for the rail (one field in its own hub source, read by `robot_battery` the same way it reads `motion_power_requested`) and the lidar follows. No second flag. |
+| Dashboard override detection in the node. | The dashboard already drives the lifecycle directly with `ros2 lifecycle set`. If the node acts only on rail *edges* (not continuously), a manual change simply holds until the next edge, with no override logic at all. | Edge-triggered node; dashboard code unchanged. `rplidar.launch.py` stops auto-activating so the lidar is off at boot until the rail comes on. |
+| Lidar rule is a ±25° cone, off when "scan stale or lidar not active". | The runner cannot see lifecycle state, and does not need to: a deactivated lidar publishes no scans, so staleness covers it. A cone lets a point 0.4 m to the side at 1 m range count as "ahead". | Corridor, not cone: points within the body's width plus a margin, measured as distance past the front (or rear) edge using `robot_model.py`. Staleness only. |
+| `safety_gate.py` grows two reasons and "blocks reverse". | `SafetyState` is one `blocked` flag and `cancel_forward_qpps_when_blocked` only ever cancels forward. The ToF rule *blocks everything while the ToFs are stale*; the lidar rule must not. | `SafetyState` gains `reverse_blocked`; the cancel function handles both directions. The ToF stale rule is untouched. |
+| Phase 3 adds `nav2-map-server`, `nav2-amcl`, `navigation2` to `setup.sh`. | `ros-lyrical-nav2-bringup` is already in `setup.sh` and pulls the whole stack. Confirmed on the robot: amcl, map_server, bt_navigator, behaviors, navfn, smac, regulated_pure_pursuit, slam_toolbox 2.10, twist_mux all installed. | No package work. |
+| `robot-slam.service` and a new `robot-localization.service`, started and stopped by the nav bridge. | Every unit in this repo is enabled at boot and listed in `setup.sh`, `restart.sh`, `redeploy-robot.sh` and its test. On-demand units would be a new pattern, and `redeploy` would restart the wrong one. | **One unit, `robot-nav.service`**, runs `config/nav.launch.py`, which reads `nav.json` and launches either slam_toolbox or map_server + AMCL (Phase 4 adds Nav2 to both). Mode switch = write `nav.json`, `sudo systemctl restart robot-nav.service`, the same way the dashboard already restarts units. `robot-slam.service` is retired. |
+| Nav bridge verbs `navigate_to`/`cancel`; voice tools `go_to`, `stop_navigation`, `remember_place`, `where_am_i`. | [2026-07-13 - async-nav-goals.md](done/2026-07-13%20-%20async-nav-goals.md) already decided the socket verbs (`navigate_to`, `nav_status`, `nav_cancel`, `create_place`) and that the goal runner polls. | Use those names. Voice tools: `navigate_to`, `check_navigation`, `cancel_navigation`, `create_place`, `where_am_i`. |
+| Arrival is announced "through the same event path face_me uses". | `face_me` is a blocking call. The voice command socket only knows `talk_now`, `end_session`, `set_personality`; nothing can make the robot speak unprompted. | `navigate_to` returns at once. Inside a `start_goal` the runner polls `check_navigation`; otherwise the user asks. An unprompted "I'm here" needs a new voice command and is a follow-up, not this plan. |
+| Nav bridge "cancels when it sees an intent start" in the hub. | `drive_status` has `state` and `stop_reason` but nothing that names a running intent. | `drive_status` gains `intent` (tool name or null). The bridge also subscribes `/cmd_vel_teleop`: any non-zero twist cancels the goal for good. |
+| `nav_lock` added to `twist_mux.yaml` in Phase 3 "so Phase 4 is config-free". | Nothing publishes it until Phase 4. | Added in Phase 4 with its publisher. |
+| One floor, "which map" maybe later. | Several floors. | Phase 3 tries the saved maps in turn, last used first, and keeps the one AMCL converges on. |
 
 ## Decision record
 
 | Decision | Choice |
 |---|---|
-| When the lidar spins | Only while the motor rail is on, or while something asks for it (relocalization at boot, a nav goal). The dashboard button stays as a manual override until the next rail edge. |
-| Lidar in the safety gate | A min-range rule in a forward and a rear cone, same gate as the ToF rules. A stale or deactivated lidar disables the rule; it never blocks on its own absence, because the lidar is off most of the time by design. |
-| Mapping vs localizing | Two modes, never both. `slam_toolbox` only while building a map. Day to day the robot runs `nav2_map_server` + AMCL against a saved map. |
-| How many maps | One map per floor, one floor to start. "Which map am I on" is a scan-match score across the saved maps; built only if the robot ever lives on more than one floor (**Arlen**). |
-| Where the robot starts | Anywhere. On boot it runs AMCL global localization and spins in place until the pose estimate converges. No dock requirement. |
+| When the lidar spins | Only while the motor rail is on. Anything that needs the lidar (relocalization, a nav goal) asks for the rail, and the lidar follows. The dashboard button is a manual override that holds until the rail next changes. |
+| Lidar in the safety gate | A min-clearance rule in a forward and a rear corridor, in the same gate as the ToF rules. No scan for a second means the rule is off; it never blocks on its own absence, because the lidar is off most of the time by design. |
+| Mapping vs localizing | Two modes, never both. `slam_toolbox` only while building a map. Day to day: `nav2_map_server` + AMCL against a saved map. One systemd unit, `robot-nav.service`, whose launch file picks from `nav.json`. |
+| How many maps | One map per floor. On boot, try the saved maps in turn (last used first): load, global localization, one 360 spin, check the AMCL covariance. First map that converges wins. None converge: `localized: false`, dashboard offers Localize and a map picker. |
+| Where the robot starts | Anywhere. No dock. |
 | Nav2 controller | Regulated Pure Pursuit. Light enough for the Pi 5 and made for differential drive. |
-| Voice vs nav arbitration | Voice intents win. The motion node holds a `twist_mux` lock while an intent runs, which mutes `/cmd_vel_nav`, and the nav bridge cancels the active goal when it sees an intent start. A new voice goal preempts the old one. |
-| Named places | `~/.config/robot-pet/places.json`: `{name: {map, x, y, yaw}}`. Set from the dashboard ("save place here") or by voice ("remember this spot as the kitchen"). |
+| Voice vs nav arbitration | Intents win. The motion node publishes `/nav_lock` while an intent runs (and for 2 s after), which makes `twist_mux` drop `/cmd_vel_nav`; the nav bridge cancels the goal when `drive_status.intent` appears or `/cmd_vel_teleop` moves. A new `navigate_to` preempts the old goal. |
+| Named places | `~/.config/robot-pet/places.json`: `{name: {map, x, y, yaw}}`. Set from the dashboard or by voice (`create_place`). |
+| Hub shape | One new hub source, `nav`, owned by the nav bridge, listed in `robot_telemetry.build_snapshot` like `lidar` and `motor_rail`. No event bus, no schema registry (per the 2026-06-09 plan's "do not" list). |
 
-## Phase 0 - Sensors node watchdog (small, unrelated, do first)
+## Phase 0 - dropped
 
-The I2C bus hang on 2026-10-25 left `robot-sensors` alive but stuck in the
-kernel, so systemd never restarted it. A tick that does not return within a
-few seconds exits the process; systemd's `Restart=` brings it back.
-
-Verify: kill a sensor read mid-flight on the robot (`ssh`, `kill -STOP` the
-thread is not practical; instead unplug the ToF daisy chain for ten seconds)
-and watch the unit restart in `journalctl -u robot-sensors`.
+See the review table. The I2C hang is a kernel-side wait; nothing in the
+sensors process can shorten it.
 
 ## Phase 1 - Lidar follows the motor rail
 
-- `src/ros_nodes/lidar_status_node.py` already subscribes to the hub and owns
-  the lifecycle client. Add: on `motor_rail.state` going on, `activate`; on
-  going off, `deactivate`. A `lidar_requested` set in the hub (from Phase 3's
-  relocalization and Phase 4's nav bridge) also keeps it on.
-- Dashboard `/lidar/power` becomes an override that holds until the next rail
-  edge, so "turn it on to look at the scan" still works without a gamepad.
-- `docs/ARCHITECTURE.md` lidar row and the dashboard panel text.
+- `config/rplidar.launch.py`: configure only, do not activate. The lidar is
+  off at boot until something turns the rail on.
+- `src/ros_nodes/lidar_status_node.py`: a thread iterates the hub
+  `subscribe()` stream and records whether the rail is on (`motor_rail.state`
+  is `on` or `warning`, source fresh). The 0.5 s timer acts on edges: rail
+  came on, `activate`; rail has been off for 3 s, `deactivate` (the 3 s is the
+  flap debounce). When the driver (re)appears, apply the current rail state
+  once. A `ChangeState` client next to the existing `GetState` one.
+- Dashboard: no code change. Panel text under the button says the lidar
+  follows the motor rail and the button overrides until the rail next changes.
+- `docs/ARCHITECTURE.md` lidar row.
 
-Verify (Arlen): connect the gamepad, lidar starts within a second or two.
-Disconnect, it stops a few seconds after the rail drops. Dashboard button
-turns it on with no gamepad; connecting the gamepad takes over.
+Claude verifies: unit restarts clean, `ros2 lifecycle get /rplidar_node` says
+`inactive` after a driver restart with the rail off, dashboard button still
+activates and deactivates.
+
+Arlen verifies: connect the gamepad, lidar starts within a couple of seconds.
+Disconnect, it stops about 8 s later (5 s rail hold + 3 s debounce).
+Dashboard button turns it on with no gamepad; it stays on until the gamepad
+connects and disconnects again.
 
 ## Phase 2 - Lidar in the safety gate
 
-- `motion_node.py` subscribes `/scan` and hands the motion loop the min range
-  in two cones: forward (±25°) and rear (±25°), as distances from the laser.
-- `robot_model.py`: the lidar sits 82 mm behind the axle, the bumper 55 mm
-  ahead, the caster 266 mm behind. The rule converts laser range to "distance
-  past the body edge" so the threshold is one number in `sensors.json`
-  (`lidar_stop_distance_m`, start at 0.15).
-- `safety_gate.py`: `lidar_forward_obstacle` blocks forward wheel speed,
-  `lidar_rear_obstacle` blocks reverse. Turning in place is never blocked by
-  the lidar. Scan older than 1 s, or lidar not active, means the rule is off.
+- `motion_node.py` subscribes `/scan`. Each scan becomes two clearances,
+  forward and rear, handed to the runner under the same lock as the ToF
+  readings, with a receive time.
+- `safety_gate.py`: `scan_clearances(ranges, angle_min, angle_increment,
+  range_min, range_max)` converts polar points through `LIDAR_MOUNT` into
+  base_link, keeps points inside the body's width (`FOOTPRINT_HALF_WIDTH` +
+  3 cm margin), and returns the smallest distance past `FOOTPRINT_FRONT_X`
+  and past `FOOTPRINT_REAR_X`. Points inside the footprint (the robot's own
+  deck furniture) are ignored.
+- `SafetyConfig.lidar_stop_below_mm` (default 150, in `sensors.json` under
+  `safety`). `evaluate_safety` takes the clearances and their age; older than
+  1 s, or `None`, means the rule is off. Forward clearance under the threshold
+  sets `blocked` with reason `lidar_forward_obstacle`; rear sets
+  `reverse_blocked` with `lidar_rear_obstacle`. Turning in place is never
+  blocked. `cancel_forward_qpps_when_blocked` becomes `cancel_blocked_qpps`
+  and cancels the reverse component too.
 - Nav2 will also stop for obstacles through its costmap; the gate is the
   backstop for the gamepad, voice moves and a misbehaving planner.
 
-Verify (Arlen): box at knee height 1 m ahead, drive at it with the gamepad.
+Claude verifies: unit tests for the geometry (a point dead ahead at 1 m from
+the laser is 0.854 m past the front edge; a point behind at 1 m is 0.734 m
+past the rear edge; a point 0.5 m to the side is ignored), and the gate's
+stale, forward, rear and turning cases.
+
+Arlen verifies: box at knee height 1 m ahead, drive at it with the gamepad.
 Stops with about 15 cm to spare. Same backwards. A box below the scan plane
-(under 20 cm) is still caught by the forward ToFs as before.
+(under 20 cm) is still caught by the forward ToFs as before. Note the robot's
+`sensors.json` has `forward_stop_below_mm` at 250, so the ToFs will usually
+fire first on things they can see.
 
-## Phase 3 - Map persistence and relocalization
+## Phase 3 - Map persistence, floor detection, relocalization
 
-- `setup.sh`: `ros-lyrical-nav2-map-server ros-lyrical-nav2-amcl`
-  (and `ros-lyrical-navigation2 ros-lyrical-nav2-bringup` for Phase 4).
-- Maps live in `~/.config/robot-pet/maps/<name>.yaml` + `.pgm`. Save with
-  `nav2_map_server`'s `map_saver_cli` from the mapping session.
-- New node `src/ros_nodes/nav_node.py` ("nav bridge"), one process:
-  - owns the mode: `mapping` (starts `robot-slam.service`) or `localize`
-    (starts `robot-localization.service`: map_server + AMCL with the chosen
-    map). Mode and map name persist in `~/.config/robot-pet/nav.json`.
-  - on boot in `localize` mode: asks for the lidar, calls AMCL
-    `reinitialize_global_localization`, sends a `turn 360` intent, waits for
-    the pose covariance to drop below a threshold, repeats once, then
-    releases the lidar. Publishes `localized: true/false` to the hub.
-  - publishes the map-frame pose to the hub every 0.5 s for the dashboard.
-  - saves and lists places (`places.json`).
-- Dashboard: Map panel shows `/map` from Foxglove-style occupancy rendering
-  with the robot pose and the saved places. Buttons: Start mapping, Save map
-  as..., Localize, Save place here. Follow the voice-toggle button pattern.
-- `twist_mux.yaml`: add the `nav_lock` topic now so Phase 4 is config-free.
+- Maps: `~/.config/robot-pet/maps/<name>.yaml` + `.pgm`, written by
+  `map_saver_cli`. `nav.json`: `{"mode": "mapping" | "localize", "map": name}`.
+- `config/nav.launch.py` (replaces running slam_toolbox's launch directly):
+  reads `nav.json`; `mapping` includes nav2_bringup `slam_launch.py` with
+  `config/slam_toolbox.yaml`; `localize` includes `localization_launch.py`
+  with the map and `config/nav2.yaml` (AMCL section). `systemd/robot-nav.service`
+  runs it. `robot-slam.service` is retired (unit deleted; lists updated in
+  `setup.sh`, `restart.sh`, `redeploy-robot.sh`, its test, `ARCHITECTURE.md`).
+- `src/ros_nodes/nav_node.py` ("nav bridge"), `systemd/robot-nav-bridge.service`:
+  - owns `nav.json` and `places.json`; mode switch = write, then
+    `sudo systemctl restart robot-nav.service`.
+  - publishes hub source `nav` every 0.5 s: `mode`, `map`, `maps` (saved
+    names), `localized`, `pose` (map frame x, y, yaw from `/amcl_pose`, or
+    slam's TF while mapping), `map_info` (origin, resolution, size) and
+    `motor_power_requested`. `robot_telemetry.build_snapshot` lists it.
+    `robot_battery` reads `nav.motor_power_requested` exactly like
+    `drive_status.motion_power_requested`.
+  - writes the current `/map` as `/run/robot-pet/map.png` every few seconds
+    so the dashboard can show it without speaking ROS.
+  - on boot in `localize` mode: sets `motor_power_requested` (rail on, lidar
+    follows), then for each saved map, last used first: `load_map`,
+    `reinitialize_global_localization`, `turn 360` intent, wait for the
+    `/amcl_pose` covariance to fall under a threshold. Converged: remember the
+    map, `localized: true`, release the rail. None: `localized: false`.
+  - unix socket `/run/robot-pet/nav.sock`, verbs this phase: `nav_status`,
+    `set_mode`, `save_map`, `localize`, `create_place`.
+- Dashboard: Map panel. The PNG with the robot pose and places drawn over it,
+  mode and map name, `localized`. Buttons following the voice-toggle pattern
+  (DOM writes only on change, never disabled while busy): Start mapping, Save
+  map as..., Localize, Save place here, and a map picker.
 
-Verify (Arlen): map one room plus hallway with the gamepad, save as `home`.
-Reboot. Robot spins, dashboard shows it localized at the right spot. Carry it
-to another room, reboot, same result. Save two places.
+Claude verifies: `robot-nav.service` comes up in both modes with the lidar
+unplugged (no scans, but map_server serves the map and AMCL waits); `nav`
+source appears in the hub; `nav_status` over the socket; `set_mode` restarts
+the unit; tests for `nav.json`/`places.json` handling and the covariance check.
+
+Arlen verifies: map one floor with the gamepad, Save map as `main`. Reboot.
+Robot spins once, dashboard shows it localized at the right spot. Carry it to
+another room on the same floor, reboot, same result. Map the second floor as
+`upstairs`. Carry it upstairs, reboot: it tries `main`, fails, tries
+`upstairs`, converges. Save `kitchen` and `living room`.
 
 ## Phase 4 - Nav2
 
 - `config/nav2.yaml`: footprint from `robot_model.py`, local and global
   costmaps from `/scan`, NavFn planner, Regulated Pure Pursuit controller,
-  spin and backup behaviors, BT navigator. Velocity limits well below what
-  the gamepad allows. Publishes `/cmd_vel_nav`.
-- `systemd/robot-nav2.service`: `nav2_bringup navigation_launch.py` with our
-  params, `After=robot-localization.service`.
-- Nav bridge grows: `navigate_to(place | x,y,yaw)` and `cancel` over a unix
-  socket (`/run/robot-pet/nav.sock`), NavigateToPose action client, requests
-  motor power and the lidar while a goal is active, publishes goal status and
-  the current path to the hub. Cancels the goal when the hub shows a motion
-  intent starting.
-- Motion node: publishes `std_msgs/Bool` on `/nav_lock` (true while an intent
-  runs) so `twist_mux` mutes nav during voice moves.
-- Voice tools (`src/voice/tools.py`): `go_to(place)`, `stop_navigation`,
-  `remember_place(name)`, `where_am_i`. `go_to` returns immediately with
-  "on my way"; the assistant is told on arrival or failure through the same
-  event path face_me uses. Any existing motion tool cancels the goal first.
-- Dashboard: click a point on the map to send a goal, Cancel button, status
-  line (navigating to kitchen, 2.1 m left / arrived / failed: path blocked).
+  spin and backup behaviors, BT navigator, velocity smoother. Limits well
+  below the gamepad's. Publishes `/cmd_vel_nav`. `nav.launch.py` includes
+  `navigation_launch.py` in both modes.
+- `twist_mux.yaml`: lock `/nav_lock`, priority between nav (10) and teleop
+  (100). `motion_node.py` publishes `std_msgs/Bool /nav_lock` on its 20 Hz
+  timer: true while an intent runs and for 2 s after.
+- `robot_motion.py`: `drive_status["intent"]` names the running intent tool.
+- Nav bridge grows: `navigate_to(place | x, y, yaw)` and `nav_cancel` over
+  the socket, a `NavigateToPose` action client, `motor_power_requested` for
+  the life of the goal, goal state and remaining distance in the `nav` hub
+  message. Cancels the goal when `drive_status.intent` appears or
+  `/cmd_vel_teleop` moves.
+- Voice tools (`src/voice/tools.py`): `navigate_to(place)` (returns at once;
+  unknown place returns the list of known places), `check_navigation`,
+  `cancel_navigation`, `create_place(name)`, `where_am_i` (nearest place on
+  the current map within 2 m, else map name and coordinates). The goal runner
+  polls `check_navigation`.
+- Dashboard: click the map to send a goal, Cancel button, status line
+  (navigating to kitchen, 2.1 m left / arrived / failed).
 
-Verify (Arlen): click a point two rooms away, robot gets there. Say "stop"
-mid-route, it stops within a second and the dashboard says cancelled. Say
-"go to the kitchen" mid-route, it redirects. Put a chair in the path, it
-plans around. Gamepad input mid-route stops nav for good.
+Claude verifies: Nav2 lifecycle comes up, `NavigateToPose` action exists,
+`navigate_to` with the rail off ends as a failed goal (not a hang), `nav_lock`
+mutes `/cmd_vel_nav` when a stop intent is sent, `top` for the whole stack.
+
+Arlen verifies: click a point two rooms away, robot gets there. Say "stop"
+mid-route, it stops within a second and the dashboard says cancelled. Say "go
+to the kitchen" mid-route, it redirects. Put a chair in the path, it plans
+around. Gamepad input mid-route stops nav for good.
 
 ## Exit criterion
 
 Cold boot with no gamepad: lidar spins briefly, robot finds itself on the
-saved map, lidar stops. "Hey Bloop, go to the kitchen": lidar starts, robot
-drives there avoiding furniture, says it has arrived, lidar stops. Drive it
-at a box with the gamepad: it refuses. `./setup.sh` on a fresh card installs
-everything this plan added.
+right floor's map, lidar stops. "Hey Bloop, go to the kitchen": lidar starts,
+robot drives there avoiding furniture, lidar stops. Drive it at a box with
+the gamepad: it refuses. `./setup.sh` on a fresh card installs everything
+this plan added.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| AMCL global localization converges to the wrong symmetric spot | Two spins instead of one; show confidence on the dashboard; a "Localize" button to retry. If a room is truly ambiguous, a short forward move during localization breaks it. |
-| Lidar at 203 mm misses low furniture rails and the robot hits them under Nav2 | Keep the ToF rules; add a Nav2 `voxel`/range layer from the forward ToFs if it bites. |
-| Pi 5 CPU with AMCL + costmaps + RPP | Measure `top` in Phase 4 like the slam phase did. Lower costmap update rates first. |
-| Odometry quality under Nav2 | Calibrated 2026-10-25 to 0.1° per 218° turn and 2.00 m per 2.00 m. Good. |
-| Rail off kills odometry mid-goal | Nav bridge requests motor power for the life of the goal; the existing hold covers the gaps. |
-| Lifecycle flapping on the lidar if the rail bounces | Debounce the rail edge by a second in Phase 1. |
-
-## Open for Arlen
-
-1. One floor, or does the robot get carried between floors? Decides whether
-   "which map" is built at all.
-2. Place names to start with, so the voice prompt can mention them.
+| AMCL converges on the wrong map or the wrong symmetric spot | Last-used map first; dashboard shows `localized` and a Localize button with a map picker. If a room is truly ambiguous, a short forward move during localization breaks it. |
+| Lidar at 203 mm misses low furniture rails and the robot hits them under Nav2 | Keep the ToF rules; add a Nav2 range layer from the forward ToFs if it bites. |
+| Pi 5 CPU with AMCL + costmaps + RPP | Measure `top` after Phase 3 and Phase 4. Lower costmap update rates first. |
+| Rail off kills odometry mid-goal | The nav bridge holds `motor_power_requested` for the life of the goal. |
+| Lifecycle flapping on the lidar if the rail bounces | 3 s off-debounce in Phase 1. |
+| `sudo systemctl restart` from the nav bridge | Same path the dashboard already uses for gamepad-teleop, sensors and motion. |

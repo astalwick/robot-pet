@@ -44,7 +44,8 @@ export function renderLidar(snapshot, sources) {
   for (const status of lidar.diagnostics) {
     rows.push(row(status.name, '', status.message || '--', DIAGNOSTIC_CLASSES[status.level]));
     for (const [key, value] of Object.entries(status.values)) {
-      rows.push(row(key, '', value));
+      // Device Info leads with a 32-character serial number that stretches the column.
+      rows.push(row(key, '', value.replace(/S\/N: \S+ \| /, '')));
     }
   }
   setRows('lidar-rows', rows);

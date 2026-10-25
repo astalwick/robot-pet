@@ -268,7 +268,9 @@ else
 fi
 
 new_rev="$(git rev-parse HEAD)"
-changed_files="$(git diff --name-only "$baseline_rev" "$new_rev")"
+# --no-renames: a unit renamed in the repo must show up as deleted + added so
+# the old one is retired
+changed_files="$(git diff --no-renames --name-only "$baseline_rev" "$new_rev")"
 echo "Deploying $baseline_rev -> $new_rev"
 echo ""
 

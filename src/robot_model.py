@@ -30,12 +30,13 @@ ENCODER_COUNTS_PER_WHEEL_REVOLUTION = 537.7
 ENCODER_COUNTS_PER_METER = ENCODER_COUNTS_PER_WHEEL_REVOLUTION / (math.pi * WHEEL_DIAMETER_METERS)
 
 # Effective track width, calibrated 2026-10-25 on tile with
-# scripts/diagnostics/motion-turn.py: eight IMU-closed 360 turns in both
-# directions implied 0.316 to 0.321 m from the wheel-distance difference, most
-# of them near 0.320. The wheel-contact centres measure 0.306 m; the wide contact
-# patch scrubs in a turn, which is why the effective width is larger. Only
-# affects heading in odometry and the twist-to-wheel-speed split, not
-# straight-line distance.
+# scripts/diagnostics/motion-turn.py --timed: four open-loop three-revolution
+# turns, two each way, all implied 0.3200 m from the wheel-distance difference
+# against the IMU. (IMU-closed `turn` runs scattered 0.316 to 0.321 because the
+# overshoot correction reverses the wheels.) The wheel-contact centres measure
+# 0.306 m; the wide contact patch scrubs in a turn, which is why the effective
+# width is larger. Only affects heading in odometry and the twist-to-wheel-speed
+# split, not straight-line distance.
 TRACK_WIDTH_METERS = 0.320
 
 

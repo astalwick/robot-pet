@@ -10,9 +10,10 @@ Two ways to turn:
 
   motion-turn.py 360          IMU-closed `turn` intent. Stops on the gyro and
                               may reverse briefly to correct an overshoot.
-  motion-turn.py --timed 12   Open-loop `diagnostic_turn` pulses, never
+  motion-turn.py --timed 20   Open-loop `diagnostic_turn` pulses, never
                               reversing, so gearbox backlash and reversal scrub
-                              cannot leak into the result. About 17 deg/s.
+                              cannot leak into the result. About 54 deg/s, so
+                              20 s is three revolutions.
 
 Odometry is only published while the motor rail is on, so connect the gamepad
 (and leave it idle) before running this.
@@ -25,15 +26,16 @@ import time
 
 sys.path.insert(0, "src")
 
-from control.motion_intent import (
-    DIAGNOSTIC_TURN_MAX_DURATION,
-    DIAGNOSTIC_TURN_MIN_DURATION,
-    _yaw_delta,
-    request_motion_intent,
-)
+from control.motion_intent import DIAGNOSTIC_TURN_MIN_DURATION, _yaw_delta, request_motion_intent
 from robot_model import TRACK_WIDTH_METERS
 from telemetry.paths import DEFAULT_MOTION_INTENT_SOCKET, DEFAULT_SUBSCRIBE_SOCKET
 from telemetry.socket_client import subscribe
+
+# The IMU yaw is read once per pulse and unwrapped across the 180 degree seam, so
+# a pulse must rotate less than 180 degrees. diagnostic_turn runs about 54 deg/s
+# (its angular value is a fraction of the drive speed scale, not rad/s), so 2.5 s
+# is about 135 degrees.
+TIMED_PULSE_SECONDS = 2.5
 
 
 def read_hub(subscribe_socket: str) -> tuple[float, float, float | None]:
@@ -66,7 +68,7 @@ def timed_turn(args) -> float:
         sys.exit("no IMU yaw in telemetry.")
     turned = 0.0
     while remaining >= DIAGNOSTIC_TURN_MIN_DURATION:
-        pulse = min(remaining, DIAGNOSTIC_TURN_MAX_DURATION)
+        pulse = min(remaining, TIMED_PULSE_SECONDS)
         remaining -= pulse
         print(f"Turning {direction} for {pulse:.1f} s.")
         reply = request_motion_intent(

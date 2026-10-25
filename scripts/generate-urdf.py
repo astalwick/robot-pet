@@ -3,7 +3,7 @@
 
 robot_state_publisher turns this into the static base_link -> sensor TF frames
 that Foxglove and slam_toolbox use. Only geometry that robot_model knows about
-is here, including the lidar mount (a placeholder until it is measured).
+is here, including the lidar mount.
 """
 
 import math

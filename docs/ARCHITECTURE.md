@@ -170,8 +170,8 @@ All services log to stdout/stderr; systemd captures to journald.
 The lidar work is tracked in
 [plans/2026-10-12 - lidar.md](plans/2026-10-12%20-%20lidar.md). Done so far:
 `robot-lidar.service` publishes `/scan` in the `laser` frame, the URDF has a
-`laser` frame from `LIDAR_MOUNT` (a placeholder pose until the mount is
-measured), and `robot-slam.service` runs slam_toolbox in mapping mode, so the
+`laser` frame from the measured `LIDAR_MOUNT` (82 mm behind the axle, scan plane
+203 mm up), and `robot-slam.service` runs slam_toolbox in mapping mode, so the
 TF tree is `map -> odom -> base_link -> laser` and `/map` rebuilds every boot.
 
 Known-future items the exit criterion does not cover:

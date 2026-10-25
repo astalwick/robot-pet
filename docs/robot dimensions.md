@@ -39,3 +39,12 @@ Downward facing cliff ToF sensors (measured):
 angled 35 degrees downward (`pitch = +0.611 rad`; positive pitch is nose-down in a z-up frame)
 mounted at the leading edge — top edge sits ~9mm forward of the bumper (`x ≈ +0.064`)
 left and right only; there is no center cliff sensor
+
+---
+
+RPLidar A1 (measured 2026-10-25):
+rotation centre 82mm behind the drive axle (`x = -0.082`), 135.5mm forward of the chassis rear (axle to chassis rear is 217.5mm)
+centred: 135mm from the right chassis side, against a 275mm chassis (`y = 0`)
+scan plane 130mm above the platform, 203mm above the floor (`z = 0.203`)
+motor and cable point to the rear, so the 0 degree mark faces forward (`yaw = 0`)
+the scan plane clears the camera mast

@@ -175,7 +175,7 @@ Claude verifies: `robot-nav.service` comes up in both modes with the rail off
 (no scans, but map_server serves the map and AMCL waits); `nav` source
 appears in the hub; `nav_status` over the socket; `set_mode` restarts the
 unit; tests for `nav.json`/`places.json` handling, the PNG and pixel math,
-the covariance check and the socket verbs.
+the covariance check and the socket verbs. Done 2026-10-25.
 
 Arlen verifies: map one floor with the gamepad, Save map as `main`. Reboot.
 Robot spins once, dashboard shows it localized at the right spot. Carry it to
@@ -185,31 +185,65 @@ another room on the same floor, reboot, same result. Map the second floor as
 
 ## Phase 4 - Nav2
 
-- `config/nav2.yaml`: footprint from `robot_model.py`, local and global
-  costmaps from `/scan`, NavFn planner, Regulated Pure Pursuit controller,
-  spin and backup behaviors, BT navigator, velocity smoother. Limits well
-  below the gamepad's. Publishes `/cmd_vel_nav`. `nav.launch.py` includes
-  `navigation_launch.py` in both modes.
-- `twist_mux.yaml`: lock `/nav_lock`, priority between nav (10) and teleop
-  (100). `motion_node.py` publishes `std_msgs/Bool /nav_lock` on its 20 Hz
-  timer: true while an intent runs and for 2 s after.
-- `robot_motion.py`: `drive_status["intent"]` names the running intent tool.
-- Nav bridge grows: `navigate_to(place | x, y, yaw)` and `nav_cancel` over
-  the socket, a `NavigateToPose` action client, `motor_power_requested` for
-  the life of the goal, goal state and remaining distance in the `nav` hub
-  message. Cancels the goal when `drive_status.intent` appears or
-  `/cmd_vel_teleop` moves.
-- Voice tools (`src/voice/tools.py`): `navigate_to(place)` (returns at once;
-  unknown place returns the list of known places), `check_navigation`,
-  `cancel_navigation`, `create_place(name)`, `where_am_i` (nearest place on
-  the current map within 2 m, else map name and coordinates). The goal runner
-  polls `check_navigation`.
-- Dashboard: click the map to send a goal, Cancel button, status line
-  (navigating to kitchen, 2.1 m left / arrived / failed).
+### Phase 4 review (2026-10-25, before starting)
 
-Claude verifies: Nav2 lifecycle comes up, `NavigateToPose` action exists,
-`navigate_to` with the rail off ends as a failed goal (not a hang), `nav_lock`
-mutes `/cmd_vel_nav` when a stop intent is sent, `top` for the whole stack.
+Read against Nav2 1.5.2 as installed on the robot (`ros2 pkg list`, the stock
+`navigation_launch.py` and `nav2_params.yaml`, twist_mux's lock semantics)
+and against the motion runner, the intent bridge, the voice tool plumbing
+and the dashboard:
+
+| Draft said | Actually | Change |
+|---|---|---|
+| `nav.launch.py` includes nav2_bringup `navigation_launch.py`. | That launch starts `docking_server` and `following_server`, whose packages (`opennav_docking`, `opennav_following`) are not installed, plus `route_server`, `smoother_server`, `waypoint_follower`, `collision_monitor` and `velocity_smoother`, and like `localization_launch.py` it has no lifecycle manager. | Same shape as Phase 3: `nav.launch.py` starts `controller_server`, `planner_server`, `behavior_server`, `bt_navigator` and a `lifecycle_manager_navigation` itself, in both modes, with `cmd_vel` remapped to `cmd_vel_nav` on the controller and behavior servers. |
+| Velocity smoother. | The motion runner already slews every `/cmd_vel` centrally (`control/`), and the safety gate already stops for lidar and ToF. A smoother and a collision monitor would be two more processes on a 4-core Pi doing what the motion node does. | Neither is launched. |
+| Nav2 publishes `/cmd_vel_nav`. | Nav2 1.5's controller and behavior servers publish `TwistStamped` by default; twist_mux runs with `use_stamped: false`. | `enable_stamped_cmd_vel: false` on `controller_server` and `behavior_server`. |
+| Footprint "from `robot_model.py`". | `nav2.yaml` is static YAML read by Nav2, not by our Python. Generating it or importing `robot_model` in the launch file is machinery for four numbers. | The polygon is written into `nav2.yaml` by hand with a comment, and a test asserts the YAML text carries the polygon built from `robot_model`'s constants. |
+| "Limits well below the gamepad's." | Gamepad normal speed is `DEFAULT_QPPS` × `speed_scale` ≈ 0.36 m/s; there is no named max-speed constant to point at. | RPP `desired_linear_vel: 0.25`, rotate-to-heading 0.8 rad/s; behaviors `max_rotational_vel: 0.8`; local costmap 3 Hz, controller 10 Hz, planner on demand. |
+| `/nav_lock` "priority between nav and teleop". | twist_mux locks are `std_msgs/Bool`; a lock blocks every topic whose priority is below the lock's, and with `timeout > 0` a lock whose publisher goes quiet engages. | `locks: nav_lock: {topic: /nav_lock, timeout: 0.5, priority: 50}`: mutes nav (10), never teleop (100); a dead motion node mutes nav too, which is right. |
+| Lock true "while an intent runs and for 2 s after". | A voice `stop` is not an intent, it cancels one. If Nav2 is mid-goal when the user says stop, nothing holds nav muted while the bridge cancels. | The runner keeps `nav_lock_until`: set 2 s past now whenever an intent ends or a stop is serviced. Lock = intent active, or now < `nav_lock_until`. |
+| `drive_status["intent"]` for the bridge to watch. | The bridge would need a hub subscriber thread for one boolean that the motion node already publishes as `/nav_lock`. | The bridge subscribes `/nav_lock` and cancels its goal when it goes true. No `drive_status.intent`, no hub subscriber. |
+| Voice `stop` goes to the motion node only. | The 2026-07-13 plan already fixed that `stop` grows a nav cancel. Through the lock alone the cancel is indirect. | `stop` sends the motion stop, then `nav_cancel` over the nav socket. |
+| "The goal runner polls `check_navigation`." | Each poll is a model round trip (seconds and tokens) for a goal that takes a minute. | `check_navigation(wait_seconds)` waits up to that long for the goal to finish before answering, polling the socket twice a second. The tool description says to use it. |
+| `navigate_to(place \| x, y, yaw)`. | A dashboard click has no yaw. Places have one. | Yaw optional over the socket: missing means face the target from where the robot stands. A place goal needs localize mode and `localized`; an x, y goal also works while mapping (slam gives the pose). |
+| `where_am_i` over the socket. | The hub `nav` source already carries map, pose and places; `check_health` already reads the hub snapshot through `robot_inspection_caller`. | Pure function over the snapshot, no socket call. |
+| Nav bridge "cancels the goal when `/cmd_vel_teleop` moves". | Right, and a mode switch or a relocalize must do the same: `switch_to` restarts the Nav2 action server under the goal, and relocalize spins the robot. | `navigate_to` is refused while the bridge is `busy`; `switch_to` marks a running goal cancelled and drops the rail request. |
+| Redirect mid-route. | A second `NavigateToPose` goal preempts the first inside bt_navigator; the first's result arrives late as cancelled. | Goals carry a serial; a result for an old serial is ignored. |
+
+- `config/nav2.yaml` grows `bt_navigator`, `controller_server` (RPP,
+  SimpleProgressChecker, SimpleGoalChecker), `local_costmap` (rolling 3 m,
+  obstacle + inflation layers from `/scan`), `global_costmap` (static +
+  obstacle + inflation), `planner_server` (NavFn), `behavior_server` (spin,
+  backup, wait). Footprint polygon from `robot_model.py`'s numbers, frames
+  `map`/`odom`/`base_link`, `enable_stamped_cmd_vel: false`. Limits as in the
+  table. `nav.launch.py` starts those four nodes and
+  `lifecycle_manager_navigation` in both modes.
+- `twist_mux.yaml`: lock `/nav_lock` (timeout 0.5, priority 50).
+  `motion_node.py` publishes `std_msgs/Bool /nav_lock` on its 20 Hz timer from
+  `runner.nav_lock_active()`: true while an intent runs and for 2 s after an
+  intent ends or a stop is serviced.
+- Nav bridge grows: `navigate_to(place | x, y[, yaw])` and `nav_cancel` over
+  the socket, a `NavigateToPose` action client, `motor_power_requested` for
+  the life of the goal, `goal` in the `nav` hub message: `target` (place name
+  or null), `x`, `y`, `state` (`navigating`, `arrived`, `cancelled`,
+  `failed`), `remaining_m`. Cancels the goal when `/nav_lock` goes true or
+  `/cmd_vel_teleop` moves. Refused while `busy`; `switch_to` cancels.
+- Voice tools (`src/voice/tools.py`): `navigate_to(place)` (returns at once;
+  unknown place returns the list of known places), `check_navigation
+  (wait_seconds)`, `cancel_navigation`, `create_place(name)`, `where_am_i`
+  (nearest place on the current map within 2 m, else map name and
+  coordinates). `stop` also sends `nav_cancel`. A `nav_caller` joins the
+  other callers in `VoiceToolContext`, wired from `robot_voice.py` through
+  the session, the orchestrator and the goal runner like `face_me_caller`.
+- Dashboard: `NAV_COMMANDS` gains `navigate_to` and `nav_cancel`; click the
+  map to send an x, y goal, Cancel button, `goal` row (navigating to kitchen,
+  2.1 m left / arrived / failed / cancelled).
+- `docs/ARCHITECTURE.md`: the two known-future items become the description
+  of this arbitration.
+
+Claude verifies: Nav2 lifecycle comes up in both modes, `/navigate_to_pose`
+action exists, `navigate_to` with the rail off ends as a failed goal (not a
+hang), `/nav_lock` goes true on a stop intent and twist_mux drops
+`/cmd_vel_nav`, `top` for the whole stack.
 
 Arlen verifies: click a point two rooms away, robot gets there. Say "stop"
 mid-route, it stops within a second and the dashboard says cancelled. Say "go

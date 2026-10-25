@@ -17,7 +17,7 @@
   <joint name="base_to_left_wheel" type="fixed">
     <parent link="base_link"/>
     <child link="left_wheel"/>
-    <origin xyz="0.0000 0.1530 0.0501" rpy="0.0000 0.0000 0.0000"/>
+    <origin xyz="0.0000 0.1600 0.0501" rpy="0.0000 0.0000 0.0000"/>
   </joint>
   <link name="right_wheel">
     <visual>
@@ -28,7 +28,7 @@
   <joint name="base_to_right_wheel" type="fixed">
     <parent link="base_link"/>
     <child link="right_wheel"/>
-    <origin xyz="0.0000 -0.1530 0.0501" rpy="0.0000 0.0000 0.0000"/>
+    <origin xyz="0.0000 -0.1600 0.0501" rpy="0.0000 0.0000 0.0000"/>
   </joint>
 
   <link name="forward_left"/>

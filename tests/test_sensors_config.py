@@ -78,6 +78,8 @@ class SensorsConfigTest(unittest.TestCase):
             SensorsConfig.from_dict({"safety": {"cliff_trip_above_mm": True}})
         with self.assertRaises(TypeError):
             SensorsConfig.from_dict({"safety": {"forward_stop_below_mm": True}})
+        with self.assertRaises(TypeError):
+            SensorsConfig.from_dict({"safety": {"lidar_stop_below_mm": True}})
 
     def test_unknown_kind_raises(self):
         with self.assertRaises(TypeError):
@@ -96,6 +98,7 @@ class SensorsConfigTest(unittest.TestCase):
                     "enabled": True,
                     "cliff_trip_above_mm": 180,
                     "forward_stop_below_mm": 120,
+                    "lidar_stop_below_mm": 90,
                 },
                 "sensors": [
                     {
@@ -117,6 +120,7 @@ class SensorsConfigTest(unittest.TestCase):
         )
 
         self.assertTrue(config.safety.enabled)
+        self.assertEqual(config.safety.lidar_stop_below_mm, 90)
         self.assertEqual(cliff_trip_mm(config.sensors[0], config.safety), 160)
         self.assertEqual(forward_stop_mm(config.sensors[1], config.safety), 100)
         self.assertIsNone(forward_stop_mm(config.sensors[0], config.safety))
@@ -163,7 +167,7 @@ class SensorsConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sensors.json")
             config = SensorsConfig(
-                safety=SafetyConfig(enabled=True, cliff_trip_above_mm=175, forward_stop_below_mm=140),
+                safety=SafetyConfig(enabled=True, cliff_trip_above_mm=175, forward_stop_below_mm=140, lidar_stop_below_mm=120),
                 sensors=(
                     SensorEntry("cliff_left", "vl53l0x", 0, role="cliff"),
                 ),
@@ -174,6 +178,7 @@ class SensorsConfigTest(unittest.TestCase):
 
         self.assertTrue(loaded.safety.enabled)
         self.assertEqual(loaded.safety.cliff_trip_above_mm, 175)
+        self.assertEqual(loaded.safety.lidar_stop_below_mm, 120)
         self.assertEqual(loaded.sensors[0].role, "cliff")
 
     def test_imu_config_round_trips_and_reaches_driver(self):

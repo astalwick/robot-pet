@@ -29,7 +29,7 @@ from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import DifferentialDriveMixer, body_twist_to_wheel_qpps, clamp, wheel_qpps_to_body_twist
 from control.motion_intent import MotionIntentBridge, MotionIntentExecutor
 from control.odometry import DiffDriveOdometry, Pose
-from control.safety_gate import cancel_forward_qpps_when_blocked, evaluate_safety, is_forward_motion
+from control.safety_gate import Clearances, SafetyState, blocking_reason, cancel_blocked_qpps, evaluate_safety
 from drivers.motor import MotorDriver, is_recoverable_roboclaw_error
 from lib.log import setup_logging
 from robot_model import ENCODER_COUNTS_PER_METER, TRACK_WIDTH_METERS
@@ -128,6 +128,9 @@ class MotionRunner:
         self._sensors_live = False
         self._imu_yaw: float | None = None
         self._imu_yaw_time: float | None = None
+        # /scan reduced by motion_node.py; the lidar idles with the rail, so age matters.
+        self._lidar_clearances: Clearances | None = None
+        self._lidar_clearances_time: float | None = None
         self._sensors_lock = threading.Lock()
 
         self._drive_lock = threading.Lock()
@@ -165,8 +168,7 @@ class MotionRunner:
         self.last_motor_command_ok: bool | None = None
         self.telemetry_publish_failures = 0
         self.last_telemetry_publish_ok: bool | None = None
-        self._last_safety_blocked = False
-        self._last_safety_reason: str | None = None
+        self._last_safety = SafetyState(blocked=False)
         self._telemetry_read_slot = 0
         self._last_left_actual: int | None = None
         self._last_right_actual: int | None = None
@@ -248,6 +250,12 @@ class MotionRunner:
     def odometry_state(self) -> tuple[Pose, MotionCommand]:
         """Latest dead-reckoned pose and body twist, for the ROS /odom publisher."""
         return self._odometry.pose, self._odometry_twist
+
+    def on_scan_clearances(self, clearances: Clearances) -> None:
+        """Called by motion_node.py with each /scan reduced to forward and rear room."""
+        with self._sensors_lock:
+            self._lidar_clearances = clearances
+            self._lidar_clearances_time = self.clock()
 
     def _telemetry_subscribe_loop(self) -> None:
         for snapshot in subscribe(self.config.telemetry_subscribe_socket, reconnect_interval=1.0):
@@ -421,20 +429,28 @@ class MotionRunner:
             with self._sensors_lock:
                 readings = list(self._sensor_readings)
                 sensors_live = self._sensors_live
-            safety = evaluate_safety(readings, self.sensors_config, sensors_live=sensors_live)
-            commanding_forward = is_forward_motion(left_qpps, right_qpps)
-            left_qpps, right_qpps = cancel_forward_qpps_when_blocked(left_qpps, right_qpps, safety)
-            self._last_safety_blocked = safety.blocked
-            self._last_safety_reason = safety.reason
+                clearances = self._lidar_clearances
+                clearances_age = now - self._lidar_clearances_time if clearances is not None else None
+            safety = evaluate_safety(
+                readings,
+                self.sensors_config,
+                sensors_live=sensors_live,
+                clearances=clearances,
+                clearances_age=clearances_age,
+            )
+            # the reason that applies to the direction being commanded, if any
+            blocked_by = blocking_reason(left_qpps, right_qpps, safety)
+            left_qpps, right_qpps = cancel_blocked_qpps(left_qpps, right_qpps, safety)
+            self._last_safety = safety
 
             move_stop = None
             if self.intent_executor.active_move_distance_meters() is not None:
-                move_stop = self._encoder_move_should_stop(now, commanding_forward, safety)
+                move_stop = self._encoder_move_should_stop(now, blocked_by)
                 if move_stop is not None:
                     left_qpps, right_qpps = 0, 0
 
             # Shape acceleration centrally so both gamepad and intent motion ease in
-            # and out. A safety-blocked forward command and a faulted encoder move
+            # and out. A safety-blocked command and a faulted encoder move
             # (lost feedback or a stall) must stop now, not coast, so they bypass the
             # ramp; an explicit stop does the same via stop_serviced. A completed move
             # ramps down normally.
@@ -443,7 +459,7 @@ class MotionRunner:
                 stop_serviced
                 or self._intent_snap_stop
                 or encoder_fault
-                or (safety.blocked and commanding_forward)
+                or blocked_by is not None
             )
             self._intent_snap_stop = False
             ramped = self._apply_slew(left_qpps, right_qpps, now, no_slew=no_slew)
@@ -662,8 +678,10 @@ class MotionRunner:
             last_motor_command_ack_age_seconds=self._last_motor_command_ack_age(self.clock()),
             telemetry_publish_failures=self.telemetry_publish_failures,
             last_telemetry_publish_ok=self.last_telemetry_publish_ok,
-            safety_blocked=self._last_safety_blocked,
-            safety_reason=self._last_safety_reason,
+            safety_blocked=self._last_safety.blocked,
+            safety_reason=self._last_safety.reason,
+            safety_reverse_blocked=self._last_safety.reverse_blocked,
+            safety_reverse_reason=self._last_safety.reverse_reason,
             motion_power_requested=self._motion_power_requested(),
             roboclaw_ready=roboclaw_ready,
         )
@@ -761,26 +779,21 @@ class MotionRunner:
         sign = 1.0 if distance >= 0 else -1.0
         return sign * counts / ENCODER_COUNTS_PER_METER
 
-    def _encoder_move_should_stop(
-        self,
-        now: float,
-        commanding_forward: bool,
-        safety: Any,
-    ) -> str | None:
+    def _encoder_move_should_stop(self, now: float, blocked_by: str | None) -> str | None:
         """Drive completion/failure for the active encoder-distance move.
 
         Returns the stop reason when the move has ended this loop (so the caller
         commands zero speed), or None to keep going. Uses this tick's encoder
         positions from _accumulate_odometry (None when that read failed),
         snapshots the start on the first loop, completes at the target travel,
-        and fails on read error, a safety block of forward progress, or a
-        no-progress stall.
+        and fails on read error, a safety block of the move's direction
+        (blocked_by is its reason), or a no-progress stall.
         """
         distance = self.intent_executor.active_move_distance_meters()
         left_now, right_now = self._last_left_position, self._last_right_position
 
-        # A forward move that safety blocks is no longer making progress.
-        if distance > 0 and commanding_forward and safety.blocked:
+        # A move that safety blocks is no longer making progress.
+        if blocked_by is not None:
             travel_counts = None
             if self.encoder_move is not None:
                 if left_now is not None and right_now is not None:
@@ -788,9 +801,7 @@ class MotionRunner:
                         abs(_encoder_delta(left_now, self.encoder_move.left_start))
                         + abs(_encoder_delta(right_now, self.encoder_move.right_start))
                     ) / 2
-            details = {"traveled_m": self._encoder_move_traveled_m(travel_counts)}
-            if self._last_safety_reason is not None:
-                details["blocked_by"] = self._last_safety_reason
+            details = {"traveled_m": self._encoder_move_traveled_m(travel_counts), "blocked_by": blocked_by}
             self._end_encoder_move("safety_blocked", details)
             return "safety_blocked"
 

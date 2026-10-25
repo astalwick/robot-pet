@@ -4,7 +4,8 @@
   "safety": {
     "enabled": false,
     "cliff_trip_above_mm": 200,
-    "forward_stop_below_mm": 150
+    "forward_stop_below_mm": 150,
+    "lidar_stop_below_mm": 150
   },
   "imu": {
     "enabled": true,

@@ -37,6 +37,8 @@ class SafetyConfig:
     enabled: bool = False
     cliff_trip_above_mm: int = 200
     forward_stop_below_mm: int = 150
+    # lidar return this close past the body's front or rear edge blocks that direction
+    lidar_stop_below_mm: int = 150
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,10 @@ def _parse_safety(raw: Any) -> SafetyConfig:
         forward_stop_below_mm=_parse_positive_mm(
             raw.get("forward_stop_below_mm", defaults.forward_stop_below_mm),
             "safety.forward_stop_below_mm",
+        ),
+        lidar_stop_below_mm=_parse_positive_mm(
+            raw.get("lidar_stop_below_mm", defaults.lidar_stop_below_mm),
+            "safety.lidar_stop_below_mm",
         ),
     )
 
@@ -323,7 +329,7 @@ SENSORS_FIELDS = (
         "key": "safety_enabled",
         "label": "Safety gating",
         "type": "boolean",
-        "help": "robot-motion blocks forward drive when cliff or forward rules trip",
+        "help": "robot-motion blocks drive when cliff, forward or lidar rules trip",
     },
     {
         "key": "cliff_trip_above_mm",
@@ -339,6 +345,15 @@ SENSORS_FIELDS = (
         "label": "Forward stop below (mm)",
         "type": "number",
         "help": "Forward sensor trips when distance is below this (obstacle too close)",
+        "min": 1,
+        "max": 4000,
+        "step": 1,
+    },
+    {
+        "key": "lidar_stop_below_mm",
+        "label": "Lidar stop below (mm)",
+        "type": "number",
+        "help": "A lidar return this close past the front or rear edge blocks driving that way",
         "min": 1,
         "max": 4000,
         "step": 1,

@@ -102,8 +102,14 @@ a manual override that holds until the rail next switches.
 `/cmd_vel`, which `twist_mux` builds from `/cmd_vel_teleop` and the reserved
 `/cmd_vel_nav`. A stale `/cmd_vel` (`DRIVE_COMMAND_STALE_SECONDS`) stops the
 motors; the teleop node publishes one zero twist on controller loss or stop and
-then goes quiet, so the deadman is the backstop. Range-sensor safety gating
-reads thresholds from `sensors.json`. Voice motion intents arrive on
+then goes quiet, so the deadman is the backstop. Safety gating
+(`control/safety_gate.py`) reads thresholds from `sensors.json`: the ToFs cover
+cliffs and low obstacles ahead, and `/scan` covers the rest. `motion_node.py`
+reduces each scan to the nearest return in the body's width past the front and
+rear edges, and a return closer than `lidar_stop_below_mm` blocks driving that
+way (`lidar_forward_obstacle`, `lidar_rear_obstacle`). Turning in place is
+never blocked, and a scan older than 1 s switches the lidar rule off, so with
+the rail off (lidar idle) only the ToFs gate. Voice motion intents arrive on
 `/run/robot-pet/motion-intent.sock` and are interrupted by any non-zero
 `/cmd_vel`, which today means gamepad activity.
 

@@ -494,6 +494,7 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                 "safety_enabled",
                 "cliff_trip_above_mm",
                 "forward_stop_below_mm",
+                "lidar_stop_below_mm",
             },
         )
         self.assertIn("safety_enabled", payload["values"])

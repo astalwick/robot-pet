@@ -652,6 +652,7 @@ def sensors_form_values(config: SensorsConfig) -> dict[str, Any]:
         "safety_enabled": config.safety.enabled,
         "cliff_trip_above_mm": config.safety.cliff_trip_above_mm,
         "forward_stop_below_mm": config.safety.forward_stop_below_mm,
+        "lidar_stop_below_mm": config.safety.lidar_stop_below_mm,
     }
 
 
@@ -675,6 +676,8 @@ def merge_sensors_form_patch(current: dict[str, Any], patch: dict[str, Any]) -> 
         safety["cliff_trip_above_mm"] = int(patch["cliff_trip_above_mm"])
     if "forward_stop_below_mm" in patch:
         safety["forward_stop_below_mm"] = int(patch["forward_stop_below_mm"])
+    if "lidar_stop_below_mm" in patch:
+        safety["lidar_stop_below_mm"] = int(patch["lidar_stop_below_mm"])
     merged["safety"] = safety
     return merged
 

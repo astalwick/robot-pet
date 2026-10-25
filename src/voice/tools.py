@@ -482,6 +482,8 @@ def inspect_robot_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "stop_reason": drive.get("stop_reason"),
             "safety_blocked": drive.get("safety_blocked"),
             "safety_reason": drive.get("safety_reason"),
+            "safety_reverse_blocked": drive.get("safety_reverse_blocked"),
+            "safety_reverse_reason": drive.get("safety_reverse_reason"),
             "roboclaw_ready": drive.get("roboclaw_ready"),
         }
     if _telemetry_value_available(snapshot, "motor_rail", motor_rail):
@@ -626,6 +628,10 @@ def safety_blocked_hint(blocked_by: str) -> str | None:
     reason = blocked_by.lower()
     if "cliff" in reason:
         return "A cliff sensor tripped. Back away from the edge before anything else."
+    if reason == "lidar_forward_obstacle":
+        return "The lidar sees something within reach straight ahead. Back up, then pick a direction with more clearance."
+    if reason == "lidar_rear_obstacle":
+        return "The lidar sees something within reach behind you. Drive forward, then turn before backing up again."
     if "right" in reason:
         return (
             "You are blocked on the right side. Back up 0.2 to 0.3 meters to create "

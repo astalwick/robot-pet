@@ -477,12 +477,17 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                 async with self.client.post("/nav/command", json={"cmd": "save_map", "name": "main"}) as resp:
                     self.assertEqual(resp.status, status, reply)
 
-    async def test_nav_status_reply_is_returned_as_is(self):
-        reply = {"ok": True, "mode": "mapping", "map_name": None, "maps": []}
-        with mock.patch("robot_web_dashboard.send_voice_command", return_value=reply):
-            async with self.client.post("/nav/command", json={"cmd": "nav_status"}) as resp:
-                self.assertEqual(resp.status, 200)
-                self.assertEqual(await resp.json(), reply)
+    async def test_nav_replies_without_an_accepted_flag_are_returned_as_is(self):
+        replies = [
+            ({"cmd": "nav_status"}, {"ok": True, "mode": "mapping", "map_name": None, "maps": []}),
+            ({"cmd": "set_mode", "mode": "mapping"}, {"ok": True}),
+            ({"cmd": "create_place", "name": "kitchen"}, {"ok": True, "place": {"map": "main", "x": 1.0, "y": 2.0, "yaw": 0.0}}),
+        ]
+        for request, reply in replies:
+            with mock.patch("robot_web_dashboard.send_voice_command", return_value=reply):
+                async with self.client.post("/nav/command", json=request) as resp:
+                    self.assertEqual(resp.status, 200, request)
+                    self.assertEqual(await resp.json(), reply)
 
     async def test_map_png_serves_the_bridge_image_or_404(self):
         async with self.client.get("/map.png") as resp:

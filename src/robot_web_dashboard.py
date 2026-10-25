@@ -903,7 +903,9 @@ async def nav_command_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "nav bridge not reachable"}, status=503)
     if not ack.get("ok", False):
         return web.json_response({"error": ack.get("error") or "nav command failed"}, status=502)
-    if cmd != "nav_status" and not ack.get("accepted", False):
+    # save_map and localize run in the background and say accepted or not
+    # (busy); the other commands just say ok.
+    if ack.get("accepted") is False:
         reason = ack.get("reason") or "ignored"
         return web.json_response({"error": reason, "reason": reason}, status=409)
     return web.json_response(ack)

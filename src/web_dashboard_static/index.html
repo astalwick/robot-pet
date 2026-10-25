@@ -123,6 +123,23 @@
           </div>
           <p class="modal-help">The lidar follows the motor rail. The button overrides that until the rail next switches.</p>
         </article>
+        <article id="nav-panel" class="panel">
+          <h2>Map</h2>
+          <div class="rows" id="nav-rows"></div>
+          <canvas id="nav-map" width="1" height="1"></canvas>
+          <div class="nav-actions">
+            <button id="nav-start-mapping-button" type="button" disabled title="Forget where we are and start a fresh map">Start mapping</button>
+            <input id="nav-map-name" type="text" placeholder="map name" maxlength="32" aria-label="Map name">
+            <button id="nav-save-map-button" type="button" disabled title="Save the map being built and switch to localizing on it">Save map</button>
+          </div>
+          <div class="nav-actions">
+            <select id="nav-map-select" aria-label="Saved map"></select>
+            <button id="nav-localize-button" type="button" disabled title="Figure out where the robot is on the selected map (spins once)">Localize</button>
+            <input id="nav-place-name" type="text" placeholder="place name" maxlength="32" aria-label="Place name">
+            <button id="nav-save-place-button" type="button" disabled title="Remember the robot's current spot by name">Save place</button>
+          </div>
+          <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on.</p>
+        </article>
         <article id="imu-panel" class="panel hidden">
           <h2>IMU Orientation</h2>
           <div class="rows" id="imu-rows"></div>

@@ -454,6 +454,48 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
                 payload = await resp.json()
         self.assertEqual(payload["reason"], "not_armed")
 
+    async def test_nav_command_forwards_the_payload_to_the_nav_bridge(self):
+        with mock.patch("robot_web_dashboard.send_voice_command", return_value={"ok": True, "accepted": True}) as send:
+            async with self.client.post("/nav/command", json={"cmd": "save_map", "name": "main"}) as resp:
+                self.assertEqual(resp.status, 200)
+        self.assertEqual(send.call_args.args, (self.state.nav_socket, {"cmd": "save_map", "name": "main"}))
+
+    async def test_nav_command_rejects_unknown_commands_before_forwarding(self):
+        with mock.patch("robot_web_dashboard.send_voice_command") as send:
+            async with self.client.post("/nav/command", json={"cmd": "self_destruct"}) as resp:
+                self.assertEqual(resp.status, 400)
+        send.assert_not_called()
+
+    async def test_nav_command_maps_bridge_replies_to_http_statuses(self):
+        replies = [
+            (None, 503),
+            ({"ok": False, "error": "bad_map_name"}, 502),
+            ({"ok": True, "accepted": False, "reason": "busy"}, 409),
+        ]
+        for reply, status in replies:
+            with mock.patch("robot_web_dashboard.send_voice_command", return_value=reply):
+                async with self.client.post("/nav/command", json={"cmd": "save_map", "name": "main"}) as resp:
+                    self.assertEqual(resp.status, status, reply)
+
+    async def test_nav_status_reply_is_returned_as_is(self):
+        reply = {"ok": True, "mode": "mapping", "map_name": None, "maps": []}
+        with mock.patch("robot_web_dashboard.send_voice_command", return_value=reply):
+            async with self.client.post("/nav/command", json={"cmd": "nav_status"}) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertEqual(await resp.json(), reply)
+
+    async def test_map_png_serves_the_bridge_image_or_404(self):
+        async with self.client.get("/map.png") as resp:
+            self.assertEqual(resp.status, 404)
+
+        self.state.map_png_path = os.path.join(self.tmpdir.name, "map.png")
+        with open(self.state.map_png_path, "wb") as file_obj:
+            file_obj.write(b"\x89PNG fake")
+        async with self.client.get("/map.png") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers["Content-Type"], "image/png")
+            self.assertEqual(await resp.read(), b"\x89PNG fake")
+
     async def test_lidar_power_activates_and_deactivates_the_driver(self):
         with mock.patch("robot_web_dashboard.run_lidar_transition") as run_lidar_transition:
             run_lidar_transition.return_value = mock.Mock(returncode=0, stdout="", stderr="")

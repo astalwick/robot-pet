@@ -248,6 +248,8 @@ class TelemetryHub:
         pi_battery_data = pi_battery["data"] if pi_battery else None
         lidar = self.latest.get("lidar")
         lidar_data = lidar["data"] if lidar else None
+        nav = self.latest.get("nav")
+        nav_data = nav["data"] if nav else None
 
         motion_source = self._source_status(motion, now)
         gamepad_source = self._source_status(gamepad, now)
@@ -272,6 +274,7 @@ class TelemetryHub:
                 "motor_rail": self._source_status(motor_rail, now),
                 "pi_battery": self._source_status(pi_battery, now),
                 "lidar": self._source_status(lidar, now),
+                "nav": self._source_status(nav, now),
                 "system": self._system_status(now),
             },
             "controller": gamepad_data.get("controller"),
@@ -288,6 +291,7 @@ class TelemetryHub:
             "motor_rail": motor_rail_data,
             "pi_battery": pi_battery_data,
             "lidar": lidar_data,
+            "nav": nav_data,
             "pi": self.system_health,
         }
 

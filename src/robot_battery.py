@@ -177,7 +177,11 @@ class BatteryRunner:
             self.last_motor_battery = dict(battery)
 
     def _sync_power(self, snapshot: dict[str, Any], now: float) -> None:
-        wants_motion = self._gamepad_connected(snapshot) or self._motion_power_requested(snapshot)
+        wants_motion = (
+            self._gamepad_connected(snapshot)
+            or self._motion_power_requested(snapshot)
+            or self._nav_power_requested(snapshot)
+        )
 
         if self.state == "recovering":
             # Hold the rail on until a fresh reading decides recover-or-cutoff; give up
@@ -196,7 +200,7 @@ class BatteryRunner:
 
         if self._gamepad_connected(snapshot):
             self._rail_on("gamepad_connected")
-        elif self._motion_power_requested(snapshot):
+        elif self._motion_power_requested(snapshot) or self._nav_power_requested(snapshot):
             self.motion_power_hold_until = now + self.config.motion_power_hold_seconds
             self._rail_on("motion_power_requested")
         elif now < self.motion_power_hold_until:
@@ -217,6 +221,14 @@ class BatteryRunner:
             return False
         drive_status = snapshot.get("drive_status")
         return isinstance(drive_status, dict) and drive_status.get("motion_power_requested") is True
+
+    def _nav_power_requested(self, snapshot: dict[str, Any]) -> bool:
+        # the nav bridge wants the rail (and so the lidar) while it relocalizes
+        source = (snapshot.get("sources") or {}).get("nav") or {}
+        if source.get("stale") is not False:
+            return False
+        nav = snapshot.get("nav")
+        return isinstance(nav, dict) and nav.get("motor_power_requested") is True
 
     def _start_recovery_probe(self, now: float) -> None:
         self.low_voltage_seen_at = None

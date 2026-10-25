@@ -36,17 +36,21 @@ def snapshot(
     controller_connected=False,
     motion_power_requested=False,
     motion_stale=None,
+    nav_power_requested=False,
+    nav_stale=False,
 ):
     return {
         "sources": {
             "gamepad": {"stale": stale if gamepad_stale is None else gamepad_stale},
             "gamepad_teleop": {"stale": stale},
             "robot_motion": {"stale": stale if motion_stale is None else motion_stale},
+            "nav": {"stale": nav_stale},
         },
         "gamepad": {"connected": controller_connected},
         "controller": {"connected": controller_connected},
         "motor_battery": {"pack_voltage": voltage},
         "drive_status": {"motion_power_requested": motion_power_requested},
+        "nav": {"motor_power_requested": nav_power_requested},
     }
 
 
@@ -156,6 +160,35 @@ class RobotBatteryTest(unittest.TestCase):
         self.assertEqual(mosfet.on_count, 1)
         self.assertEqual(runner.state, "on")
         self.assertEqual(runner.reason, "motion_power_requested")
+
+    def test_nav_power_request_turns_motor_rail_on_without_gamepad(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+
+        runner._handle_snapshot(snapshot(None, nav_power_requested=True))
+
+        self.assertEqual(mosfet.on_count, 1)
+        self.assertEqual(runner.state, "on")
+        self.assertEqual(runner.reason, "motion_power_requested")
+
+    def test_stale_nav_source_does_not_turn_motor_rail_on(self):
+        mosfet = FakeMosfet()
+        runner = BatteryRunner(
+            BatteryConfig(),
+            telemetry_subscriber=lambda _socket: [],
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner.mosfet = mosfet
+
+        runner._handle_snapshot(snapshot(None, nav_power_requested=True, nav_stale=True))
+
+        self.assertEqual(mosfet.on_count, 0)
+        self.assertEqual(runner.state, "off")
 
     def test_stale_motion_source_does_not_turn_motor_rail_on(self):
         mosfet = FakeMosfet()

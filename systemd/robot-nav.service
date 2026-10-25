@@ -1,0 +1,19 @@
+[Unit]
+Description=Robot Nav - slam_toolbox (mapping) or map_server + AMCL (localize), picked by nav.json
+After=network-online.target robot-lidar.service robot-motion.service robot-state-publisher.service
+Wants=network-online.target
+# The nav bridge (robot-nav-bridge.service) writes nav.json and restarts this
+# unit to switch modes.
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/bin/bash -c 'source /opt/ros/lyrical/setup.bash && set -a && source /home/pi/.config/robot-pet/ros.env && set +a && exec ros2 launch /home/pi/robot-pet/config/nav.launch.py'
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

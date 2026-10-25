@@ -59,6 +59,8 @@ from config.voice import (
 )
 from lib.log import setup_logging
 from telemetry.paths import (
+    DEFAULT_MAP_PNG_PATH,
+    DEFAULT_NAV_SOCKET,
     DEFAULT_SUBSCRIBE_SOCKET,
     DEFAULT_VOICE_COMMAND_SOCKET,
     DEFAULT_WEB_DASHBOARD_HOST,
@@ -384,6 +386,8 @@ class WebDashboardState:
         voice_command_socket: str,
         sensors_config_path: str = DEFAULT_SENSORS_CONFIG_PATH,
         redeploy_status_path: str = DEFAULT_REDEPLOY_STATUS_PATH,
+        nav_socket: str = DEFAULT_NAV_SOCKET,
+        map_png_path: str = DEFAULT_MAP_PNG_PATH,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
@@ -394,6 +398,8 @@ class WebDashboardState:
         self.voice_command_socket = voice_command_socket
         self.sensors_config_path = sensors_config_path
         self.redeploy_status_path = redeploy_status_path
+        self.nav_socket = nav_socket
+        self.map_png_path = map_png_path
         self.log_hub = BroadcastHub(loop)
         self.journal_follower = JournalFollower(self.log_hub)
         self._lock = threading.Lock()
@@ -877,6 +883,40 @@ async def voice_command_handler(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "accepted": True})
 
 
+NAV_COMMANDS = {"nav_status", "set_mode", "save_map", "localize", "create_place"}
+
+
+async def nav_command_handler(request: web.Request) -> web.Response:
+    """Forward a nav command to the nav bridge; it validates the parameters."""
+    state: WebDashboardState = request.app["state"]
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
+
+    cmd = payload.get("cmd") if isinstance(payload, dict) else None
+    if cmd not in NAV_COMMANDS:
+        return web.json_response({"error": f"unknown cmd: {cmd!r}"}, status=400)
+
+    ack = await asyncio.to_thread(send_voice_command, state.nav_socket, payload)
+    if ack is None:
+        return web.json_response({"error": "nav bridge not reachable"}, status=503)
+    if not ack.get("ok", False):
+        return web.json_response({"error": ack.get("error") or "nav command failed"}, status=502)
+    if cmd != "nav_status" and not ack.get("accepted", False):
+        reason = ack.get("reason") or "ignored"
+        return web.json_response({"error": reason, "reason": reason}, status=409)
+    return web.json_response(ack)
+
+
+async def map_png_handler(request: web.Request) -> web.Response:
+    state: WebDashboardState = request.app["state"]
+    path = Path(state.map_png_path)
+    if not path.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(path, headers={"Content-Type": "image/png"})
+
+
 async def lidar_power_handler(request: web.Request) -> web.Response:
     """Turn the lidar on or off by activating or deactivating rplidar_node.
 
@@ -953,6 +993,8 @@ def build_app(state: WebDashboardState) -> web.Application:
     app.router.add_post("/config/{name}", config_apply)
     app.router.add_post("/voice/command", voice_command_handler)
     app.router.add_post("/lidar/power", lidar_power_handler)
+    app.router.add_post("/nav/command", nav_command_handler)
+    app.router.add_get("/map.png", map_png_handler)
     app.router.add_get("/voice/personalities", voice_personalities_handler)
     app.router.add_get("/api/model-frames", model_frames_list_handler)
     app.router.add_get("/model-frames/{name}", model_frame_file_handler)
@@ -977,6 +1019,8 @@ async def run_service(args: argparse.Namespace) -> None:
         args.voice_config,
         args.voice_command_socket,
         args.sensors_config,
+        nav_socket=args.nav_socket,
+        map_png_path=args.map_png,
     )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
@@ -1010,6 +1054,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
     parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)
     parser.add_argument("--voice-command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
+    parser.add_argument("--nav-socket", default=DEFAULT_NAV_SOCKET)
+    parser.add_argument("--map-png", default=DEFAULT_MAP_PNG_PATH)
     parser.add_argument("--static-dir", default=str(STATIC_DIR))
     return parser
 

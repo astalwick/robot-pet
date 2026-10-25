@@ -17,6 +17,7 @@ from telemetry.messages import (
     gamepad_teleop_update,
     lidar_update,
     motor_rail_update,
+    nav_update,
     pi_battery_update,
     robot_motion_update,
     sensors_update,
@@ -169,6 +170,13 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("lidar", snapshot["sources"])
         self.assertTrue(snapshot["sources"]["lidar"]["stale"])
         self.assertIsNone(snapshot["lidar"])
+
+    async def test_snapshot_lists_nav_source_as_stale_before_any_update(self):
+        snapshot = self.hub.build_snapshot()
+
+        self.assertIn("nav", snapshot["sources"])
+        self.assertTrue(snapshot["sources"]["nav"]["stale"])
+        self.assertIsNone(snapshot["nav"])
 
     async def test_snapshot_lists_voice_source_as_stale_before_any_update(self):
         snapshot = self.hub.build_snapshot()
@@ -341,6 +349,20 @@ class TelemetryHubTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["lidar"]["status"], "ok")
         self.assertEqual(snapshot["lidar"]["scan_hz"], 7.2)
         self.assertFalse(snapshot["sources"]["lidar"]["stale"])
+
+    async def test_nav_update_appears_in_subscriber_snapshot(self):
+        reader, writer = await asyncio.open_unix_connection(self.subscribe_socket)
+        await reader.readline()
+
+        message = nav_update("localize", "main", ["main"], True, None, {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, {}, False)
+        self.assertTrue(publish_message(self.publish_socket, message))
+        snapshot = await self._read_until(reader, lambda item: item.get("nav") is not None)
+
+        writer.close()
+        await writer.wait_closed()
+        self.assertEqual(snapshot["nav"]["map"], "main")
+        self.assertEqual(snapshot["nav"]["pose"], {"x": 1.0, "y": 2.0, "yaw": 0.5})
+        self.assertFalse(snapshot["sources"]["nav"]["stale"])
 
     async def test_snapshot_composes_motion_and_gamepad_fields_from_owners(self):
         self.assertTrue(

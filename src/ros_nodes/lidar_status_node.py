@@ -5,7 +5,7 @@ turns the lidar on and off with the motor rail.
 The driver (robot-lidar.service) only speaks ROS, so this node listens to its
 /scan and /diagnostics, asks for its lifecycle state (active means the lidar is
 on), and twice a second sends a lidar_update to the hub, alongside whether the
-lidar and SLAM services are running.
+lidar and nav services are running.
 
 It also reads the hub's motor_rail state: when the rail comes on the lidar is
 activated, and a few seconds after the rail drops it is deactivated. Only the
@@ -152,7 +152,7 @@ class LidarStatusNode(Node):
             device_present=os.path.exists(LIDAR_DEVICE),
             service_active=service_active("robot-lidar.service"),
             lidar_active=self.lidar_active,
-            slam_active=service_active("robot-slam.service"),
+            nav_active=service_active("robot-nav.service"),
             scan_hz=scan_hz,
             scan_age_seconds=now - self.scan_times[-1] if self.scan_times else None,
             points=self.points,

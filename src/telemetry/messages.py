@@ -25,6 +25,8 @@ from typing import Any
 #
 # lidar_update goes the other way: lidar_status_node.py summarizes the apt
 # driver's /scan and /diagnostics into a hub message for the dashboard.
+# nav_update likewise: nav_node.py summarizes /map, TF and AMCL for the
+# dashboard's Map panel, and carries the nav bridge's motor rail request.
 
 
 BUTTON_FIELDS = (
@@ -466,7 +468,7 @@ def lidar_update(
     device_present: bool,
     service_active: bool,
     lidar_active: bool,
-    slam_active: bool,
+    nav_active: bool,
     scan_hz: float | None,
     scan_age_seconds: float | None,
     points: int | None,
@@ -488,7 +490,7 @@ def lidar_update(
         "device_present": device_present,
         "service_active": service_active,
         "lidar_active": lidar_active,
-        "slam_active": slam_active,
+        "nav_active": nav_active,
         "scan_hz": scan_hz,
         "scan_age_seconds": scan_age_seconds,
         "points": points,
@@ -671,4 +673,38 @@ def robot_motion_update(
         "link_loop": link_loop,
         "drive_status": drive_status,
         "odometry": odometry,
+    }
+
+
+def nav_update(
+    mode: str,
+    map_name: str | None,
+    maps: list[str],
+    localized: bool,
+    activity: str | None,
+    pose: dict[str, float] | None,
+    map_info: dict[str, Any] | None,
+    places: dict[str, dict[str, Any]],
+    motor_power_requested: bool,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """The nav bridge's hub message.
+
+    mode is "mapping" or "localize"; map_name is the saved map in use (None
+    while mapping). pose is {x, y, yaw} in the map frame. activity names what
+    the bridge is busy with ("localizing", "saving"), or None.
+    """
+    return {
+        "type": "source_update",
+        "source": "nav",
+        "time": now if now is not None else time.time(),
+        "mode": mode,
+        "map": map_name,
+        "maps": maps,
+        "localized": localized,
+        "activity": activity,
+        "pose": pose,
+        "map_info": map_info,
+        "places": places,
+        "motor_power_requested": motor_power_requested,
     }

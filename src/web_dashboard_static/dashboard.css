@@ -319,6 +319,36 @@ main {
   white-space: nowrap;
 }
 
+#nav-map {
+  display: block;
+  width: 100%;
+  margin-top: 0.5rem;
+  image-rendering: pixelated;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+}
+
+.nav-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.nav-actions button {
+  white-space: nowrap;
+}
+
+.nav-actions input,
+.nav-actions select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
 .voice-timeline-toggle {
   display: none;
 }

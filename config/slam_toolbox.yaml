@@ -1,6 +1,6 @@
 # slam_toolbox online async mapping for robot-pet.
 # Copy of the stock mapper_params_online_async.yaml with our frame (base_link),
-# the A1's range, and interactive mode off. Loaded by systemd/robot-slam.service.
+# the A1's range, and interactive mode off. Loaded by config/nav.launch.py (robot-nav.service) in mapping mode.
 slam_toolbox:
   ros__parameters:
 

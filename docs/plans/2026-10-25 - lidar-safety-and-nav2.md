@@ -118,41 +118,64 @@ fire first on things they can see.
 
 ## Phase 3 - Map persistence, floor detection, relocalization
 
+### Phase 3 review (2026-10-25, before starting)
+
+Read against Nav2 1.5.2 and slam_toolbox 2.10 as installed on the robot, and
+against the hub, battery, dashboard and redeploy code:
+
+| Draft said | Actually | Change |
+|---|---|---|
+| Mapping includes nav2_bringup `slam_launch.py`. | That launch runs slam_toolbox in *sync* mode, adds a `map_saver_server`, expects the nav2 params layout and defaults `use_sim_time` to true. Today's `robot-slam.service` runs slam_toolbox's own `online_async_launch.py`. | `nav.launch.py` includes `online_async_launch.py` with `slam_params_file` and `use_sim_time:=false`, the same thing robot-slam runs today. Saving a map is `map_saver_cli -f ~/.config/robot-pet/maps/<name>` run as a subprocess by the nav bridge (ros-node.sh has already sourced the ROS env). |
+| Localize includes nav2_bringup `localization_launch.py`. | In Nav2 1.5 that file starts only `map_server` and `amcl`; the lifecycle manager lives in `bringup_launch.py`. Included alone, both nodes would sit unconfigured forever. | `nav.launch.py` starts the three nodes itself: `nav2_map_server/map_server`, `nav2_amcl/amcl`, and `nav2_lifecycle_manager/lifecycle_manager` (`autostart`, `node_names: [map_server, amcl]`). Phase 4 adds the navigation nodes the same way. |
+| `config/nav2.yaml` "AMCL section". | Stock AMCL params say `base_frame_id: base_footprint` and `laser_max_range: 100`. Our tree has no `base_footprint`. | `base_frame_id: base_link`, `laser_max_range: 12.0` (the A1), `set_initial_pose: false`; otherwise stock. |
+| Pose from `/amcl_pose`, "or slam's TF while mapping". | Two code paths for one number. In both modes `map -> base_link` is in TF. | Pose always from TF. `/amcl_pose` is read only for the covariance check (converged when x and y variance are under 0.25 m² and yaw variance under 0.2 rad²). |
+| `nav_node.py` holds the logic. | ARCHITECTURE: loops and logic in `src/*.py`, testable without rclpy; the node is thin. | `src/robot_nav.py`: config files (`nav.json`, `places.json`, maps dir), map grid to PNG, pose to pixel, covariance check, the socket server, the hub message. `nav_node.py` only wires ROS to it. |
+| `nav.json` absent on first deploy. | Nothing says what happens. | Missing `nav.json`, or a map file that is gone: mapping mode. First deploy behaves exactly like today's robot-slam. |
+| `lidar_update.slam_active` stays. | It asks systemd about `robot-slam.service`, which is retired. | Becomes `nav_active` (`robot-nav.service`); the Lidar panel row and the two tests follow. |
+| Sudoers rows needed for the new units. | `pi` has blanket passwordless sudo on this robot; `setup.sh` also writes a row per `ROBOT_SERVICES` entry for a fresh card. | Add the units to `ROBOT_SERVICES` and nothing else. |
+| Relocalization blocks the node. | The `turn 360` intent is a blocking request (up to 40 s). | Runs on the bridge's own thread: request the rail, wait for fresh scans, then per map `load_map`, `reinitialize_global_localization`, `turn 360`, check covariance. The ROS executor keeps spinning. |
+| Dashboard buttons "Save map as..." with a prompt. | Browser prompt dialogs block the page (and automation). | Inline text inputs next to the buttons. Mode buttons follow the voice-toggle pattern. |
+
 - Maps: `~/.config/robot-pet/maps/<name>.yaml` + `.pgm`, written by
   `map_saver_cli`. `nav.json`: `{"mode": "mapping" | "localize", "map": name}`.
-- `config/nav.launch.py` (replaces running slam_toolbox's launch directly):
-  reads `nav.json`; `mapping` includes nav2_bringup `slam_launch.py` with
-  `config/slam_toolbox.yaml`; `localize` includes `localization_launch.py`
-  with the map and `config/nav2.yaml` (AMCL section). `systemd/robot-nav.service`
-  runs it. `robot-slam.service` is retired (unit deleted; lists updated in
-  `setup.sh`, `restart.sh`, `redeploy-robot.sh`, its test, `ARCHITECTURE.md`).
-- `src/ros_nodes/nav_node.py` ("nav bridge"), `systemd/robot-nav-bridge.service`:
+- `config/nav.launch.py` reads `nav.json`; `mapping` includes slam_toolbox's
+  `online_async_launch.py` with `config/slam_toolbox.yaml`; `localize` starts
+  `map_server` (the map yaml), `amcl` (`config/nav2.yaml`) and a lifecycle
+  manager. `systemd/robot-nav.service` runs it. `robot-slam.service` is
+  retired (unit deleted; lists updated in `setup.sh`, `restart.sh`,
+  `redeploy-robot.sh`, its test, `ARCHITECTURE.md`).
+- `src/robot_nav.py` (logic) + `src/ros_nodes/nav_node.py` ("nav bridge"),
+  `systemd/robot-nav-bridge.service`:
   - owns `nav.json` and `places.json`; mode switch = write, then
     `sudo systemctl restart robot-nav.service`.
   - publishes hub source `nav` every 0.5 s: `mode`, `map`, `maps` (saved
-    names), `localized`, `pose` (map frame x, y, yaw from `/amcl_pose`, or
-    slam's TF while mapping), `map_info` (origin, resolution, size) and
-    `motor_power_requested`. `robot_telemetry.build_snapshot` lists it.
-    `robot_battery` reads `nav.motor_power_requested` exactly like
+    names), `localized`, `pose` (map frame x, y, yaw from TF), `map_info`
+    (origin, resolution, size, and a serial that changes when the PNG does),
+    `places` and `motor_power_requested`. `robot_telemetry.build_snapshot`
+    lists it. `robot_battery` reads `nav.motor_power_requested` exactly like
     `drive_status.motion_power_requested`.
-  - writes the current `/map` as `/run/robot-pet/map.png` every few seconds
-    so the dashboard can show it without speaking ROS.
+  - writes the current `/map` as `/run/robot-pet/map.png` whenever a new map
+    message arrives (at most every 2 s) so the dashboard can show it without
+    speaking ROS.
   - on boot in `localize` mode: sets `motor_power_requested` (rail on, lidar
     follows), then for each saved map, last used first: `load_map`,
-    `reinitialize_global_localization`, `turn 360` intent, wait for the
-    `/amcl_pose` covariance to fall under a threshold. Converged: remember the
-    map, `localized: true`, release the rail. None: `localized: false`.
+    `reinitialize_global_localization`, `turn 360` intent, check the
+    `/amcl_pose` covariance. Converged: remember the map, `localized: true`,
+    release the rail. None: `localized: false`.
   - unix socket `/run/robot-pet/nav.sock`, verbs this phase: `nav_status`,
     `set_mode`, `save_map`, `localize`, `create_place`.
 - Dashboard: Map panel. The PNG with the robot pose and places drawn over it,
   mode and map name, `localized`. Buttons following the voice-toggle pattern
   (DOM writes only on change, never disabled while busy): Start mapping, Save
-  map as..., Localize, Save place here, and a map picker.
+  map as (text input), Localize with a map picker, Save place here (text
+  input). The dashboard serves `/map.png` from `/run/robot-pet` and forwards
+  `/nav/command` to the socket like `/voice/command`.
 
-Claude verifies: `robot-nav.service` comes up in both modes with the lidar
-unplugged (no scans, but map_server serves the map and AMCL waits); `nav`
-source appears in the hub; `nav_status` over the socket; `set_mode` restarts
-the unit; tests for `nav.json`/`places.json` handling and the covariance check.
+Claude verifies: `robot-nav.service` comes up in both modes with the rail off
+(no scans, but map_server serves the map and AMCL waits); `nav` source
+appears in the hub; `nav_status` over the socket; `set_mode` restarts the
+unit; tests for `nav.json`/`places.json` handling, the PNG and pixel math,
+the covariance check and the socket verbs.
 
 Arlen verifies: map one floor with the gamepad, Save map as `main`. Reboot.
 Robot spins once, dashboard shows it localized at the right spot. Carry it to

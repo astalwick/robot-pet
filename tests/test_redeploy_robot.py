@@ -17,7 +17,8 @@ ALL_SERVICES = {
     "robot-motion.service",
     "robot-twist-mux.service",
     "robot-lidar.service",
-    "robot-slam.service",
+    "robot-nav.service",
+    "robot-nav-bridge.service",
     "robot-lidar-status.service",
     "robot-camera.service",
     "gamepad-teleop.service",
@@ -60,6 +61,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-pi-battery.service")
         elif path == "src/ros_nodes/lidar_status_node.py":
             want("robot-lidar-status.service")
+        elif path in ("src/robot_nav.py", "src/ros_nodes/nav_node.py"):
+            want("robot-nav-bridge.service")
         elif path == "src/ros_nodes/gamepad_teleop_node.py":
             want("gamepad-teleop.service")
         elif path in ("src/gamepad_teleop.py", "src/robot_model.py") or path.startswith("src/control/"):
@@ -125,6 +128,8 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
+        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/slam_toolbox.yaml"):
+            want("robot-nav.service")
         elif path == "config/rplidar.launch.py":
             want("robot-lidar.service")
         elif path == "scripts/ros-node.sh":
@@ -133,6 +138,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("gamepad-teleop.service")
             want("robot-pi-battery.service")
             want("robot-lidar-status.service")
+            want("robot-nav-bridge.service")
         elif path.startswith("systemd/"):
             want(Path(path).name)
 
@@ -266,6 +272,9 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertEqual(planned_services(["config/rplidar.launch.py"]), {"robot-lidar.service"})
         self.assertEqual(planned_services(["src/ros_nodes/pi_battery_node.py"]), {"robot-pi-battery.service"})
         self.assertEqual(planned_services(["src/ros_nodes/lidar_status_node.py"]), {"robot-lidar-status.service"})
+        self.assertEqual(planned_services(["src/ros_nodes/nav_node.py"]), {"robot-nav-bridge.service"})
+        self.assertEqual(planned_services(["config/nav.launch.py"]), {"robot-nav.service"})
+        self.assertEqual(planned_services(["config/slam_toolbox.yaml"]), {"robot-nav.service"})
         self.assertEqual(planned_services(["urdf/robot.urdf"]), {"robot-state-publisher.service"})
         self.assertEqual(
             planned_services(["scripts/ros-node.sh"]),
@@ -275,6 +284,7 @@ class TestRedeployRobot(unittest.TestCase):
                 "gamepad-teleop.service",
                 "robot-pi-battery.service",
                 "robot-lidar-status.service",
+                "robot-nav-bridge.service",
             },
         )
 

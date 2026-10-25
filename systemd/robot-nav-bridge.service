@@ -1,0 +1,26 @@
+[Unit]
+Description=Robot Nav Bridge - maps, places, relocalization and the nav hub source
+After=robot-telemetry.service robot-nav.service
+Wants=robot-telemetry.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/robot-pet/src
+Environment=PYTHONPATH=/home/pi/robot-pet/src
+ExecStart=/home/pi/robot-pet/scripts/ros-node.sh /home/pi/robot-pet/src/ros_nodes/nav_node.py
+Restart=always
+RestartSec=2
+RuntimeDirectory=robot-pet
+RuntimeDirectoryMode=0755
+# yes, not restart: several services share /run/robot-pet. With "restart",
+# stopping any one of them makes systemd delete the whole directory, wiping the
+# other services' sockets (e.g. motion-intent.sock) out from under live
+# processes. "yes" means systemd never tears it down; each service unlinks and
+# rebinds only its own socket on start. /run is tmpfs, cleared on reboot.
+RuntimeDirectoryPreserve=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

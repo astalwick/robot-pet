@@ -10,8 +10,9 @@ ALL_SERVICES=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
-  robot-slam.service
+  robot-nav.service
   robot-lidar-status.service
+  robot-nav-bridge.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -22,8 +23,9 @@ ALL_SERVICES=(
 )
 STOP_ORDER=(
   robot-foxglove.service
+  robot-nav-bridge.service
   robot-lidar-status.service
-  robot-slam.service
+  robot-nav.service
   robot-lidar.service
   robot-vision.service
   gamepad-teleop.service
@@ -49,8 +51,9 @@ START_ORDER=(
   robot-motion.service
   robot-twist-mux.service
   robot-lidar.service
-  robot-slam.service
+  robot-nav.service
   robot-lidar-status.service
+  robot-nav-bridge.service
   robot-camera.service
   gamepad-teleop.service
   robot-vision.service
@@ -88,7 +91,8 @@ normalize_service() {
     gamepad-teleop|gamepad|teleop) echo gamepad-teleop.service; return ;;
     twist-mux|mux) echo robot-twist-mux.service; return ;;
     lidar) echo robot-lidar.service; return ;;
-    slam) echo robot-slam.service; return ;;
+    nav) echo robot-nav.service; return ;;
+    nav-bridge) echo robot-nav-bridge.service; return ;;
     lidar-status) echo robot-lidar-status.service; return ;;
     vision) echo robot-vision.service; return ;;
     voice) echo robot-voice.service; return ;;

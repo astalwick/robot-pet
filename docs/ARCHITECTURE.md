@@ -68,8 +68,9 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
 | `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; starts configured but inactive, lifecycle `activate`/`deactivate` turns the lidar on/off |
-| `robot-slam` | ROS (apt) | `slam_toolbox` online async, params in `config/slam_toolbox.yaml`; `/scan` + `odom` -> `/map` and TF `map -> odom` |
-| `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/SLAM units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
+| `robot-nav` | ROS (apt) | `config/nav.launch.py`, mode from `~/.config/robot-pet/nav.json`: **mapping** runs `slam_toolbox` (`config/slam_toolbox.yaml`) building `/map`; **localize** runs nav2 `map_server` + `amcl` (`config/nav2.yaml`) on a saved map. Either way: `/scan` + `odom` -> TF `map -> odom` |
+| `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/nav units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
+| `robot-nav-bridge` | ROS node | `nav_node.py` + `robot_nav.py`: owns `nav.json`, `places.json` and `maps/`; serves `/run/robot-pet/nav.sock` (save map, switch mode, localize, create place) for the dashboard and voice; relocalizes by spinning once per saved map; publishes the `nav` hub message and `/run/robot-pet/map.png` |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -85,7 +86,7 @@ Start order is the `ROBOT_SERVICES` array in `setup.sh`; `restart.sh` and
 
 Nodes keep publishing their JSON hub messages for the dashboards and also
 publish the ROS message. The hub is still what the dashboards, robot-battery
-and robot-voice read; ROS is what Foxglove and, later, SLAM and Nav2 read.
+and robot-voice read; ROS is what Foxglove, slam_toolbox and Nav2 read.
 `ros_nodes/ros_messages.py` holds the pure conversions from hub dicts to ROS
 message fields so they stay testable without rclpy.
 
@@ -174,23 +175,42 @@ All services log to stdout/stderr; systemd captures to journald.
 - Several: `journalctl -u robot-motion -u robot-sensors -u gamepad-teleop -f`
 - Format: `LEVEL service-name: message`; timestamps come from journald.
 
-## Lidar
+## Lidar, maps and navigation
 
 The lidar work is tracked in
-[plans/2026-10-12 - lidar.md](plans/2026-10-12%20-%20lidar.md). Done so far:
-`robot-lidar.service` publishes `/scan` in the `laser` frame, the URDF has a
-`laser` frame from the measured `LIDAR_MOUNT` (82 mm behind the axle, scan plane
-203 mm up), and `robot-slam.service` runs slam_toolbox in mapping mode, so the
-TF tree is `map -> odom -> base_link -> laser` and `/map` rebuilds every boot.
+[plans/2026-10-12 - lidar.md](plans/2026-10-12%20-%20lidar.md) and the safety
+and navigation work in
+[plans/2026-10-25 - lidar-safety-and-nav2.md](plans/2026-10-25%20-%20lidar-safety-and-nav2.md).
 
-Known-future items the exit criterion does not cover:
+`robot-lidar.service` publishes `/scan` in the `laser` frame; the URDF has a
+`laser` frame from the measured `LIDAR_MOUNT` (82 mm behind the axle, scan plane
+203 mm up). The TF tree is `map -> odom -> base_link -> laser`. The lidar also
+feeds the motion node's safety gate (`control/safety_gate.py`): the nearest
+scan point inside the footprint's lane blocks forward or reverse like the ToFs
+do, so the robot stops for things the ToFs cannot see.
+
+`robot-nav.service` has two modes, picked by `~/.config/robot-pet/nav.json`.
+A fresh robot (no `nav.json`, or its map file gone) **maps**: slam_toolbox
+builds `/map` as you drive with the gamepad. "Save map" writes
+`~/.config/robot-pet/maps/<name>.yaml` + `.pgm` with `map_saver_cli` and
+switches to **localize** mode on that map: `map_server` serves it and AMCL
+tracks the robot against it. Places (`~/.config/robot-pet/places.json`) are
+poses on a named map, saved only while localized, so they survive reboots.
+
+`robot-nav-bridge.service` (`ros_nodes/nav_node.py`, logic in `robot_nav.py`)
+is the only writer of those files and the only thing that restarts `robot-nav`
+to switch modes. Whenever AMCL comes up it either sends the pose it remembered
+in `/run/robot-pet/nav-pose.json` (same map, not rebooted) or **relocalizes**:
+it asks for the motor rail, and for each saved map loads it, scatters AMCL's
+particles and spins the robot once with a `turn` intent; the first map whose
+pose covariance gets tight wins. That is how a robot carried to another floor
+works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
+
+Known-future items:
 
 - **`/cmd_vel` arbitration policy.** `twist_mux` already reserves `/cmd_vel_nav`.
   What is undecided is where voice motion intents rank against a nav goal:
   today intents run inside the motion node and any non-zero muxed `/cmd_vel`
   interrupts them, which is right for the gamepad and wrong once Nav2 publishes.
-- **Map persistence.** slam_toolbox serialized map + localization mode (or
-  `map_saver`), otherwise `map` is rebuilt every boot and saved place poses are
-  garbage.
 - **Async nav goals for the LLM.** `navigateTo(place)` cannot ride the
   blocking motion-intent request/reply; it needs its own plan.

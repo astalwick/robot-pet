@@ -46,7 +46,7 @@ export function renderLidar(snapshot, sources) {
     row('scan rate', '', fmt(lidar.scan_hz, ' Hz', 1)),
     row('points', '', lidar.points != null ? `${lidar.valid_points} / ${lidar.points}` : '--'),
     row('last scan', '', fmtRelativeSeconds(lidar.scan_age_seconds)),
-    row('slam', '', lidar.slam_active ? 'running' : 'stopped', lidar.slam_active ? 'ok' : 'muted'),
+    row('nav', '', lidar.nav_active ? 'running' : 'stopped', lidar.nav_active ? 'ok' : 'muted'),
   ];
   for (const status of lidar.diagnostics) {
     rows.push(row(status.name, '', status.message || '--', DIAGNOSTIC_CLASSES[status.level]));

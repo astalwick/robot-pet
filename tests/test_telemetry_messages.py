@@ -21,6 +21,7 @@ from telemetry.messages import (
     motor_battery_message,
     motor_battery_percent_estimate,
     motor_rail_update,
+    nav_update,
     pi_battery_message,
     pi_battery_status,
     pi_battery_update,
@@ -91,10 +92,25 @@ class TelemetryMessagesTest(unittest.TestCase):
 
         self.assertEqual(message["status"], "ok")
         self.assertTrue(message["lidar_active"])
-        self.assertTrue(message["slam_active"])
+        self.assertTrue(message["nav_active"])
         self.assertEqual(message["scan_hz"], 7.2)
         self.assertEqual(message["points"], 360)
         self.assertEqual(message["valid_points"], 290)
+
+    def test_nav_update_carries_mode_map_and_pose(self):
+        places = {"kitchen": {"map": "main", "x": 1.0, "y": 2.0, "yaw": 0.0}}
+        message = nav_update("localize", "main", ["main", "upstairs"], True, "localizing", {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, places, True, now=12.0)
+
+        self.assertEqual(message["type"], "source_update")
+        self.assertEqual(message["source"], "nav")
+        self.assertEqual(message["time"], 12.0)
+        self.assertEqual(message["mode"], "localize")
+        self.assertEqual(message["map"], "main")
+        self.assertEqual(message["maps"], ["main", "upstairs"])
+        self.assertTrue(message["localized"])
+        self.assertEqual(message["activity"], "localizing")
+        self.assertEqual(message["places"], places)
+        self.assertTrue(message["motor_power_requested"])
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")

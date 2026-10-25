@@ -113,7 +113,7 @@ plan_service_restarts() {
       src/ros_nodes/gamepad_teleop_node.py)
         want_restart gamepad-teleop.service
         ;;
-      src/gamepad_teleop.py | src/control/*)
+      src/gamepad_teleop.py | src/control/* | src/robot_model.py)
         want_restart gamepad-teleop.service
         want_restart robot-motion.service
         want_restart robot-voice.service

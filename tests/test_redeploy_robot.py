@@ -62,7 +62,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-lidar-status.service")
         elif path == "src/ros_nodes/gamepad_teleop_node.py":
             want("gamepad-teleop.service")
-        elif path == "src/gamepad_teleop.py" or path.startswith("src/control/"):
+        elif path in ("src/gamepad_teleop.py", "src/robot_model.py") or path.startswith("src/control/"):
             want("gamepad-teleop.service")
             want("robot-motion.service")
             want("robot-voice.service")
@@ -193,6 +193,11 @@ class TestRedeployRobot(unittest.TestCase):
     def test_control_paths_restart_voice_for_calibration_constants(self):
         services = planned_services(["src/control/motion_intent.py"])
         self.assertIn("robot-voice.service", services)
+        self.assertIn("robot-motion.service", services)
+        self.assertIn("gamepad-teleop.service", services)
+
+    def test_robot_model_restarts_everything_that_uses_wheel_geometry(self):
+        services = planned_services(["src/robot_model.py"])
         self.assertIn("robot-motion.service", services)
         self.assertIn("gamepad-teleop.service", services)
 

@@ -129,7 +129,7 @@ controller_server:
       reject_unit_path: false
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.25
+      max_linear_vel: 0.25
       lookahead_dist: 0.4
       min_lookahead_dist: 0.25
       max_lookahead_dist: 0.6
@@ -232,7 +232,7 @@ planner_server:
       tolerance: 0.5
       use_astar: false
       allow_unknown: true
-      max_cycles_factor: 4.0
+      max_cycles_factor: 4
 
 behavior_server:
   ros__parameters:

@@ -13,7 +13,10 @@ has no lifecycle manager, so we start the three nodes ourselves.
 
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from config/nav2.yaml, so the nav bridge can send
-NavigateToPose goals. Their cmd_vel goes to /cmd_vel_nav for twist_mux.
+NavigateToPose goals. Their cmd_vel goes to /cmd_vel_nav for twist_mux. They
+are not autostarted: their costmaps need the map frame, and the lidar that
+makes it follows the motor rail, so the bridge activates them once the robot
+is scanning (lifecycle_manager_navigation/manage_nodes STARTUP).
 
 No nav.json, or a map file that is gone: mapping. A fresh robot maps.
 """
@@ -125,7 +128,7 @@ def navigation_nodes() -> list:
             output="screen",
             parameters=[
                 {
-                    "autostart": True,
+                    "autostart": False,
                     "node_names": ["controller_server", "planner_server", "behavior_server", "bt_navigator"],
                 }
             ],

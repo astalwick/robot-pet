@@ -20,10 +20,14 @@ tight wins. Saving a map goes straight to localize mode on that map with
 slam's last pose, so no spin is needed.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
-NavigateToPose action, started by nav.launch.py in both modes. One goal at a
-time; a new one replaces it. The goal is cancelled when robot-motion raises
-/nav_lock (a voice intent or a stop), when the gamepad moves, or on a mode
-switch. The hub message carries the goal and its state.
+NavigateToPose action. nav.launch.py starts the navigation servers in both
+modes but does not activate them: their costmaps need the map frame, and the
+lidar that makes it follows the motor rail, so this node brings them up once
+the robot is scanning and has a map pose. A goal asks for the rail (through
+motor_power_requested) and is sent once the lidar and Nav2 are up. One goal
+at a time; a new one replaces it. The goal is cancelled when robot-motion
+raises /nav_lock (a voice intent or a stop), when the gamepad moves, or on a
+mode switch. The hub message carries the goal and its state.
 """
 
 import argparse
@@ -39,7 +43,7 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
 from nav2_msgs.action import NavigateToPose
-from nav2_msgs.srv import LoadMap
+from nav2_msgs.srv import LoadMap, ManageLifecycleNodes
 from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
@@ -71,6 +75,10 @@ MAP_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, relia
 MAP_PNG_MIN_INTERVAL = 2.0
 # After asking for the rail: battery turns it on, the lidar activates and spins up.
 SCAN_WAIT_SECONDS = 20.0
+# a navigate_to waits this long for the lidar and Nav2 before it fails
+GOAL_START_SECONDS = 30.0
+# how often to ask the lifecycle manager to bring Nav2 up while it is down
+NAV2_STARTUP_RETRY_SECONDS = 15.0
 SERVICE_WAIT_SECONDS = 10.0
 # The covariance AMCL starts from when we hand it a remembered pose.
 INITIAL_POSE_XY_VARIANCE = 0.25
@@ -105,7 +113,12 @@ class NavNode(Node):
         self.goal: dict | None = None
         self.goal_serial = 0
         self.goal_handle = None
+        # a goal waiting for the lidar and Nav2: (serial, x, y, yaw, asked_at)
+        self.goal_request: tuple | None = None
         self.nav_lock = False
+        # whether bt_navigator is active, and when we last asked for a bringup
+        self.nav2_active = False
+        self.nav2_startup_time = 0.0
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -117,6 +130,8 @@ class NavNode(Node):
         self.load_map_client = self.create_client(LoadMap, "/map_server/load_map")
         self.global_localization_client = self.create_client(Empty, "/reinitialize_global_localization")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        self.bt_navigator_state_client = self.create_client(GetState, "/bt_navigator/get_state")
+        self.nav2_manage_client = self.create_client(ManageLifecycleNodes, "/lifecycle_manager_navigation/manage_nodes")
         self.create_subscription(Bool, "/nav_lock", self.on_nav_lock, 10)
         self.create_subscription(Twist, "/cmd_vel_teleop", self.on_teleop, 10)
         self.create_timer(0.5, self.tick)
@@ -143,6 +158,9 @@ class NavNode(Node):
         if twist.linear.x != 0.0 or twist.angular.z != 0.0:
             self.cancel_goal("gamepad")
 
+    def on_bt_navigator_state(self, future) -> None:
+        self.nav2_active = future.result().current_state.label == "active"
+
     def on_amcl_state(self, future) -> None:
         active = future.result().current_state.label == "active"
         if active and self.amcl_active is not True:
@@ -156,7 +174,13 @@ class NavNode(Node):
             self.amcl_state_client.call_async(GetState.Request()).add_done_callback(self.on_amcl_state)
         else:
             self.amcl_active = False
+        if self.bt_navigator_state_client.service_is_ready():
+            self.bt_navigator_state_client.call_async(GetState.Request()).add_done_callback(self.on_bt_navigator_state)
+        else:
+            self.nav2_active = False
         self.update_pose()
+        self.start_nav2_when_ready()
+        self.send_pending_goal()
         self.update_map_png()
         self.remember_pose()
         publish_message(self.args.telemetry_socket, nav_update(**self.status()))
@@ -297,10 +321,13 @@ class NavNode(Node):
     def wait_for_scans(self) -> bool:
         deadline = time.monotonic() + SCAN_WAIT_SECONDS
         while time.monotonic() < deadline:
-            if self.last_scan_time is not None and time.monotonic() - self.last_scan_time < 1.0:
+            if self.scanning():
                 return True
             time.sleep(0.2)
         return False
+
+    def scanning(self) -> bool:
+        return self.last_scan_time is not None and time.monotonic() - self.last_scan_time < 1.0
 
     def try_map(self, name: str) -> bool:
         log.info("relocalize: trying %s", name)
@@ -435,6 +462,23 @@ class NavNode(Node):
     def navigating(self) -> bool:
         return self.goal is not None and self.goal["state"] == "navigating"
 
+    def start_nav2_when_ready(self) -> None:
+        """Activate the Nav2 navigation servers once the map frame exists; their
+        costmaps give up after a minute without it, and the lidar that makes it
+        is only on with the motor rail."""
+        if self.nav2_active or not self.scanning() or self.pose is None:
+            return
+        if time.monotonic() - self.nav2_startup_time < NAV2_STARTUP_RETRY_SECONDS or not self.nav2_manage_client.service_is_ready():
+            return
+        self.nav2_startup_time = time.monotonic()
+        log.info("bringing up the Nav2 navigation servers")
+        request = ManageLifecycleNodes.Request(command=ManageLifecycleNodes.Request.STARTUP)
+        self.nav2_manage_client.call_async(request).add_done_callback(self.on_nav2_startup)
+
+    def on_nav2_startup(self, future) -> None:
+        if not future.result().success:
+            log.warning("Nav2 navigation servers did not come up (see robot-nav); retrying in %.0fs", NAV2_STARTUP_RETRY_SECONDS)
+
     def navigate_to(self, request: dict) -> dict:
         """Send a NavigateToPose goal for a saved place or a map x, y."""
         place_name = request.get("place")
@@ -460,14 +504,27 @@ class NavNode(Node):
             return {"ok": True, "accepted": False, "reason": self.activity or "busy"}
         if self.nav_lock:
             return {"ok": True, "accepted": False, "reason": "wheels_busy"}
-        if not self.nav_client.server_is_ready():
-            return {"ok": False, "error": "nav2_unavailable"}
 
         self.cancel_goal("replaced")
         self.goal_serial += 1
-        serial = self.goal_serial
         self.goal = {"target": place_name, "x": float(x), "y": float(y), "state": "navigating", "remaining_m": None}
+        # navigating() asks for the motor rail; the lidar follows the rail and
+        # Nav2 follows the lidar, so tick() sends the goal once both are up
+        self.goal_request = (self.goal_serial, float(x), float(y), yaw, time.monotonic())
         log.info("navigating to %s (%.2f, %.2f)", place_name or "a point", x, y)
+        return {"ok": True, "accepted": True, "goal": self.goal}
+
+    def send_pending_goal(self) -> None:
+        if self.goal_request is None:
+            return
+        serial, x, y, yaw, asked_at = self.goal_request
+        if time.monotonic() - asked_at > GOAL_START_SECONDS:
+            self.goal_request = None
+            self.end_goal(serial, "failed", "nav2_unavailable" if self.scanning() else "lidar_unavailable")
+            return
+        if not self.scanning() or not self.nav2_active or not self.nav_client.server_is_ready():
+            return
+        self.goal_request = None
 
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"
@@ -478,7 +535,6 @@ class NavNode(Node):
         goal.pose.pose.orientation.w = math.cos(yaw / 2)
         future = self.nav_client.send_goal_async(goal, feedback_callback=lambda message: self.on_goal_feedback(serial, message))
         future.add_done_callback(lambda done: self.on_goal_response(serial, done))
-        return {"ok": True, "accepted": True, "goal": self.goal}
 
     def on_goal_response(self, serial: int, future) -> None:
         handle = future.result()
@@ -519,6 +575,7 @@ class NavNode(Node):
         if not self.navigating():
             return
         self.end_goal(self.goal_serial, "cancelled", reason)
+        self.goal_request = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None

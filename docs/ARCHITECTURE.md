@@ -209,10 +209,14 @@ works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint
 from `robot_model.py` and the lidar as the costmap obstacle source. Their
-`/cmd_vel_nav` is the lowest `twist_mux` input, below the gamepad. The nav
-bridge is the only Nav2 action client: `navigate_to` (a place name, or map
-x/y from a click on the dashboard map) sends one `NavigateToPose` goal and
-returns at once; the goal's state (`navigating` with metres remaining,
+`/cmd_vel_nav` is the lowest `twist_mux` input, below the gamepad. The servers
+are launched but not activated: their costmaps need the `map` frame, which
+only exists once the lidar is scanning, and the lidar follows the motor rail.
+The nav bridge activates them once the robot is scanning and has a map pose.
+The bridge is also the only Nav2 action client: `navigate_to` (a place name,
+or map x/y from a click on the dashboard map) returns at once, asks for the
+motor rail, and sends one `NavigateToPose` goal once the lidar and Nav2 are
+up (a goal that waits more than 30 s fails); the goal's state (`navigating` with metres remaining,
 `arrived`, `cancelled`, `failed`, plus a reason) rides the hub as `nav.goal`.
 A new goal replaces the old one; `nav_cancel`, a mode switch or any gamepad
 input cancels it.

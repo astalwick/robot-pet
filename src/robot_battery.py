@@ -324,7 +324,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warning-voltage", type=float, default=MOTOR_BATTERY_WARNING_VOLTAGE)
     parser.add_argument("--low-voltage-seconds", type=float, default=2.0)
     parser.add_argument("--cutoff-log-interval", type=float, default=30.0)
-    parser.add_argument("--telemetry-interval", type=float, default=1.0)
+    parser.add_argument("--telemetry-interval", type=float, default=BatteryConfig.telemetry_interval)
     parser.add_argument("--motion-power-hold-seconds", type=float, default=5.0)
     parser.add_argument("--recovery-probe-seconds", type=float, default=3.0)
     parser.add_argument("--recovery-retry-seconds", type=float, default=30.0)

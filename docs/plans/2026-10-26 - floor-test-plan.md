@@ -34,7 +34,15 @@ journals, no floor test in between):
   a source stale after 1.0 s, so one hub snapshot in five showed the rail
   stale and robot-motion read that as "rail off" and let the board go. Fix:
   robot-battery republishes every 0.5 s. (The old lidar code had the same
-  stale check; it only looked at edges so the flicker never showed.)
+  stale check; it only looked at edges so the flicker never showed.) First
+  attempt changed only the dataclass default; the service takes its interval
+  from the command line, whose default was still 1.0, so a 20 degree test turn
+  still dropped the board twice after finishing. Second attempt points the
+  command-line default at the dataclass. Not yet seen working with the board
+  powered (power was off by then); check on the next floor run.
+- Seen once in that test turn: right after a reconnect the board did not
+  answer ReadVersion for 2 s with the rail on. Probably the quick
+  close/reopen of the serial port from the flicker above. Watch for it.
 - BUG (regression from batch 1): the lidar flapped off/on/off when the rail
   went off, because the motor loop published one last "roboclaw_ready yes"
   on its way out. Fix: that publish is gone; the waiting loop says "not

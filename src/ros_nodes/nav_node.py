@@ -122,11 +122,14 @@ class NavNode(Node):
         self.goal_request: tuple | None = None
         self.nav_lock = False
         # bt_navigator's lifecycle label (None while it is not up), and the
-        # label and time of our last lifecycle request, so a refused one is
-        # only retried every so often
+        # our last lifecycle request: the label it was sent from, when, and its
+        # pending reply. The servers pass through "inactive" while a bringup
+        # runs, so no new request goes out until the reply is in, and a
+        # refused one is only retried every so often.
         self.nav2_state: str | None = None
         self.nav2_managed_state: str | None = None
         self.nav2_manage_time = 0.0
+        self.nav2_manage_future = None
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -480,6 +483,8 @@ class NavNode(Node):
         up for each trip and pauses a few seconds after the rail goes off."""
         if not self.nav2_manage_client.service_is_ready():
             return
+        if self.nav2_manage_future is not None and not self.nav2_manage_future.done():
+            return
         if self.nav2_state == self.nav2_managed_state and time.monotonic() - self.nav2_manage_time < NAV2_MANAGE_RETRY_SECONDS:
             return
         if self.nav2_state == "active":
@@ -495,7 +500,8 @@ class NavNode(Node):
         self.nav2_managed_state = self.nav2_state
         self.nav2_manage_time = time.monotonic()
         log.info("%s the Nav2 navigation servers", what)
-        self.nav2_manage_client.call_async(ManageLifecycleNodes.Request(command=command)).add_done_callback(self.on_nav2_managed)
+        self.nav2_manage_future = self.nav2_manage_client.call_async(ManageLifecycleNodes.Request(command=command))
+        self.nav2_manage_future.add_done_callback(self.on_nav2_managed)
 
     def on_nav2_managed(self, future) -> None:
         if not future.result().success:

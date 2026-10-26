@@ -874,6 +874,15 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("renderLidar(snapshot, sources)", self.telemetry_js)
         self.assertIn("bindLidarHandlers(on)", self.main_js)
 
+    def test_map_shares_the_camera_box_behind_a_view_switch(self):
+        html = self.dashboard_html
+        camera_section = html[html.index('id="camera-section"'):html.index('id="voice-timeline-section"')]
+        self.assertIn('id="nav-map"', camera_section)
+        self.assertIn('id="view-camera-button"', camera_section)
+        self.assertIn('id="view-map-button"', camera_section)
+        self.assertIn("#camera-section.show-map #camera-stream", self.dashboard_css)
+        self.assertIn("classList.toggle('show-map', show)", self._module("nav.js"))
+
     def test_foxglove_link_targets_this_robot_in_the_desktop_app(self):
         self.assertIn("window.location.hostname", self.lidar_js)
         self.assertIn("ds=foxglove-websocket", self.lidar_js)

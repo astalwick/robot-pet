@@ -156,6 +156,43 @@ main {
   pointer-events: none;
 }
 
+/* The map shares the camera's box; the switch in the corner picks one. */
+#nav-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+#camera-section:not(.show-map) #nav-map,
+#camera-section.show-map #camera-stream,
+#camera-section.show-map #face-overlay {
+  display: none;
+}
+
+#view-switch {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  display: flex;
+}
+
+#view-switch button {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  opacity: 0.85;
+}
+
+#view-switch button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
 .face-box {
   position: absolute;
   border: 2px solid var(--accent);
@@ -317,15 +354,6 @@ main {
 
 #lidar-power-button {
   white-space: nowrap;
-}
-
-#nav-map {
-  display: block;
-  width: 100%;
-  margin-top: 0.5rem;
-  image-rendering: pixelated;
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
 }
 
 .nav-actions {

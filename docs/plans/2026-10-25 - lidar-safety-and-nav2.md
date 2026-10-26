@@ -164,8 +164,10 @@ against the hub, battery, dashboard and redeploy code:
     release the rail. None: `localized: false`.
   - unix socket `/run/robot-pet/nav.sock`, verbs this phase: `nav_status`,
     `set_mode`, `save_map`, `localize`, `create_place`.
-- Dashboard: Map panel. The PNG with the robot pose and places drawn over it,
-  mode and map name, `localized`. Buttons following the voice-toggle pattern
+- Dashboard: Map panel. The PNG with the robot pose and places drawn over it
+  (*changed while building:* the map shares the camera's box, a Camera / Map
+  switch picks one; the right-column panel was too narrow to use), mode and
+  map name, `localized`. Buttons following the voice-toggle pattern
   (DOM writes only on change, never disabled while busy): Start mapping, Save
   map as (text input), Localize with a map picker, Save place here (text
   input). The dashboard serves `/map.png` from `/run/robot-pet` and forwards

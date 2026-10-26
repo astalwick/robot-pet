@@ -35,6 +35,11 @@
       <section id="camera-section">
         <img id="camera-stream" alt="Robot camera feed">
         <div id="face-overlay" aria-hidden="true"></div>
+        <canvas id="nav-map" width="1" height="1" title="Click to drive there"></canvas>
+        <div id="view-switch">
+          <button id="view-camera-button" type="button" class="active">Camera</button>
+          <button id="view-map-button" type="button">Map</button>
+        </div>
       </section>
 
       <section id="voice-timeline-section" class="panel">
@@ -126,7 +131,6 @@
         <article id="nav-panel" class="panel">
           <h2>Map</h2>
           <div class="rows" id="nav-rows"></div>
-          <canvas id="nav-map" width="1" height="1"></canvas>
           <div class="nav-actions">
             <button id="nav-start-mapping-button" type="button" disabled title="Forget where we are and start a fresh map">Start mapping</button>
             <input id="nav-map-name" type="text" placeholder="map name" maxlength="32" aria-label="Map name">
@@ -139,7 +143,7 @@
             <button id="nav-save-place-button" type="button" disabled title="Remember the robot's current spot by name">Save place</button>
             <button id="nav-cancel-button" type="button" disabled title="Stop driving to the goal">Cancel trip</button>
           </div>
-          <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. Click the map to drive there.</p>
+          <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. The Map button above the camera shows it; click the map to drive there.</p>
         </article>
         <article id="imu-panel" class="panel hidden">
           <h2>IMU Orientation</h2>

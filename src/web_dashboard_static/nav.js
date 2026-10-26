@@ -1,9 +1,10 @@
 import { row, setRows, fmt, escapeHtml } from './dom.js';
 import { appendLog } from './logs.js';
 
-// The map panel: the live occupancy grid from the nav bridge with the robot,
-// the saved places and the navigation goal drawn on it, plus the mode / map /
-// place controls. Clicking the map sends the robot there.
+// The map: the live occupancy grid from the nav bridge with the robot, the
+// saved places and the navigation goal drawn on it. It shares the camera's box
+// (the Camera / Map switch picks one) and clicking it sends the robot there.
+// The Map panel holds the mode / map / place controls.
 
 let mapImage = null;
 let mapSerial = null;
@@ -152,17 +153,29 @@ export function bindNavHandlers(bindOn) {
   bindOn('nav-save-place-button', 'click', onSavePlace);
   bindOn('nav-cancel-button', 'click', () => sendNav({ cmd: 'nav_cancel' }));
   bindOn('nav-map', 'click', onMapClick);
+  bindOn('view-camera-button', 'click', () => showMap(false));
+  bindOn('view-map-button', 'click', () => showMap(true));
 }
 
-// A click on the map drives the robot to that spot. The canvas is scaled to
-// the panel width, so go from CSS pixels back to image pixels, then undo
-// drawMap's toPixel.
+function showMap(show) {
+  document.getElementById('camera-section').classList.toggle('show-map', show);
+  document.getElementById('view-camera-button').classList.toggle('active', !show);
+  document.getElementById('view-map-button').classList.toggle('active', show);
+}
+
+// A click on the map drives the robot to that spot. The canvas fills the
+// camera box with object-fit: contain, so find where the image actually sits,
+// go from CSS pixels back to image pixels, then undo drawMap's toPixel.
 function onMapClick(event) {
   if (!mapInfo || navStale) return;
   const canvas = event.currentTarget;
   const rect = canvas.getBoundingClientRect();
-  const px = ((event.clientX - rect.left) * canvas.width) / rect.width;
-  const py = ((event.clientY - rect.top) * canvas.height) / rect.height;
+  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+  const left = rect.left + (rect.width - canvas.width * scale) / 2;
+  const top = rect.top + (rect.height - canvas.height * scale) / 2;
+  const px = (event.clientX - left) / scale;
+  const py = (event.clientY - top) / scale;
+  if (px < 0 || py < 0 || px > canvas.width || py > canvas.height) return;
   const x = px * mapInfo.resolution + mapInfo.origin_x;
   const y = (mapInfo.height - py) * mapInfo.resolution + mapInfo.origin_y;
   sendNav({ cmd: 'navigate_to', x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });

@@ -356,8 +356,14 @@ main {
   white-space: nowrap;
 }
 
+/* The Map card spans both columns, like Logs, so its controls fit on a row. */
+#nav-panel {
+  grid-column: 1 / -1;
+}
+
 .nav-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }
@@ -373,8 +379,7 @@ main {
   background: var(--bg-deep);
   border: 1px solid var(--border);
   padding: 0.35rem 0.5rem;
-  min-width: 0;
-  flex: 1;
+  flex: 1 1 8rem;
 }
 
 .voice-timeline-toggle {

@@ -881,6 +881,7 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn('id="view-camera-button"', camera_section)
         self.assertIn('id="view-map-button"', camera_section)
         self.assertIn("#camera-section.show-map #camera-stream", self.dashboard_css)
+        self.assertIn("#nav-panel {\n  grid-column: 1 / -1;", self.dashboard_css)
         self.assertIn("classList.toggle('show-map', show)", self._module("nav.js"))
 
     def test_foxglove_link_targets_this_robot_in_the_desktop_app(self):

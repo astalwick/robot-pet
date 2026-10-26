@@ -202,8 +202,8 @@ is the only writer of those files and the only thing that restarts `robot-nav`
 to switch modes. Whenever AMCL comes up it either sends the pose it remembered
 in `/run/robot-pet/nav-pose.json` (same map, not rebooted) or **relocalizes**:
 it asks for the motor rail, and for each saved map loads it, scatters AMCL's
-particles and spins the robot once with a `turn` intent; the first map whose
-pose covariance gets tight wins. That is how a robot carried to another floor
+particles and spins the robot with a `turn` intent, twice if one spin is not
+enough; the first map whose pose covariance gets tight wins. That is how a robot carried to another floor
 works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
 When no map converges the bridge keeps reading `/amcl_pose`: AMCL goes on
 estimating, so a short drive with the gamepad usually finishes the job, and

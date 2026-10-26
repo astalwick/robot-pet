@@ -25,8 +25,8 @@ active (boot, mode switch, a redeploy of robot-nav) the bridge either sends
 the pose it remembered in /run/robot-pet/nav-pose.json (same map, robot has
 not been moved since) or relocalizes: asks for the motor rail, waits for
 scans, and for each saved map loads it, scatters the particles and spins the
-robot once with a `turn` intent. The first map whose AMCL covariance gets
-tight wins. Saving a map goes straight to localize mode on that map with
+robot with a `turn` intent, twice if the first spin is not enough. The first
+map whose AMCL covariance gets tight wins. Saving a map goes straight to localize mode on that map with
 slam's last pose, so no spin is needed.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
@@ -97,6 +97,8 @@ NAV2_PAUSE_SECONDS = 5.0
 SERVICE_WAIT_SECONDS = 10.0
 # the safety gate stops 0.2 m short of a barrier; at gamepad speed that is a 4 cm step
 BARRIER_CLEARANCE_HZ = 10
+# 360 turns per map before relocalize gives up on it (each takes about 8 s)
+RELOCALIZE_SPINS = 2
 # The covariance AMCL starts from when we hand it a remembered pose: a pose
 # TF gave us half a second before the restart, so it is tight, and clearly
 # inside what is_localized accepts (0.25) so the first AMCL update after it
@@ -395,11 +397,18 @@ class NavNode(Node):
             log.warning("relocalize: AMCL or map_server did not answer")
             return False
         self.amcl_covariance = None
-        result = request_motion_intent(self.args.motion_intent_socket, "turn", degrees=360)
-        if not result.get("ok"):
-            log.warning("relocalize: turn failed: %s", result.get("error"))
-        # the last scan after the spin stops still updates the filter
-        time.sleep(1.0)
+        # One spin usually leaves AMCL with a few candidate spots a metre apart;
+        # a second spin from the same cloud settles it more often than not.
+        for spin in range(RELOCALIZE_SPINS):
+            result = request_motion_intent(self.args.motion_intent_socket, "turn", degrees=360)
+            if not result.get("ok"):
+                log.warning("relocalize: turn failed: %s", result.get("error"))
+                break
+            # the last scan after the spin stops still updates the filter
+            time.sleep(1.0)
+            if robot_nav.is_localized(self.amcl_covariance):
+                return True
+            log.info("relocalize: %s not converged after spin %d", name, spin + 1)
         return robot_nav.is_localized(self.amcl_covariance)
 
     # --- the nav socket ----------------------------------------------------

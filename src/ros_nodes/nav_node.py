@@ -97,8 +97,11 @@ NAV2_PAUSE_SECONDS = 5.0
 SERVICE_WAIT_SECONDS = 10.0
 # the safety gate stops 0.2 m short of a barrier; at gamepad speed that is a 4 cm step
 BARRIER_CLEARANCE_HZ = 10
-# The covariance AMCL starts from when we hand it a remembered pose.
-INITIAL_POSE_XY_VARIANCE = 0.25
+# The covariance AMCL starts from when we hand it a remembered pose: a pose
+# TF gave us half a second before the restart, so it is tight, and clearly
+# inside what is_localized accepts (0.25) so the first AMCL update after it
+# does not read as "not localized".
+INITIAL_POSE_XY_VARIANCE = 0.1
 INITIAL_POSE_YAW_VARIANCE = 0.07
 
 
@@ -174,6 +177,15 @@ class NavNode(Node):
 
     def on_amcl_pose(self, message: PoseWithCovarianceStamped) -> None:
         self.amcl_covariance = list(message.pose.covariance)
+        # AMCL keeps estimating after a relocalize gives up or a remembered pose
+        # turns out wrong: a drive with the gamepad can converge it, or lose it.
+        # While a relocalize runs, that thread owns the flag.
+        if self.mode != "localize" or self.activity is not None:
+            return
+        localized = robot_nav.is_localized(self.amcl_covariance)
+        if localized != self.localized:
+            log.info("AMCL %s", "converged: localized" if localized else "spread out: no longer localized")
+            self.localized = localized
 
     def on_scan(self, scan: LaserScan) -> None:
         self.last_scan_time = time.monotonic()
@@ -332,6 +344,9 @@ class NavNode(Node):
 
     def relocalize(self, maps: list[str]) -> None:
         self.localized = False
+        # we no longer know where we are, so a restart must not trust the old pose
+        Path(self.args.nav_pose).unlink(missing_ok=True)
+        self.remembered_pose_written = None
         self.motor_power_requested = True
         try:
             if not self.wait_for_scans():

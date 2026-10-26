@@ -205,6 +205,9 @@ it asks for the motor rail, and for each saved map loads it, scatters AMCL's
 particles and spins the robot once with a `turn` intent; the first map whose
 pose covariance gets tight wins. That is how a robot carried to another floor
 works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
+When no map converges the bridge keeps reading `/amcl_pose`: AMCL goes on
+estimating, so a short drive with the gamepad usually finishes the job, and
+`localized` flips on (or off again, if the pose is lost) as the covariance says.
 
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint

@@ -599,6 +599,27 @@ class RobotMotionTest(unittest.TestCase):
         self.assertEqual(command.linear_x, 0.0)
         self.assertLess(command.angular_z, 0.0)
 
+    def test_intent_start_and_finish_are_logged(self):
+        logging.getLogger("robot-motion").disabled = False
+        self.addCleanup(setattr, logging.getLogger("robot-motion"), "disabled", True)
+        runner = self._runner(FakeMotor())
+
+        class FakeIntentBridge:
+            def take_pending(self):
+                return ({"tool": "diagnostic_turn", "direction": "toward_left_wheel", "duration_seconds": 0.5}, lambda _payload: None)
+
+        runner.intent_bridge = FakeIntentBridge()
+
+        with self.assertLogs("robot-motion", level="INFO") as logs:
+            runner._service_intent_requests(now=1.0)
+            runner._tick_intent(now=1.6, gamepad_active=False)
+
+        self.assertIn(
+            "INFO:robot-motion:intent diagnostic_turn started: {'direction': 'toward_left_wheel', 'duration_seconds': 0.5}",
+            logs.output,
+        )
+        self.assertTrue(any("intent diagnostic_turn completed after" in line and "'result': 'completed'" in line for line in logs.output))
+
     def test_motion_service_starts_parameterized_face_me(self):
         motor = FakeMotor()
         completed = []

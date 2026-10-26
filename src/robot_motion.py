@@ -751,7 +751,14 @@ class MotionRunner:
         if error is not None:
             complete({"ok": False, "error": error})
             return
-        self.pending_intent_complete = complete
+        tool = request["tool"]
+        log.info("intent %s started: %s", tool, {key: value for key, value in request.items() if key != "tool" and value is not None})
+
+        def complete_and_log(payload: dict[str, Any]) -> None:
+            log.info("intent %s %s after %.1fs: %s", tool, "completed" if payload.get("ok") else "failed", self.clock() - now, payload)
+            complete(payload)
+
+        self.pending_intent_complete = complete_and_log
 
     def _service_stop_requests(self) -> bool:
         # A stop arrives out-of-band: it must cancel an intent that is mid-drive, so

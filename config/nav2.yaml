@@ -25,8 +25,10 @@ amcl:
     laser_min_range: -1.0
     laser_model_type: "likelihood_field"
     max_beams: 60
-    max_particles: 2000
-    min_particles: 500
+    # relocalize starts from a uniform spread over the whole map: 2000 particles
+    # (the default) was too thin for 40 m2 of floor at every heading
+    max_particles: 5000
+    min_particles: 1000
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99

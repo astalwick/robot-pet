@@ -57,13 +57,11 @@ journals, no floor test in between):
 - Check 21, voice "stop": FAILED as predicted (audit item 6). Trip started at
   99314.9; voice went straight into check_navigation(wait 60 s); the stop tool
   did not fire until 99330.3, about 15 s of Arlen saying "stop". It then fired
-  three times in 4 s. Then at 99338.7 voice started a trip to the kitchen and
-  1.7 s later replaced it with a trip to the living room, which Arlen stopped
-  again at 99350. Need to confirm whether those two trips were asked for; if
-  not, the model acted on the pile of "stop" transcripts it got after the
-  wait. Root cause is audit cluster A: the conversation owns the body, so a
-  tool that waits 60 s deafens the robot. Also seen once: "elevenlabs tts
-  send failed; retrying".
+  three times in 4 s. The kitchen trip at 99338.7 and the "wait no, living
+  room" swap 1.7 s later were both asked for and worked well. Root cause of
+  the slow stop is audit cluster A: the conversation owns the body, so a tool
+  that waits 60 s deafens the robot. Also seen once: "elevenlabs tts send
+  failed; retrying".
 - Shelved idea (Arlen's): replace the spin with a background search of the
   whole map using the current scan (our scan fit score at every free cell and
   heading), acting only on a clearly better pose that wins twice while moving.

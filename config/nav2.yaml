@@ -58,6 +58,21 @@ map_server:
 # Speeds: gamepad normal is ~0.36 m/s, we navigate at 0.25 m/s and turn at
 # 0.8 rad/s. The footprint is the chassis from robot_model.py: 0.064 m ahead
 # of the axle, 0.266 m behind it, 0.1655 m to each side (tests check the text).
+#
+# The two costmaps describe the robot differently on purpose. The controller
+# checks the real rectangle against the local costmap, so that one gets the
+# footprint. The planner (NavFn) plans for a point and only keeps the path's
+# centre outside the costmap's inscribed radius, which Nav2 takes as the
+# distance from base_link to the nearest footprint edge: the front edge, 0.064 m
+# ahead of the axle. That let it route the axle 7 cm from a door frame, a path
+# the controller then refused as a collision. So the global costmap gets a
+# robot_radius of the half width instead: paths stay a robot's half width
+# from walls, which is exactly what driving straight needs.
+#
+# Inflation beyond that is a preference, not a limit. With the axle 25 cm
+# from a wall (8 cm of side clearance) a cell costs about 3.5x open floor,
+# at 35 cm about 3x, and from 45 cm nothing. Narrow doorways are allowed;
+# the planner just takes the middle of them.
 # cmd_vel is remapped to /cmd_vel_nav in nav.launch.py; twist_mux merges it
 # behind the gamepad and behind the motion node's /nav_lock.
 
@@ -180,8 +195,8 @@ local_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.45
       always_send_full_costmap: true
       introspection_mode: "disabled"
 
@@ -194,7 +209,7 @@ global_costmap:
       robot_base_frame: base_link
       resolution: 0.05
       track_unknown_space: true
-      footprint: "[[0.064, 0.1655], [0.064, -0.1655], [-0.266, -0.1655], [-0.266, 0.1655]]"
+      robot_radius: 0.1655
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -215,8 +230,8 @@ global_costmap:
           obstacle_min_range: 0.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.45
       always_send_full_costmap: true
       introspection_mode: "disabled"
 

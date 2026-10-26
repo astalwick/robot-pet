@@ -36,7 +36,8 @@ class RobotModelTest(unittest.TestCase):
         front, rear, half = FOOTPRINT_FRONT_X_METERS, FOOTPRINT_REAR_X_METERS, FOOTPRINT_HALF_WIDTH_METERS
         footprint = f'footprint: "[[{front}, {half}], [{front}, -{half}], [{rear}, -{half}], [{rear}, {half}]]"'
         nav2 = (CONFIG_DIR / "nav2.yaml").read_text()
-        self.assertEqual(nav2.count(footprint), 2, footprint)  # local and global costmap
+        self.assertEqual(nav2.count(footprint), 1, footprint)  # the local costmap, for the controller
+        self.assertIn(f"robot_radius: {FOOTPRINT_HALF_WIDTH_METERS}", nav2)  # the global costmap, for the planner
         # Our motion node speaks plain Twist; both cmd_vel publishers must agree.
         self.assertEqual(nav2.count("enable_stamped_cmd_vel: false"), 2)
         self.assertIn("/nav_lock", (CONFIG_DIR / "twist_mux.yaml").read_text())

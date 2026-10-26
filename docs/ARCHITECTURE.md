@@ -208,7 +208,10 @@ works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
 
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint
-from `robot_model.py` and the lidar as the costmap obstacle source. Their
+from `robot_model.py` (the local costmap, for the controller's collision
+check) and its half width as the global costmap's radius (the planner plans
+for a point; see the comment in the yaml), and the lidar as the costmap
+obstacle source. Their
 `/cmd_vel_nav` is the lowest `twist_mux` input, below the gamepad. The servers
 are launched but not activated: their costmaps need the `map` frame, which
 only exists once the lidar is scanning, and the lidar follows the motor rail.

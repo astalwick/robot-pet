@@ -243,6 +243,10 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         runner._run_connected(controller)
 
         self.assertTrue(any(message.get("source") == "gamepad" and message["connected"] for message in published))
+        # the full status too: it carries the sticks and buttons the dashboard's Pilot Inputs card shows
+        self.assertTrue(
+            any(message.get("source") == "gamepad_teleop" and message["controller"]["connected"] for message in published)
+        )
 
     def test_sleep_with_status_updates_publishes_during_retry_sleep(self):
         published = []

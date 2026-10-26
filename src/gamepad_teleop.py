@@ -133,6 +133,7 @@ class GamepadTeleopRunner:
             self.loop_samples.append(now)
             if now >= next_status_at:
                 self._publish_gamepad_update(True)
+                self._publish_status_update(controller)  # sticks and buttons for the dashboard
                 next_status_at = now + STATUS_PUBLISH_INTERVAL
 
             command = self.policy.motion_from_state(controller.state)

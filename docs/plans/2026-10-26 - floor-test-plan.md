@@ -25,6 +25,24 @@ commit on ros2-nav2:
   (audit item 13).
 - nav2.yaml sets `desired_linear_vel` too, which stops the 60 s warning.
 
+Second fix batch (same evening, after redeploying the first and reading the
+journals, no floor test in between):
+
+- BUG (regression from batch 1): with the rail on, the motor loop flapped
+  "RoboClaw ready, driving, stopped, waiting for roboclaw" once a second.
+  Cause: robot-battery republishes the rail state every 1.0 s and the hub calls
+  a source stale after 1.0 s, so one hub snapshot in five showed the rail
+  stale and robot-motion read that as "rail off" and let the board go. Fix:
+  robot-battery republishes every 0.5 s. (The old lidar code had the same
+  stale check; it only looked at edges so the flicker never showed.)
+- BUG (regression from batch 1): the lidar flapped off/on/off when the rail
+  went off, because the motor loop published one last "roboclaw_ready yes"
+  on its way out. Fix: that publish is gone; the waiting loop says "not
+  answering" right away.
+- The redeploy's own relocalize spin on the floor scored fit 0.34 then 0.51
+  and gave up ("no saved map converged"), so 60% found may be too strict for
+  AMCL's first guess after a global spread. Open; needs more floor numbers.
+
 - Section 0 (2026-10-26 18:07): checks 1 and 2 pass. Check 3 FAILED: the
   lidar spun up when the controller paired with the wall switch off. The lidar
   is USB powered, so the switch never cuts it; the software follows the rail

@@ -451,7 +451,7 @@ class MotionRunner:
                         idle_released = True
                     elif idle_released and not self._rail_on:
                         # the rail is off and nothing asks for the wheels: let the board go
-                        self._publish_waiting_telemetry(None, roboclaw_ready=True)
+                        # (the waiting loop reports roboclaw_ready False straight away)
                         break
                     elif idle_released and now >= next_telemetry:
                         # Idle with the rail on: keep the board open so the first stick

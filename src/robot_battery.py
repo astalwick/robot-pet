@@ -28,7 +28,10 @@ class BatteryConfig:
     warning_voltage: float = MOTOR_BATTERY_WARNING_VOLTAGE
     low_voltage_seconds: float = 2.0
     cutoff_log_interval: float = 30.0
-    telemetry_interval: float = 1.0
+    # The hub calls a source stale after 1 s; republish twice as fast or every
+    # reader (robot-motion keeps the board open while the rail is on) sees the
+    # rail flicker stale once a second.
+    telemetry_interval: float = 0.5
     motion_power_hold_seconds: float = 5.0
     recovery_probe_seconds: float = 3.0
     recovery_retry_seconds: float = 30.0

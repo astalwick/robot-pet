@@ -9,6 +9,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from robot_battery import BatteryConfig, BatteryRunner
+from robot_telemetry import DEFAULT_STALE_TIMEOUT
 
 logging.getLogger("robot-battery").disabled = True
 
@@ -55,6 +56,11 @@ def snapshot(
 
 
 class RobotBatteryTest(unittest.TestCase):
+    def test_rail_state_is_republished_before_the_hub_calls_it_stale(self):
+        # robot-motion keeps the board open only while the hub shows the rail on;
+        # a rail that flickers stale once a second made the motor loop flap.
+        self.assertLess(BatteryConfig().telemetry_interval, DEFAULT_STALE_TIMEOUT)
+
     def test_startup_keeps_motor_rail_off(self):
         mosfet = FakeMosfet()
         published = []

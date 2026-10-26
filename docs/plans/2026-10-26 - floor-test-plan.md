@@ -43,6 +43,18 @@ journals, no floor test in between):
 - Seen once in that test turn: right after a reconnect the board did not
   answer ReadVersion for 2 s with the rail on. Probably the quick
   close/reopen of the serial port from the flicker above. Watch for it.
+- Re-test after batch 2 (later that evening): all eight re-test steps passed
+  (lidar off with the switch off, first push drives, no churn while idle,
+  lidar off once when the controller goes, lost on carry, Localize finds it,
+  barrier stop). Scan fit 81% at rest afterwards.
+- Barrier stop felt closer than 20 cm. Likely cause: the bridge publishes the
+  barrier distance on its 0.5 s tick, and at stick speed the robot covers up
+  to 18 cm between updates; the map pose is also off by 10-20 cm at the best
+  of times. Fix candidates: publish faster, or stop earlier. Not done.
+- Shelved idea (Arlen's): replace the spin with a background search of the
+  whole map using the current scan (our scan fit score at every free cell and
+  heading), acting only on a clearly better pose that wins twice while moving.
+  Would make Localize and the restart spin unnecessary. Not started.
 - BUG (regression from batch 1): the lidar flapped off/on/off when the rail
   went off, because the motor loop published one last "roboclaw_ready yes"
   on its way out. Fix: that publish is gone; the waiting loop says "not

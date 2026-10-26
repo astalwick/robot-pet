@@ -170,6 +170,8 @@ controller_server:
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
       max_linear_vel: 0.25
+      # Nav2 1.5 still asks for the old name once a minute and warns when it is missing
+      desired_linear_vel: 0.25
       lookahead_dist: 0.4
       min_lookahead_dist: 0.25
       max_lookahead_dist: 0.6

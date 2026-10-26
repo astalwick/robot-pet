@@ -44,26 +44,24 @@ DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 BARRIER_HALF_WIDTH_METERS = 0.3
 KEEPOUT_RESOLUTION_METERS = 0.05
 
-# AMCL has found the robot when the pose covariance is this tight. 0.25 m² is
-# half a meter of standard deviation; a lost filter sits at several meters.
-LOCALIZED_XY_VARIANCE = 0.25
-LOCALIZED_YAW_VARIANCE = 0.2
-
 # Is the robot where it thinks it is? scan_fit is the share of lidar beams
 # whose end points land within SCAN_FIT_CELLS of a wall the map knows about.
 # A robot at its true pose scores high; one carried somewhere else scores
-# like random. The covariance alone cannot tell: AMCL grades its particles on
-# a curve, so a cloud that matches nothing still has a confident best guess.
+# like random. AMCL's covariance cannot tell: it grades its particles on a
+# curve, so a cloud that matches nothing still has a confident best guess.
 SCAN_FIT_CELLS = 3
 SCAN_FIT_MIN_BEAMS = 30
 # map_server marks walls 100, free 0 and unknown -1
 OCCUPIED_THRESHOLD = 50
-# Under SCAN_FIT_LOST for SCAN_FIT_LOST_TICKS ticks (0.5 s each) in a row
-# means lost; a tight covariance counts as found only with at least
-# SCAN_FIT_FOUND. Guesses until the dashboard shows real floor numbers.
-SCAN_FIT_LOST = 0.25
-SCAN_FIT_LOST_TICKS = 4
-SCAN_FIT_FOUND = 0.4
+# Floor numbers (ground floor, 2026-10-26): 55-90% at the true pose, 44-49% at
+# the right spot facing the wrong way, 23% on the kitchen counter. Under
+# SCAN_FIT_LOST for SCAN_FIT_LOST_TICKS ticks (0.5 s each) in a row means lost;
+# SCAN_FIT_FOUND or better for SCAN_FIT_FOUND_TICKS in a row means found. A
+# wrong heading at the right spot falls between the two and is not caught yet.
+SCAN_FIT_LOST = 0.4
+SCAN_FIT_LOST_TICKS = 6
+SCAN_FIT_FOUND = 0.6
+SCAN_FIT_FOUND_TICKS = 3
 
 # Map names become file names; place names are spoken, so they may have spaces.
 MAP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -144,25 +142,15 @@ def maps_to_try(maps: list[str], last_used: str | None) -> list[str]:
     return list(maps)
 
 
-def is_localized(covariance: list[float] | None) -> bool:
-    """Whether a PoseWithCovariance's 6x6 covariance says AMCL has converged."""
-    if covariance is None or len(covariance) != 36:
-        return False
-    return covariance[0] < LOCALIZED_XY_VARIANCE and covariance[7] < LOCALIZED_XY_VARIANCE and covariance[35] < LOCALIZED_YAW_VARIANCE
-
-
-def localized_change(localized: bool, covariance: list[float] | None, fit: float | None, low_fit_ticks: int) -> tuple[bool, str] | None:
+def localized_change(localized: bool, low_fit_ticks: int, high_fit_ticks: int) -> tuple[bool, str] | None:
     """The per-tick localized rule: (new value, why) when it changes, else
-    None. A missing covariance (AMCL has not updated yet) or a missing fit (no
-    fresh scan, no map pose) is no opinion, never a vote for lost."""
-    if localized:
-        if covariance is not None and not is_localized(covariance):
-            return False, "AMCL spread out"
-        if low_fit_ticks >= SCAN_FIT_LOST_TICKS:
-            return False, "the scan does not match the map here"
-        return None
-    if is_localized(covariance) and (fit is None or fit >= SCAN_FIT_FOUND):
-        return True, "AMCL converged and the scan fits"
+    None. The counters are runs of consecutive ticks with a bad or a good scan
+    fit; a tick without a fit (no fresh scan, no map pose, turning) resets
+    both, so silence is no opinion, never a vote either way."""
+    if localized and low_fit_ticks >= SCAN_FIT_LOST_TICKS:
+        return False, "the scan does not match the map here"
+    if not localized and high_fit_ticks >= SCAN_FIT_FOUND_TICKS:
+        return True, "the scan fits the map here"
     return None
 
 

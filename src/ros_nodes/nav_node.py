@@ -26,16 +26,20 @@ the pose it remembered in /run/robot-pet/nav-pose.json (same map, robot has
 not been moved since) or relocalizes: asks for the motor rail, waits for
 scans, and for each saved map loads it, scatters the particles and spins the
 robot with a `turn` intent, twice if the first spin is not enough. The first
-map whose AMCL covariance gets tight wins. Saving a map goes straight to
-localize mode on that map with slam's last pose, so no spin is needed.
+map where the scan fits at AMCL's best guess wins; that guess is handed back
+to AMCL as the initial pose so the particles collapse onto it. Saving a map
+goes straight to localize mode on that map with slam's last pose, so no spin
+is needed.
 
-A tight covariance is not proof: a robot carried to another room keeps a
-confident wrong pose, because AMCL only grades its particles against each
-other. So each tick the bridge also scores how well the latest scan fits the
-map from the pose TF gives the lidar (robot_nav.scan_fit) and reads both
-through one rule (robot_nav.localized_change): a run of bad fits means lost,
-the remembered pose is dropped and a trip in progress is cancelled. A
-navigate_to on a robot that is not localized relocalizes first, then goes.
+AMCL's own confidence (the pose covariance) is not used: on the floor it sat
+right at any threshold at the true pose and flickered, and a robot carried
+to another room keeps a confident wrong pose, because AMCL only grades its
+particles against each other. So each tick the bridge scores how well the
+latest scan fits the map from the pose TF gives the lidar (robot_nav.scan_fit)
+and reads it through one rule (robot_nav.localized_change): a run of bad fits
+means lost, the remembered pose is dropped and a trip in progress is
+cancelled; a run of good fits means found. A navigate_to on a robot that is
+not localized relocalizes first, then goes.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
@@ -108,10 +112,9 @@ SERVICE_WAIT_SECONDS = 10.0
 BARRIER_CLEARANCE_HZ = 10
 # 360 turns per map before relocalize gives up on it (each takes about 8 s)
 RELOCALIZE_SPINS = 2
-# The covariance AMCL starts from when we hand it a remembered pose: a pose
-# TF gave us half a second before the restart, so it is tight, and clearly
-# inside what is_localized accepts (0.25) so the first AMCL update after it
-# does not read as "not localized".
+# The covariance AMCL starts from when we hand it a pose: a remembered pose TF
+# gave us half a second before the restart, or AMCL's own best guess after a
+# relocalize spin, so it is tight and the particles gather around it.
 INITIAL_POSE_XY_VARIANCE = 0.1
 INITIAL_POSE_YAW_VARIANCE = 0.07
 # No scan fit on a tick where the lidar turned more than this since the last:
@@ -143,8 +146,10 @@ class NavNode(Node):
         self.last_scan_time: float | None = None
         self.scan_fit: float | None = None
         self.low_fit_ticks = 0
+        self.high_fit_ticks = 0
         self.scan_fit_yaw: float | None = None
-        self.amcl_covariance: list[float] | None = None
+        # AMCL's best guess, for a relocalize to hand back once the scan fits there
+        self.amcl_pose: dict[str, float] | None = None
         # the AMCL lifecycle state the timer last saw; None until the first tick
         self.amcl_active: bool | None = None
         # one localize or save at a time
@@ -198,7 +203,8 @@ class NavNode(Node):
         self.latest_map = grid
 
     def on_amcl_pose(self, message: PoseWithCovarianceStamped) -> None:
-        self.amcl_covariance = list(message.pose.covariance)
+        position, rotation = message.pose.pose.position, message.pose.pose.orientation
+        self.amcl_pose = {"x": position.x, "y": position.y, "yaw": robot_nav.yaw_from_quaternion(rotation.x, rotation.y, rotation.z, rotation.w)}
 
     def on_scan(self, scan: LaserScan) -> None:
         self.latest_scan = scan
@@ -206,7 +212,9 @@ class NavNode(Node):
 
     def on_nav_lock(self, message: Bool) -> None:
         self.nav_lock = message.data
-        if message.data:
+        # our own relocalize spin raises the lock too; it must not cancel the
+        # trip it is clearing the way for
+        if message.data and self.activity != "localizing":
             self.cancel_goal("stopped")
 
     def on_teleop(self, twist: Twist) -> None:
@@ -254,16 +262,17 @@ class NavNode(Node):
         }
 
     def update_localized(self) -> None:
-        """One rule for `localized` each tick, from AMCL's covariance and the
-        scan fit (robot_nav.localized_change). AMCL keeps estimating after a
-        relocalize gives up or a remembered pose turns out wrong: a drive with
-        the gamepad can converge it, or lose it. While a relocalize runs, that
-        thread owns the flag."""
+        """One rule for `localized` each tick, from runs of the scan fit
+        (robot_nav.localized_change). AMCL keeps estimating after a relocalize
+        gives up or a remembered pose turns out wrong: a drive with the gamepad
+        can converge it, or lose it. While a relocalize runs, that thread owns
+        the flag."""
         self.scan_fit = self.measure_scan_fit()
         self.low_fit_ticks = self.low_fit_ticks + 1 if self.scan_fit is not None and self.scan_fit < robot_nav.SCAN_FIT_LOST else 0
+        self.high_fit_ticks = self.high_fit_ticks + 1 if self.scan_fit is not None and self.scan_fit >= robot_nav.SCAN_FIT_FOUND else 0
         if self.mode != "localize" or self.activity is not None:
             return
-        change = robot_nav.localized_change(self.localized, self.amcl_covariance, self.scan_fit, self.low_fit_ticks)
+        change = robot_nav.localized_change(self.localized, self.low_fit_ticks, self.high_fit_ticks)
         if change is None:
             return
         self.localized, why = change
@@ -421,7 +430,7 @@ class NavNode(Node):
                 return
             for name in maps:
                 if self.try_map(name):
-                    log.info("relocalize: converged on %s", name)
+                    log.info("relocalize: found the robot on %s", name)
                     self.map_name = name
                     robot_nav.save_nav_config("localize", name, self.args.nav_config)
                     self.update_keepout()
@@ -474,7 +483,7 @@ class NavNode(Node):
         except TimeoutError:
             log.warning("relocalize: AMCL did not answer")
             return False
-        self.amcl_covariance = None
+        self.amcl_pose = None
         # One spin usually leaves AMCL with a few candidate spots a metre apart;
         # a second spin from the same cloud settles it more often than not.
         for spin in range(RELOCALIZE_SPINS):
@@ -482,12 +491,19 @@ class NavNode(Node):
             if not result.get("ok"):
                 log.warning("relocalize: turn failed: %s", result.get("error"))
                 break
-            # the last scan after the spin stops still updates the filter
-            time.sleep(1.0)
-            if robot_nav.is_localized(self.amcl_covariance):
+            # the last scan after the spin stops still updates the filter, and
+            # the 0.5 s tick needs a scan taken standing still to measure the fit
+            time.sleep(1.5)
+            fit = self.scan_fit
+            if fit is not None and fit >= robot_nav.SCAN_FIT_FOUND and self.amcl_pose is not None:
+                # A spread-out cloud never gets tight on its own from spins in
+                # place, but its mean is right when the scan fits there, so
+                # hand that pose back and let the particles gather around it.
+                log.info("relocalize: %s fits (scan fit %.2f) after spin %d", name, fit, spin + 1)
+                self.set_initial_pose(self.amcl_pose)
                 return True
-            log.info("relocalize: %s not converged after spin %d", name, spin + 1)
-        return robot_nav.is_localized(self.amcl_covariance)
+            log.info("relocalize: %s does not fit yet after spin %d (scan fit %s)", name, spin + 1, "none" if fit is None else f"{fit:.2f}")
+        return False
 
     # --- the nav socket ----------------------------------------------------
 
@@ -546,7 +562,7 @@ class NavNode(Node):
         robot_nav.save_nav_config(mode, map_name, self.args.nav_config)
         self.mode, self.map_name = mode, map_name
         self.localized = False
-        self.amcl_covariance = None
+        self.amcl_pose = None
         self.cancel_goal("mode_change")
         if mode == "localize":
             self.update_keepout()  # nav.launch.py reads the mask file
@@ -642,9 +658,11 @@ class NavNode(Node):
 
     def publish_barrier_clearance(self) -> None:
         """Tell robot-motion how much room the body has to the nearest barrier,
-        while the map pose is known. Nothing is sent otherwise (mapping mode,
-        not yet localized), and the safety gate lets a stale value lapse."""
-        if self.mode != "localize" or not self.localized:
+        while there is a map pose. Nothing is sent in mapping mode or before
+        AMCL has a pose, and the safety gate lets a stale value lapse. A pose
+        that is not trusted (localized no) still counts: a wrong stop near a
+        line beats driving over one while the flag is making its mind up."""
+        if self.mode != "localize":
             return
         self.update_pose()
         if self.pose is None:

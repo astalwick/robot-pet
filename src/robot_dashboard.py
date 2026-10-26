@@ -791,8 +791,8 @@ class RobotDashboard(App):
         wheels_read_ok = wheels.get("read_ok", False)
         drive_state = drive_status_payload.get("state")
 
-        if drive_state in {"waiting_for_controller", "waiting_for_roboclaw"}:
-            label = drive_state.replace("_", " ")
+        if drive_state in {"waiting_for_controller", "waiting_for_roboclaw", "roboclaw_silent"}:
+            label = "motor board not answering" if drive_state == "roboclaw_silent" else drive_state.replace("_", " ")
             if motor_status != "live":
                 notes.append("drive telemetry stale")
             return label, notes

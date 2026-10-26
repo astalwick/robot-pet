@@ -51,6 +51,10 @@ from telemetry.socket_client import publish_message, subscribe
 
 log = setup_logging("robot-motion")
 
+# Idle telemetry reads that fail in a row before we treat the board as gone
+# (the wall switch was turned off) and go back to waiting for it.
+IDLE_READ_FAILURES_BEFORE_RECONNECT = 5
+
 DRIVE_COMMAND_STALE_SECONDS = 0.5
 # /nav_lock stays up this long after an intent ends or a stop lands, so Nav2
 # does not pick the wheels back up the instant the robot says "stop".
@@ -138,6 +142,10 @@ class MotionRunner:
         self._barrier_clearances: Clearances | None = None
         self._barrier_clearances_time: float | None = None
         self._sensors_lock = threading.Lock()
+        # robot-battery's motor rail flag from the hub. While it is on we keep the
+        # RoboClaw open so the first stick move drives, and so the lidar (which
+        # follows roboclaw_ready) only spins when the board really has power.
+        self._rail_on = False
 
         self._drive_lock = threading.Lock()
         # /cmd_vel, fed by motion_node.py; DRIVE_COMMAND_STALE_SECONDS is the deadman.
@@ -285,6 +293,9 @@ class MotionRunner:
             imu = sensors.get("imu") if isinstance(sensors, dict) else None
             yaw = imu.get("yaw_degrees") if isinstance(imu, dict) and imu.get("ok") else None
             yaw_time = sensors.get("time") if yaw is not None else None
+            rail_source = sources.get("motor_rail") or {}
+            motor_rail = snapshot.get("motor_rail") or {}
+            self._rail_on = rail_source.get("stale") is False and motor_rail.get("state") in ("on", "warning")
             with self._sensors_lock:
                 self._sensor_readings = readings
                 self._sensors_live = sensors_live
@@ -339,29 +350,39 @@ class MotionRunner:
         # Keep the last stop reason visible while reconnecting. This is the first
         # state that gets published after the motor loop exits.
         self._set_drive_state("waiting_for_roboclaw", self.stop_reason)
+        next_telemetry = self.clock()
         while not self.stop_requested:
             now = self.clock()
             self._service_stop_requests()
             self._service_intent_requests(now)
             self._fail_intent_if_roboclaw_wait_timed_out(now)
             drive = self._twist_drive_command()
-            self._publish_waiting_telemetry(drive, roboclaw_ready=False)
-            if drive is None and not self._motion_power_requested():
-                self.sleep(self.config.retry_interval)
+            if now >= next_telemetry:
+                self._publish_waiting_telemetry(drive, roboclaw_ready=False)
+                next_telemetry = now + self.config.telemetry_interval
+            if drive is None and not self._motion_power_requested() and not self._rail_on:
+                # Nothing wants the wheels and the rail is off. Poll at loop rate
+                # so a short stick push is not missed when the rail comes on.
+                self._set_drive_state("waiting_for_roboclaw", self.stop_reason)
+                self.sleep(self.config.loop_interval)
                 continue
             try:
                 motor = self.motor_factory()
             except Exception as exc:
-                log.warning("waiting for RoboClaw: %s", exc)
-                self.sleep(self.config.retry_interval)
-                continue
-            if self._set_wheel_speeds(motor, 0, 0):
-                log.info("RoboClaw ready")
-                self.intent_executor.reset_active_start(self.clock())
-                self._intent_wait_started_at = None
-                return motor
-            log.warning("initial zero-speed command was not acknowledged")
-            motor.cleanup()
+                problem = str(exc)
+            else:
+                if self._set_wheel_speeds(motor, 0, 0):
+                    log.info("RoboClaw ready")
+                    self.intent_executor.reset_active_start(self.clock())
+                    self._intent_wait_started_at = None
+                    return motor
+                motor.cleanup()
+                problem = "zero-speed command was not acknowledged"
+            # The rail flag says on but the board does not answer: the wall
+            # switch is off, or the board is still booting. Say so once.
+            if self.drive_state != "roboclaw_silent":
+                log.warning("motor board not answering (wall switch off?): %s", problem)
+                self._set_drive_state("roboclaw_silent", self.stop_reason)
             self.sleep(self.config.retry_interval)
         return None
 
@@ -428,9 +449,21 @@ class MotionRunner:
                     elif not idle_released and now - idle_started_at >= self.config.idle_release_delay:
                         self._release_idle(motor)
                         idle_released = True
-                    elif idle_released:
+                    elif idle_released and not self._rail_on:
+                        # the rail is off and nothing asks for the wheels: let the board go
                         self._publish_waiting_telemetry(None, roboclaw_ready=True)
                         break
+                    elif idle_released and now >= next_telemetry:
+                        # Idle with the rail on: keep the board open so the first stick
+                        # move drives, and keep reading it so the voltage stays watched
+                        # and a board that lost power (wall switch) shows up.
+                        self._publish_telemetry({}, WheelSpeedCommand(0, 0), motor, motor_max_qpps, self._last_safety.blocked, self._last_safety.reason)
+                        next_telemetry = now + self.config.telemetry_interval
+                        if self.consecutive_read_failures >= IDLE_READ_FAILURES_BEFORE_RECONNECT:
+                            stop_reason = "RoboClaw stopped answering while idle"
+                            intent_failure = "roboclaw_connection_lost"
+                            log.warning("%s", stop_reason)
+                            break
                     self._sleep_until_next_tick(cycle_started)
                     continue
 

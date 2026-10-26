@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """ROS lidar status node: watches the apt rplidar driver for the dashboard, and
-turns the lidar on and off with the motor rail.
+turns the lidar on and off with the motor board.
 
 The driver (robot-lidar.service) only speaks ROS, so this node listens to its
 /scan and /diagnostics, asks for its lifecycle state (active means the lidar is
 on), and twice a second sends a lidar_update to the hub, alongside whether the
 lidar and nav services are running.
 
-It also reads the hub's motor_rail state: when the rail comes on the lidar is
-activated, and a few seconds after the rail drops it is deactivated. Only the
-edges matter, so the dashboard's manual on/off holds until the rail next
-changes.
+It also reads robot-motion's drive status from the hub: when the RoboClaw
+starts answering (so the rail and the wall switch are on) the lidar is
+activated, and a few seconds after it stops answering the lidar is
+deactivated. The lidar is USB powered, so following the rail flag alone would
+spin it up with the wall switch off. Only the edges matter, so the dashboard's
+manual on/off holds until the board next changes.
 """
 
 import argparse
@@ -40,16 +42,16 @@ log = setup_logging("robot-lidar-status")
 LIDAR_DEVICE = "/dev/rplidar"
 
 # robot-battery already holds the rail 5 s after motion stops; this keeps a
-# bouncing rail from spinning the lidar up and down with it.
-RAIL_OFF_DEBOUNCE_SECONDS = 3.0
+# bouncing board from spinning the lidar up and down with it.
+BOARD_OFF_DEBOUNCE_SECONDS = 3.0
 
 
-def rail_is_on(snapshot: dict) -> bool:
-    source = (snapshot.get("sources") or {}).get("motor_rail") or {}
+def board_is_answering(snapshot: dict) -> bool:
+    source = (snapshot.get("sources") or {}).get("robot_motion") or {}
     if source.get("stale") is not False:
         return False
-    motor_rail = snapshot.get("motor_rail") or {}
-    return motor_rail.get("state") in ("on", "warning")
+    drive_status = snapshot.get("drive_status") or {}
+    return drive_status.get("roboclaw_ready") is True
 
 
 class LidarStatusNode(Node):
@@ -65,21 +67,21 @@ class LidarStatusNode(Node):
         self.diagnostics_time: float | None = None
         self.lidar_active = False
         # written by the hub thread, read by the timer
-        self.rail_on = False
-        # the rail state the timer last acted on; None until the first tick
-        self.rail_seen_on: bool | None = None
-        self.rail_off_since: float | None = None
+        self.board_on = False
+        # the board state the timer last acted on; None until the first tick
+        self.board_seen_on: bool | None = None
+        self.board_off_since: float | None = None
         self.driver_ready = False
         self.state_client = self.create_client(GetState, "/rplidar_node/get_state")
         self.change_state_client = self.create_client(ChangeState, "/rplidar_node/change_state")
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
         self.create_subscription(DiagnosticArray, "/diagnostics", self.on_diagnostics, 10)
         self.create_timer(0.5, self.publish_status)
-        threading.Thread(target=self.watch_rail, daemon=True).start()
+        threading.Thread(target=self.watch_board, daemon=True).start()
 
-    def watch_rail(self) -> None:
+    def watch_board(self) -> None:
         for snapshot in subscribe(self.subscribe_socket):
-            self.rail_on = rail_is_on(snapshot)
+            self.board_on = board_is_answering(snapshot)
 
     def on_scan(self, scan: LaserScan) -> None:
         self.scan_times.append(time.monotonic())
@@ -105,30 +107,30 @@ class LidarStatusNode(Node):
     def on_driver_state(self, future) -> None:
         self.lidar_active = future.result().current_state.label == "active"
 
-    def follow_rail(self) -> None:
+    def follow_board(self) -> None:
         if not self.state_client.service_is_ready():
             self.driver_ready = False
             return
-        # A driver that just (re)started comes up inactive, so apply the rail once.
+        # A driver that just (re)started comes up inactive, so apply the board state once.
         driver_appeared = not self.driver_ready
         self.driver_ready = True
-        rail_on = self.rail_on
+        board_on = self.board_on
         now = time.monotonic()
-        if rail_on:
-            self.rail_off_since = None
-            if driver_appeared or self.rail_seen_on is not True:
+        if board_on:
+            self.board_off_since = None
+            if driver_appeared or self.board_seen_on is not True:
                 self.set_lidar(True)
-        elif self.rail_seen_on is True:
-            self.rail_off_since = now
-        elif self.rail_off_since is not None and now - self.rail_off_since >= RAIL_OFF_DEBOUNCE_SECONDS:
-            self.rail_off_since = None
+        elif self.board_seen_on is True:
+            self.board_off_since = now
+        elif self.board_off_since is not None and now - self.board_off_since >= BOARD_OFF_DEBOUNCE_SECONDS:
+            self.board_off_since = None
             self.set_lidar(False)
-        self.rail_seen_on = rail_on
+        self.board_seen_on = board_on
 
     def set_lidar(self, on: bool) -> None:
         if self.lidar_active == on:
             return
-        log.info("motor rail %s: turning lidar %s", "on" if on else "off", "on" if on else "off")
+        log.info("motor board %s: turning lidar %s", "answering" if on else "gone", "on" if on else "off")
         request = ChangeState.Request()
         request.transition.id = Transition.TRANSITION_ACTIVATE if on else Transition.TRANSITION_DEACTIVATE
         self.change_state_client.call_async(request).add_done_callback(self.on_lidar_changed)
@@ -138,7 +140,7 @@ class LidarStatusNode(Node):
             log.warning("lidar lifecycle transition refused")
 
     def publish_status(self) -> None:
-        self.follow_rail()
+        self.follow_board()
         # The answer lands in on_driver_state, in time for the next update.
         if self.state_client.service_is_ready():
             self.state_client.call_async(GetState.Request()).add_done_callback(self.on_driver_state)

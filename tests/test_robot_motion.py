@@ -714,6 +714,127 @@ class RobotMotionTest(unittest.TestCase):
         self.assertIsNone(runner._wait_for_roboclaw())
         self.assertEqual(calls, 0)
 
+    def test_wait_for_roboclaw_polls_at_loop_rate_when_nothing_asks(self):
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=1.0),
+            motor_factory=FakeMotor,
+            sleep=sleep,
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+
+        self.assertIsNone(runner._wait_for_roboclaw())
+        # a stick push shorter than a second must not be missed
+        self.assertEqual(sleeps, [0.05])
+
+    def test_wait_for_roboclaw_connects_when_the_rail_is_on(self):
+        motor = FakeMotor()
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=lambda _seconds: runner.request_stop(),
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner._rail_on = True
+
+        self.assertIs(runner._wait_for_roboclaw(), motor)
+        self.assertEqual(motor.commands, [(0, 0)])
+
+    def test_wait_for_roboclaw_names_a_board_that_does_not_answer(self):
+        motor = FakeMotor()
+        motor.set_wheel_speeds = lambda _left, _right: False
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 2:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05, retry_interval=1.0),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=lambda: 0.0,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner._rail_on = True
+
+        self.assertIsNone(runner._wait_for_roboclaw())
+        # the rail flag is on but the wall switch is off: say so, and back off
+        self.assertEqual(runner.drive_state, "roboclaw_silent")
+        self.assertEqual(sleeps, [1.0, 1.0])
+
+    def test_idle_motor_loop_stays_open_while_the_rail_is_on(self):
+        motor = FakeMotor()
+        published = []
+        current_time = 0.0
+        sleeps = 0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time, sleeps
+            sleeps += 1
+            current_time += 0.1
+            if sleeps == 10:
+                runner._rail_on = False
+            if sleeps == 30:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda _socket, message: published.append(message) or True,
+        )
+        runner._rail_on = True
+
+        self.assertIsNone(runner._run_motor_loop(motor))
+
+        # idle for a second with the rail on: still connected, still reading the board
+        self.assertEqual(sleeps, 10)
+        self.assertIn("battery", motor.telemetry_reads)
+        self.assertTrue(all(message["drive_status"]["roboclaw_ready"] for message in published))
+        self.assertEqual(published[0]["motor_battery"]["pack_voltage"], 11.5)
+
+    def test_idle_motor_loop_lets_go_of_a_board_that_stops_answering(self):
+        motor = FakeMotor()
+        motor.read_wheel_speeds = lambda: (None, None)
+        motor.get_battery_voltage = lambda: None
+        motor.get_currents = lambda: None
+        current_time = 0.0
+
+        def clock():
+            return current_time
+
+        def sleep(_seconds):
+            nonlocal current_time
+            current_time += 0.1
+            if current_time > 10.0:
+                runner.request_stop()
+
+        runner = MotionRunner(
+            MotionConfig(loop_interval=0.05),
+            motor_factory=lambda: motor,
+            sleep=sleep,
+            clock=clock,
+            telemetry_publisher=lambda *_args: True,
+        )
+        runner._rail_on = True
+
+        self.assertEqual(runner._run_motor_loop(motor), "roboclaw_connection_lost")
+        self.assertEqual(runner.stop_reason, "RoboClaw stopped answering while idle")
+        self.assertLess(current_time, 10.0)
+
     def test_motion_intent_requests_power_before_waiting_for_roboclaw(self):
         motor = FakeMotor()
         published = []

@@ -81,19 +81,6 @@ class NavConfigTest(unittest.TestCase):
 
 
 class NavMathTest(unittest.TestCase):
-    def covariance(self, x, y, yaw):
-        values = [0.0] * 36
-        values[0], values[7], values[35] = x, y, yaw
-        return values
-
-    def test_is_localized_needs_tight_xy_and_yaw(self):
-        self.assertTrue(robot_nav.is_localized(self.covariance(0.1, 0.1, 0.05)))
-        self.assertFalse(robot_nav.is_localized(self.covariance(1.0, 0.1, 0.05)))
-        self.assertFalse(robot_nav.is_localized(self.covariance(0.1, 1.0, 0.05)))
-        self.assertFalse(robot_nav.is_localized(self.covariance(0.1, 0.1, 0.5)))
-        self.assertFalse(robot_nav.is_localized(None))
-        self.assertFalse(robot_nav.is_localized([0.0] * 9))
-
     def test_yaw_from_quaternion(self):
         self.assertAlmostEqual(robot_nav.yaw_from_quaternion(0, 0, 0, 1), 0.0)
         # 90 degrees about z
@@ -178,26 +165,18 @@ class ScanFitTest(unittest.TestCase):
         ranges[180:340] = [math.nan] * 160
         self.assertIsNone(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}))
 
-    def covariance(self, xy):
-        values = [0.0] * 36
-        values[0] = values[7] = xy
-        values[35] = 0.05
-        return values
-
     def test_localized_change_rule(self):
-        tight, spread = self.covariance(0.1), self.covariance(2.0)
-        # while localized: the covariance or a run of bad fits loses it, nothing else does
-        self.assertIsNone(robot_nav.localized_change(True, tight, 0.8, 0))
-        self.assertIsNone(robot_nav.localized_change(True, None, None, 0))
-        self.assertIsNone(robot_nav.localized_change(True, tight, 0.1, robot_nav.SCAN_FIT_LOST_TICKS - 1))
-        self.assertEqual(robot_nav.localized_change(True, tight, 0.1, robot_nav.SCAN_FIT_LOST_TICKS), (False, "the scan does not match the map here"))
-        self.assertEqual(robot_nav.localized_change(True, spread, 0.8, 0), (False, "AMCL spread out"))
-        # while lost: a tight covariance finds it unless the scan says otherwise
-        self.assertEqual(robot_nav.localized_change(False, tight, None, 0), (True, "AMCL converged and the scan fits"))
-        self.assertEqual(robot_nav.localized_change(False, tight, robot_nav.SCAN_FIT_FOUND, 0), (True, "AMCL converged and the scan fits"))
-        self.assertIsNone(robot_nav.localized_change(False, tight, 0.3, 0))
-        self.assertIsNone(robot_nav.localized_change(False, spread, 0.9, 0))
-        self.assertIsNone(robot_nav.localized_change(False, None, 0.9, 0))
+        lost_run, found_run = robot_nav.SCAN_FIT_LOST_TICKS, robot_nav.SCAN_FIT_FOUND_TICKS
+        # while localized: only a long enough run of bad fits loses it
+        self.assertIsNone(robot_nav.localized_change(True, 0, 0))
+        self.assertIsNone(robot_nav.localized_change(True, lost_run - 1, 0))
+        self.assertIsNone(robot_nav.localized_change(True, 0, found_run))
+        self.assertEqual(robot_nav.localized_change(True, lost_run, 0), (False, "the scan does not match the map here"))
+        # while lost: only a run of good fits finds it
+        self.assertIsNone(robot_nav.localized_change(False, 0, 0))
+        self.assertIsNone(robot_nav.localized_change(False, 0, found_run - 1))
+        self.assertIsNone(robot_nav.localized_change(False, lost_run, 0))
+        self.assertEqual(robot_nav.localized_change(False, 0, found_run), (True, "the scan fits the map here"))
 
 
 class RenderMapPngTest(unittest.TestCase):

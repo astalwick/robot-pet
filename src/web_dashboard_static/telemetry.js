@@ -138,6 +138,7 @@ function driveStatus(motorStale, systemStale, controller, wheels, battery, pi, d
   if (state === 'waiting_for_controller' || state === 'waiting_for_roboclaw') {
     return { label: state.replaceAll('_', ' '), cls: 'warn' };
   }
+  if (state === 'roboclaw_silent') return { label: 'motor board not answering (wall switch?)', cls: 'err' };
   if (motorStale) return { label: 'hold', cls: 'err' };
   if (state === 'motor_command_failed' || state === 'controller_lost') return { label: 'hold', cls: 'err' };
   if (batteryStatus === 'critical' || batteryStatus === 'unknown') return { label: 'hold', cls: 'err' };

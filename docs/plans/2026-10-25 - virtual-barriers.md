@@ -62,3 +62,35 @@ Follows [2026-10-25 - lidar-safety-and-nav2.md](2026-10-25%20-%20lidar-safety-an
   text match on `nav2.yaml`, the dashboard whitelist, `nav_update`.
 - Not done: a robot already standing inside a band cannot plan out (the
   controller sees lethal cells under its footprint). Drive it out by gamepad.
+
+## Second layer: the gamepad stops at barriers too
+
+Barriers only existed inside Nav2; the gamepad goes `/cmd_vel_teleop` ->
+twist_mux -> robot-motion and never meets the costmap. Arlen: "if we are in
+localize, and if we know we're coming up to a barrier, we should prevent
+crossing the barrier."
+
+- **The bridge knows the pose and the barriers, so it does the geometry.**
+  `robot_nav.barrier_clearances(pose, barriers)` is the barrier twin of
+  `scan_clearances`: each segment goes into the robot frame, is clipped to the
+  body's width, and the nearest point ahead of the front edge / behind the
+  rear edge becomes the forward / rear clearance (inf when none). Ten times a
+  second, while in localize mode and localized, the bridge publishes the pair
+  as a `Float32MultiArray` on `/barrier_clearance`.
+- **robot-motion gates on it like the lidar.** `motion_node.py` subscribes
+  and hands `Clearances` to the runner; `evaluate_safety` blocks forward below
+  `BARRIER_STOP_METERS` (`barrier_ahead`) and reverse (`barrier_behind`),
+  turning in place stays free. The stop distance is 0.2 m, inside the 0.3 m
+  keepout band: Nav2 keeps the whole footprint out of the band, so its own
+  trips never trip the gate, while the gamepad stops with the front edge
+  20 cm short of the line (AMCL is good to 10-20 cm; the cliff ToFs stay
+  the first layer).
+- **No pose, no rule.** The bridge publishes nothing in mapping mode or before
+  localization, and a clearance older than `BARRIER_STALE_SECONDS` (1 s) is
+  ignored, the same shape as the lidar's staleness rule. Nothing to switch
+  off, nothing to configure.
+- Review: a new ROS topic rather than a hub message (10 Hz would be noise for
+  every hub subscriber, and the motion node already takes `/scan` this way);
+  the geometry is a pure function in `robot_nav` next to `distance_to_segment`
+  with numpy-free math so the Mac tests cover it; the second copy of the
+  lidar block in `evaluate_safety` is a copy on purpose (two uses, not three).

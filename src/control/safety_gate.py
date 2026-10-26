@@ -18,6 +18,12 @@ from robot_model import (
 LIDAR_STALE_SECONDS = 1.0
 # Lidar returns this far outside the body's width still count as "in the way".
 CLEARANCE_SIDE_MARGIN_METERS = 0.03
+# Barrier clearances come from the nav bridge (robot_nav.barrier_clearances)
+# only while it knows the map pose, so they lapse on their own otherwise.
+BARRIER_STALE_SECONDS = 1.0
+# Stop with the body's edge this far from a barrier line. Inside Nav2's 0.3 m
+# keepout band, so Nav2 skirting a band never trips this gate.
+BARRIER_STOP_METERS = 0.2
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,8 @@ def evaluate_safety(
     sensors_live: bool,
     clearances: Clearances | None = None,
     clearances_age: float | None = None,
+    barriers: Clearances | None = None,
+    barriers_age: float | None = None,
 ) -> SafetyState:
     if not config.safety.enabled:
         return SafetyState(blocked=False)
@@ -95,6 +103,11 @@ def evaluate_safety(
             reason = "lidar_forward_obstacle"
         if clearances.rear_m is not None and clearances.rear_m < stop_below_m:
             reverse_reason = "lidar_rear_obstacle"
+    if barriers is not None and barriers_age <= BARRIER_STALE_SECONDS:
+        if reason is None and barriers.forward_m is not None and barriers.forward_m < BARRIER_STOP_METERS:
+            reason = "barrier_ahead"
+        if reverse_reason is None and barriers.rear_m is not None and barriers.rear_m < BARRIER_STOP_METERS:
+            reverse_reason = "barrier_behind"
 
     return SafetyState(
         blocked=reason is not None,

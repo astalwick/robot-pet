@@ -182,6 +182,37 @@ class SafetyGateTest(unittest.TestCase):
         clear = evaluate_safety(FLOOR_OK, LIDAR_CONFIG, sensors_live=True, clearances=Clearances(None, None), clearances_age=0.1)
         self.assertEqual(clear, SafetyState(blocked=False))
 
+    def test_barrier_ahead_blocks_forward_only_inside_the_stop_distance(self):
+        state = evaluate_safety(FLOOR_OK, LIDAR_CONFIG, sensors_live=True, barriers=Clearances(0.15, 1.0), barriers_age=0.1)
+        self.assertTrue(state.blocked)
+        self.assertEqual(state.reason, "barrier_ahead")
+        self.assertFalse(state.reverse_blocked)
+
+        room = evaluate_safety(FLOOR_OK, LIDAR_CONFIG, sensors_live=True, barriers=Clearances(0.25, 1.0), barriers_age=0.1)
+        self.assertEqual(room, SafetyState(blocked=False))
+
+    def test_barrier_behind_blocks_reverse_only(self):
+        state = evaluate_safety(FLOOR_OK, LIDAR_CONFIG, sensors_live=True, barriers=Clearances(None, 0.1), barriers_age=0.1)
+        self.assertFalse(state.blocked)
+        self.assertEqual(state.reverse_reason, "barrier_behind")
+
+    def test_barrier_rule_lapses_without_a_fresh_pose(self):
+        stale = evaluate_safety(FLOOR_OK, LIDAR_CONFIG, sensors_live=True, barriers=Clearances(0.0, 0.0), barriers_age=1.5)
+        self.assertEqual(stale, SafetyState(blocked=False))
+
+    def test_lidar_reasons_win_over_barrier_reasons(self):
+        state = evaluate_safety(
+            FLOOR_OK,
+            LIDAR_CONFIG,
+            sensors_live=True,
+            clearances=Clearances(0.10, 0.10),
+            clearances_age=0.2,
+            barriers=Clearances(0.0, 0.0),
+            barriers_age=0.1,
+        )
+        self.assertEqual(state.reason, "lidar_forward_obstacle")
+        self.assertEqual(state.reverse_reason, "lidar_rear_obstacle")
+
     def test_tof_trip_wins_the_forward_reason_over_the_lidar(self):
         config = SensorsConfig(
             safety=SafetyConfig(enabled=True, forward_stop_below_mm=150),

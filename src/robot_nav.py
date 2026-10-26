@@ -30,6 +30,7 @@ from typing import Any, Callable
 import numpy as np
 from PIL import Image
 
+from robot_model import FOOTPRINT_FRONT_X_METERS, FOOTPRINT_HALF_WIDTH_METERS, FOOTPRINT_REAR_X_METERS
 from telemetry.socket_client import send_voice_command
 
 DEFAULT_NAV_CONFIG_PATH = "/home/pi/.config/robot-pet/nav.json"
@@ -206,6 +207,40 @@ def distance_to_segment(x, y, barrier: dict[str, float]):
     length_sq = dx * dx + dy * dy
     along = 0.0 if length_sq == 0 else np.clip(((x - barrier["x1"]) * dx + (y - barrier["y1"]) * dy) / length_sq, 0.0, 1.0)
     return np.hypot(x - (barrier["x1"] + along * dx), y - (barrier["y1"] + along * dy))
+
+
+def barrier_clearances(pose: dict[str, float], barriers: list[dict[str, float]]) -> tuple[float, float]:
+    """How far the body's front and rear edges are from the nearest barrier
+    straight ahead and straight behind, in metres (inf: none in the way).
+
+    The barrier twin of safety_gate.scan_clearances, so robot-motion can stop
+    short of a line the way it stops short of a lidar return. Each segment
+    goes into the robot frame and is clipped to the body's width; a segment
+    that cuts through the footprint counts on whichever ends it pokes out of.
+    """
+    cos_yaw, sin_yaw = math.cos(pose["yaw"]), math.sin(pose["yaw"])
+    forward_m = rear_m = math.inf
+    for barrier in barriers:
+        dx1, dy1 = barrier["x1"] - pose["x"], barrier["y1"] - pose["y"]
+        dx2, dy2 = barrier["x2"] - pose["x"], barrier["y2"] - pose["y"]
+        ax, ay = dx1 * cos_yaw + dy1 * sin_yaw, dy1 * cos_yaw - dx1 * sin_yaw
+        bx, by = dx2 * cos_yaw + dy2 * sin_yaw, dy2 * cos_yaw - dx2 * sin_yaw
+        # the part of the segment (as a fraction 0..1 of it) inside the body's width
+        if ay == by:
+            if abs(ay) > FOOTPRINT_HALF_WIDTH_METERS:
+                continue
+            start, end = 0.0, 1.0
+        else:
+            start, end = sorted(((-FOOTPRINT_HALF_WIDTH_METERS - ay) / (by - ay), (FOOTPRINT_HALF_WIDTH_METERS - ay) / (by - ay)))
+            start, end = max(start, 0.0), min(end, 1.0)
+            if start > end:
+                continue
+        nearest_x, farthest_x = sorted((ax + start * (bx - ax), ax + end * (bx - ax)))
+        if farthest_x > FOOTPRINT_FRONT_X_METERS:
+            forward_m = min(forward_m, max(nearest_x, FOOTPRINT_FRONT_X_METERS) - FOOTPRINT_FRONT_X_METERS)
+        if nearest_x < FOOTPRINT_REAR_X_METERS:
+            rear_m = min(rear_m, FOOTPRINT_REAR_X_METERS - min(farthest_x, FOOTPRINT_REAR_X_METERS))
+    return forward_m, rear_m
 
 
 def valid_barrier(barrier: Any) -> bool:

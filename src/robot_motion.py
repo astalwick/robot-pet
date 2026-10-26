@@ -134,6 +134,9 @@ class MotionRunner:
         # /scan reduced by motion_node.py; the lidar idles with the rail, so age matters.
         self._lidar_clearances: Clearances | None = None
         self._lidar_clearances_time: float | None = None
+        # /barrier_clearance from the nav bridge; it only arrives while the map pose is known.
+        self._barrier_clearances: Clearances | None = None
+        self._barrier_clearances_time: float | None = None
         self._sensors_lock = threading.Lock()
 
         self._drive_lock = threading.Lock()
@@ -260,6 +263,12 @@ class MotionRunner:
         with self._sensors_lock:
             self._lidar_clearances = clearances
             self._lidar_clearances_time = self.clock()
+
+    def on_barrier_clearances(self, clearances: Clearances) -> None:
+        """Called by motion_node.py with the nav bridge's room to the nearest barrier."""
+        with self._sensors_lock:
+            self._barrier_clearances = clearances
+            self._barrier_clearances_time = self.clock()
 
     def _telemetry_subscribe_loop(self) -> None:
         for snapshot in subscribe(self.config.telemetry_subscribe_socket, reconnect_interval=1.0):
@@ -435,12 +444,16 @@ class MotionRunner:
                 sensors_live = self._sensors_live
                 clearances = self._lidar_clearances
                 clearances_age = now - self._lidar_clearances_time if clearances is not None else None
+                barriers = self._barrier_clearances
+                barriers_age = now - self._barrier_clearances_time if barriers is not None else None
             safety = evaluate_safety(
                 readings,
                 self.sensors_config,
                 sensors_live=sensors_live,
                 clearances=clearances,
                 clearances_age=clearances_age,
+                barriers=barriers,
+                barriers_age=barriers_age,
             )
             # the reason that applies to the direction being commanded, if any
             blocked_by = blocking_reason(left_qpps, right_qpps, safety)

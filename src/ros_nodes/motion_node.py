@@ -17,11 +17,11 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, LaserScan
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 from tf2_ros import TransformBroadcaster
 
 from control.commands import MotionCommand
-from control.safety_gate import scan_clearances
+from control.safety_gate import Clearances, scan_clearances
 from lib.log import setup_logging
 from robot_motion import MotionRunner, build_parser, build_runner
 from ros_nodes.ros_messages import battery_state_fields, odometry_fields
@@ -41,6 +41,8 @@ class MotionNode(Node):
         self.runner: MotionRunner | None = None
         self.create_subscription(Twist, "/cmd_vel", self.on_cmd_vel, 10)
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
+        # [forward_m, rear_m] to the nearest barrier, from the nav bridge while it knows the map pose
+        self.create_subscription(Float32MultiArray, "/barrier_clearance", self.on_barrier_clearance, 10)
         self.odom_publisher = self.create_publisher(Odometry, "/odom", 10)
         self.battery_publisher = self.create_publisher(BatteryState, "/battery/motor", 10)
         # twist_mux lock: true while an intent drives, so Nav2 cannot talk over it
@@ -54,6 +56,12 @@ class MotionNode(Node):
     def on_scan(self, scan: LaserScan) -> None:
         self.runner.on_scan_clearances(
             scan_clearances(scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max)
+        )
+
+    def on_barrier_clearance(self, message: Float32MultiArray) -> None:
+        forward_m, rear_m = message.data
+        self.runner.on_barrier_clearances(
+            Clearances(None if forward_m == float("inf") else forward_m, None if rear_m == float("inf") else rear_m)
         )
 
     def publish_odometry(self) -> None:

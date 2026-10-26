@@ -15,6 +15,10 @@ steps down to the dining room). They live in barriers.json per map; this node
 draws the current map's as a keepout mask (robot_nav.render_keepout_mask) and
 hands it to Nav2's filter_mask_server with load_map, so a change applies to the
 next plan without a restart. nav.launch.py reads the same file at start.
+The gamepad never meets Nav2, so while the map pose is known this node also
+publishes /barrier_clearance, the body's room to the nearest barrier ahead and
+behind, ten times a second; robot-motion's safety gate stops short of a line
+the way it stops short of a lidar return.
 
 Localize mode has to tell AMCL where the robot is. Whenever AMCL becomes
 active (boot, mode switch, a redeploy of robot-nav) the bridge either sends
@@ -58,7 +62,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32MultiArray
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -91,6 +95,8 @@ NAV2_MANAGE_RETRY_SECONDS = 15.0
 # every map -> base_link lookup fails and planner_server logs an error a second
 NAV2_PAUSE_SECONDS = 5.0
 SERVICE_WAIT_SECONDS = 10.0
+# the safety gate stops 0.2 m short of a barrier; at gamepad speed that is a 4 cm step
+BARRIER_CLEARANCE_HZ = 10
 # The covariance AMCL starts from when we hand it a remembered pose.
 INITIAL_POSE_XY_VARIANCE = 0.25
 INITIAL_POSE_YAW_VARIANCE = 0.07
@@ -154,6 +160,8 @@ class NavNode(Node):
         self.create_subscription(Bool, "/nav_lock", self.on_nav_lock, 10)
         self.create_subscription(Twist, "/cmd_vel_teleop", self.on_teleop, 10)
         self.create_timer(0.5, self.tick)
+        self.barrier_clearance_publisher = self.create_publisher(Float32MultiArray, "/barrier_clearance", 10)
+        self.create_timer(1 / BARRIER_CLEARANCE_HZ, self.publish_barrier_clearance)
         self.server = robot_nav.NavSocketServer(args.nav_socket, self.handle_request)
         self.server.start()
         if self.mode == "localize":
@@ -532,6 +540,18 @@ class NavNode(Node):
             request = LoadMap.Request()
             request.map_url = f"{stem}.yaml"
             self.filter_mask_client.call_async(request).add_done_callback(self.on_keepout_loaded)
+
+    def publish_barrier_clearance(self) -> None:
+        """Tell robot-motion how much room the body has to the nearest barrier,
+        while the map pose is known. Nothing is sent otherwise (mapping mode,
+        not yet localized), and the safety gate lets a stale value lapse."""
+        if self.mode != "localize" or not self.localized:
+            return
+        self.update_pose()
+        if self.pose is None:
+            return
+        forward_m, rear_m = robot_nav.barrier_clearances(self.pose, self.barriers.get(self.map_name, []))
+        self.barrier_clearance_publisher.publish(Float32MultiArray(data=[forward_m, rear_m]))
 
     def on_keepout_loaded(self, future) -> None:
         if future.result().result != LoadMap.Response.RESULT_SUCCESS:

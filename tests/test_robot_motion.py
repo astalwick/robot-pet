@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from config.sensors import SafetyConfig, SensorEntry, SensorsConfig
 from control.commands import MotionCommand, WheelSpeedCommand
 from control.differential_drive import wheel_qpps_to_body_twist
-from control.safety_gate import SafetyState, blocking_reason
+from control.safety_gate import Clearances, SafetyState, blocking_reason
 from robot_model import TRACK_WIDTH_METERS
 from robot_motion import ENCODER_COUNTS_PER_METER, EncoderMove, MotionConfig, MotionRunner
 
@@ -97,6 +97,19 @@ class RobotMotionTest(unittest.TestCase):
         runner._run_motor_loop(motor)
 
         self.assertIn((0, 0), motor.commands)
+
+    def test_barrier_clearance_from_the_nav_bridge_blocks_forward(self):
+        motor = FakeMotor()
+        runner = self._runner(motor)
+        runner.sensors_config = SensorsConfig(safety=SafetyConfig(enabled=True))
+        runner._sensors_live = True
+        runner.on_barrier_clearances(Clearances(0.1, None))
+        drive_wheels(runner, 250, 250)
+
+        runner._run_motor_loop(motor)
+
+        self.assertIn((0, 0), motor.commands)
+        self.assertEqual(runner._last_safety.reason, "barrier_ahead")
 
     def test_safety_disabled_allows_forward(self):
         motor = FakeMotor()

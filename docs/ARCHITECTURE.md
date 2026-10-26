@@ -248,5 +248,9 @@ with a second `map_server` (`filter_mask_server`) and
 `costmap_filter_info_server`, and both costmaps carry a `keepout_filter`.
 After a barrier is drawn or deleted the bridge re-renders the mask and calls
 `/filter_mask_server/load_map`, so the next plan sees it without a restart.
+The gamepad never meets Nav2, so the bridge also publishes `/barrier_clearance`
+(the body's room to the nearest barrier ahead and behind, 10 Hz, only while
+localized) and `robot-motion`'s safety gate stops 0.2 m short of a line the
+way it stops short of a lidar return. Not localized: no message, no rule.
 A robot already inside a band cannot plan its way out; drive it out by gamepad.
 See [plans/2026-10-25 - virtual-barriers.md](plans/2026-10-25%20-%20virtual-barriers.md).

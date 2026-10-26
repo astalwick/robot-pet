@@ -300,8 +300,8 @@ NAVIGATE_TO_TOOL = {
         "Drive to a saved place on the current map by name, planning around obstacles "
         "(for example 'kitchen'). Returns right away while the robot is still driving; call "
         "check_navigation to wait for it to arrive. An unknown place returns the places that "
-        "exist. A new navigate_to replaces the goal in progress. Fails if the robot does not "
-        "know where it is yet."
+        "exist. A new navigate_to replaces the goal in progress. If the robot does not know "
+        "where it is yet, it first spins in place to find itself, then goes."
     ),
     "parameters": {
         "type": "object",

@@ -130,6 +130,76 @@ class NavMathTest(unittest.TestCase):
         self.assertFalse(robot_nav.valid_place_name("kitchen!"))
 
 
+class ScanFitTest(unittest.TestCase):
+    # A 5 m square room at 5 cm: the outer ring of cells is wall, the rest free.
+    ROOM = {"width": 100, "height": 100, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}
+
+    def room(self):
+        grid = np.zeros((100, 100), dtype=np.int16)
+        grid[0, :] = grid[-1, :] = grid[:, 0] = grid[:, -1] = 100
+        return grid.ravel().tolist()
+
+    def ray_cast(self, x, y, yaw, beams=360):
+        """Ranges a lidar at (x, y, yaw) sees in the room: the inner wall faces
+        are at 0.05 and 4.95 m."""
+        ranges = []
+        for beam in range(beams):
+            angle = yaw + math.radians(beam)
+            hits = []
+            if math.cos(angle) > 1e-9:
+                hits.append((4.95 - x) / math.cos(angle))
+            elif math.cos(angle) < -1e-9:
+                hits.append((0.05 - x) / math.cos(angle))
+            if math.sin(angle) > 1e-9:
+                hits.append((4.95 - y) / math.sin(angle))
+            elif math.sin(angle) < -1e-9:
+                hits.append((0.05 - y) / math.sin(angle))
+            ranges.append(min(hits))
+        return ranges
+
+    def fit(self, ranges, laser_pose):
+        return robot_nav.scan_fit(self.room(), self.ROOM, laser_pose, ranges, 0.0, math.radians(1), 0.15, 12.0)
+
+    def test_the_scan_fits_from_the_true_pose(self):
+        ranges = self.ray_cast(2.0, 1.5, 0.3)
+        self.assertGreater(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": 0.3}), 0.95)
+
+    def test_the_scan_does_not_fit_from_the_wrong_pose(self):
+        ranges = self.ray_cast(2.0, 1.5, 0.0)
+        # believed to face 45 degrees off: the room's outline lands across the floor and off the map
+        self.assertLess(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": math.radians(45)}), robot_nav.SCAN_FIT_LOST)
+        # a metre off: only the beams along the walls still match
+        self.assertLess(self.fit(ranges, {"x": 3.0, "y": 1.5, "yaw": 0.0}), 0.6)
+
+    def test_invalid_beams_do_not_count_and_too_few_is_no_opinion(self):
+        ranges = self.ray_cast(2.5, 2.5, 0.0)
+        ranges[:180] = [math.inf] * 90 + [0.1] * 90  # out of range and under range_min
+        self.assertGreater(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}), 0.95)
+        ranges[180:340] = [math.nan] * 160
+        self.assertIsNone(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}))
+
+    def covariance(self, xy):
+        values = [0.0] * 36
+        values[0] = values[7] = xy
+        values[35] = 0.05
+        return values
+
+    def test_localized_change_rule(self):
+        tight, spread = self.covariance(0.1), self.covariance(2.0)
+        # while localized: the covariance or a run of bad fits loses it, nothing else does
+        self.assertIsNone(robot_nav.localized_change(True, tight, 0.8, 0))
+        self.assertIsNone(robot_nav.localized_change(True, None, None, 0))
+        self.assertIsNone(robot_nav.localized_change(True, tight, 0.1, robot_nav.SCAN_FIT_LOST_TICKS - 1))
+        self.assertEqual(robot_nav.localized_change(True, tight, 0.1, robot_nav.SCAN_FIT_LOST_TICKS), (False, "the scan does not match the map here"))
+        self.assertEqual(robot_nav.localized_change(True, spread, 0.8, 0), (False, "AMCL spread out"))
+        # while lost: a tight covariance finds it unless the scan says otherwise
+        self.assertEqual(robot_nav.localized_change(False, tight, None, 0), (True, "AMCL converged and the scan fits"))
+        self.assertEqual(robot_nav.localized_change(False, tight, robot_nav.SCAN_FIT_FOUND, 0), (True, "AMCL converged and the scan fits"))
+        self.assertIsNone(robot_nav.localized_change(False, tight, 0.3, 0))
+        self.assertIsNone(robot_nav.localized_change(False, spread, 0.9, 0))
+        self.assertIsNone(robot_nav.localized_change(False, None, 0.9, 0))
+
+
 class RenderMapPngTest(unittest.TestCase):
     def test_png_is_flipped_with_free_white_occupied_black_unknown_gray(self):
         # 3 wide, 2 tall. Grid row 0 is the bottom of the map.

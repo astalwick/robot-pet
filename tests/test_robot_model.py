@@ -44,6 +44,9 @@ class RobotModelTest(unittest.TestCase):
         self.assertEqual(nav2.count('"/keepout_mask"'), 2)
         # Our motion node speaks plain Twist; both cmd_vel publishers must agree.
         self.assertEqual(nav2.count("enable_stamped_cmd_vel: false"), 2)
+        # AMCL recovers from a wrong pose on its own while driving (0.0 turns that off)
+        self.assertIn("recovery_alpha_fast: 0.1", nav2)
+        self.assertIn("recovery_alpha_slow: 0.001", nav2)
         self.assertIn("/nav_lock", (CONFIG_DIR / "twist_mux.yaml").read_text())
 
     def test_cliff_sensors_pitch_downward(self):

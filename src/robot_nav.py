@@ -49,6 +49,22 @@ KEEPOUT_RESOLUTION_METERS = 0.05
 LOCALIZED_XY_VARIANCE = 0.25
 LOCALIZED_YAW_VARIANCE = 0.2
 
+# Is the robot where it thinks it is? scan_fit is the share of lidar beams
+# whose end points land within SCAN_FIT_CELLS of a wall the map knows about.
+# A robot at its true pose scores high; one carried somewhere else scores
+# like random. The covariance alone cannot tell: AMCL grades its particles on
+# a curve, so a cloud that matches nothing still has a confident best guess.
+SCAN_FIT_CELLS = 3
+SCAN_FIT_MIN_BEAMS = 30
+# map_server marks walls 100, free 0 and unknown -1
+OCCUPIED_THRESHOLD = 50
+# Under SCAN_FIT_LOST for SCAN_FIT_LOST_TICKS ticks (0.5 s each) in a row
+# means lost; a tight covariance counts as found only with at least
+# SCAN_FIT_FOUND. Guesses until the dashboard shows real floor numbers.
+SCAN_FIT_LOST = 0.25
+SCAN_FIT_LOST_TICKS = 4
+SCAN_FIT_FOUND = 0.4
+
 # Map names become file names; place names are spoken, so they may have spaces.
 MAP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 PLACE_NAME_RE = re.compile(r"[a-z0-9][a-z0-9 _-]{0,31}")
@@ -133,6 +149,47 @@ def is_localized(covariance: list[float] | None) -> bool:
     if covariance is None or len(covariance) != 36:
         return False
     return covariance[0] < LOCALIZED_XY_VARIANCE and covariance[7] < LOCALIZED_XY_VARIANCE and covariance[35] < LOCALIZED_YAW_VARIANCE
+
+
+def localized_change(localized: bool, covariance: list[float] | None, fit: float | None, low_fit_ticks: int) -> tuple[bool, str] | None:
+    """The per-tick localized rule: (new value, why) when it changes, else
+    None. A missing covariance (AMCL has not updated yet) or a missing fit (no
+    fresh scan, no map pose) is no opinion, never a vote for lost."""
+    if localized:
+        if covariance is not None and not is_localized(covariance):
+            return False, "AMCL spread out"
+        if low_fit_ticks >= SCAN_FIT_LOST_TICKS:
+            return False, "the scan does not match the map here"
+        return None
+    if is_localized(covariance) and (fit is None or fit >= SCAN_FIT_FOUND):
+        return True, "AMCL converged and the scan fits"
+    return None
+
+
+def scan_fit(
+    data, map_info: dict[str, Any], laser_pose: dict[str, float], ranges, angle_min: float, angle_increment: float, range_min: float, range_max: float
+) -> float | None:
+    """The share (0..1) of a lidar scan's beams that end within SCAN_FIT_CELLS
+    of an occupied map cell, given the lidar's pose in the map frame. None when
+    too few beams are valid to say anything. Beams that end off the map miss."""
+    ranges = np.asarray(ranges, dtype=np.float64)
+    valid = np.isfinite(ranges) & (ranges >= range_min) & (ranges <= range_max)
+    if valid.sum() < SCAN_FIT_MIN_BEAMS:
+        return None
+    angles = laser_pose["yaw"] + angle_min + angle_increment * np.flatnonzero(valid)
+    ranges = ranges[valid]
+    columns = np.floor((laser_pose["x"] + ranges * np.cos(angles) - map_info["origin_x"]) / map_info["resolution"]).astype(int)
+    rows = np.floor((laser_pose["y"] + ranges * np.sin(angles) - map_info["origin_y"]) / map_info["resolution"]).astype(int)
+    width, height = map_info["width"], map_info["height"]
+    grid = np.asarray(data, dtype=np.int16).reshape(height, width)
+    # near_wall: occupied cells grown by SCAN_FIT_CELLS in every direction
+    occupied = np.pad(grid >= OCCUPIED_THRESHOLD, SCAN_FIT_CELLS)
+    near_wall = np.zeros((height, width), dtype=bool)
+    for shift_y in range(2 * SCAN_FIT_CELLS + 1):
+        for shift_x in range(2 * SCAN_FIT_CELLS + 1):
+            near_wall |= occupied[shift_y : shift_y + height, shift_x : shift_x + width]
+    on_map = (columns >= 0) & (columns < width) & (rows >= 0) & (rows < height)
+    return float(near_wall[rows[on_map], columns[on_map]].sum() / len(ranges))
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:

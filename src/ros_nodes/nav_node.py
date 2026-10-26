@@ -26,8 +26,16 @@ the pose it remembered in /run/robot-pet/nav-pose.json (same map, robot has
 not been moved since) or relocalizes: asks for the motor rail, waits for
 scans, and for each saved map loads it, scatters the particles and spins the
 robot with a `turn` intent, twice if the first spin is not enough. The first
-map whose AMCL covariance gets tight wins. Saving a map goes straight to localize mode on that map with
-slam's last pose, so no spin is needed.
+map whose AMCL covariance gets tight wins. Saving a map goes straight to
+localize mode on that map with slam's last pose, so no spin is needed.
+
+A tight covariance is not proof: a robot carried to another room keeps a
+confident wrong pose, because AMCL only grades its particles against each
+other. So each tick the bridge also scores how well the latest scan fits the
+map from the pose TF gives the lidar (robot_nav.scan_fit) and reads both
+through one rule (robot_nav.localized_change): a run of bad fits means lost,
+the remembered pose is dropped and a trip in progress is cancelled. A
+navigate_to on a robot that is not localized relocalizes first, then goes.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
@@ -68,6 +76,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 import robot_nav
 from control.motion_intent import request_motion_intent
+from control.odometry import normalize_angle
 from lib.log import setup_logging
 from telemetry.messages import nav_update
 from telemetry.paths import (
@@ -105,6 +114,9 @@ RELOCALIZE_SPINS = 2
 # does not read as "not localized".
 INITIAL_POSE_XY_VARIANCE = 0.1
 INITIAL_POSE_YAW_VARIANCE = 0.07
+# No scan fit on a tick where the lidar turned more than this since the last:
+# a scan taken while spinning at gamepad speed is smeared by several degrees.
+SCAN_FIT_MAX_TURN_RADIANS = 0.2
 
 
 class NavNode(Node):
@@ -121,11 +133,17 @@ class NavNode(Node):
         # best known pose in the map frame: TF when it resolves, else remembered
         self.pose: dict[str, float] | None = None
         self.remembered_pose_written: dict | None = None
+        # map_info describes the grid the dashboard has (latest_map plus a serial)
         self.map_info: dict | None = None
         self.map_serial = 0
         self.latest_map: OccupancyGrid | None = None
+        self.map_rendered: OccupancyGrid | None = None
         self.map_png_time = 0.0
+        self.latest_scan: LaserScan | None = None
         self.last_scan_time: float | None = None
+        self.scan_fit: float | None = None
+        self.low_fit_ticks = 0
+        self.scan_fit_yaw: float | None = None
         self.amcl_covariance: list[float] | None = None
         # the AMCL lifecycle state the timer last saw; None until the first tick
         self.amcl_active: bool | None = None
@@ -136,8 +154,10 @@ class NavNode(Node):
         self.goal: dict | None = None
         self.goal_serial = 0
         self.goal_handle = None
-        # a goal waiting for the lidar and Nav2: (serial, x, y, yaw, asked_at)
+        # a goal waiting for the lidar and Nav2: (serial, x, y, yaw, asked_at),
+        # and the serial of the goal a relocalize was already run for
         self.goal_request: tuple | None = None
+        self.goal_relocalized_serial = 0
         self.nav_lock = False
         # bt_navigator's lifecycle label (None while it is not up), and our
         # last lifecycle request: the label it was sent from, when, and its
@@ -179,17 +199,9 @@ class NavNode(Node):
 
     def on_amcl_pose(self, message: PoseWithCovarianceStamped) -> None:
         self.amcl_covariance = list(message.pose.covariance)
-        # AMCL keeps estimating after a relocalize gives up or a remembered pose
-        # turns out wrong: a drive with the gamepad can converge it, or lose it.
-        # While a relocalize runs, that thread owns the flag.
-        if self.mode != "localize" or self.activity is not None:
-            return
-        localized = robot_nav.is_localized(self.amcl_covariance)
-        if localized != self.localized:
-            log.info("AMCL %s", "converged: localized" if localized else "spread out: no longer localized")
-            self.localized = localized
 
     def on_scan(self, scan: LaserScan) -> None:
+        self.latest_scan = scan
         self.last_scan_time = time.monotonic()
 
     def on_nav_lock(self, message: Bool) -> None:
@@ -222,6 +234,7 @@ class NavNode(Node):
         else:
             self.nav2_state = None
         self.update_pose()
+        self.update_localized()
         self.manage_nav2()
         self.send_pending_goal()
         self.update_map_png()
@@ -240,11 +253,58 @@ class NavNode(Node):
             "yaw": robot_nav.yaw_from_quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
         }
 
+    def update_localized(self) -> None:
+        """One rule for `localized` each tick, from AMCL's covariance and the
+        scan fit (robot_nav.localized_change). AMCL keeps estimating after a
+        relocalize gives up or a remembered pose turns out wrong: a drive with
+        the gamepad can converge it, or lose it. While a relocalize runs, that
+        thread owns the flag."""
+        self.scan_fit = self.measure_scan_fit()
+        self.low_fit_ticks = self.low_fit_ticks + 1 if self.scan_fit is not None and self.scan_fit < robot_nav.SCAN_FIT_LOST else 0
+        if self.mode != "localize" or self.activity is not None:
+            return
+        change = robot_nav.localized_change(self.localized, self.amcl_covariance, self.scan_fit, self.low_fit_ticks)
+        if change is None:
+            return
+        self.localized, why = change
+        log.info("%s: %s (scan fit %s)", "localized" if self.localized else "lost", why, "none" if self.scan_fit is None else f"{self.scan_fit:.2f}")
+        if not self.localized:
+            # a restart must not trust the old pose, and a trip on it would go
+            # wrong. A goal still waiting to start relocalizes first instead.
+            Path(self.args.nav_pose).unlink(missing_ok=True)
+            self.remembered_pose_written = None
+            if self.goal_request is None:
+                self.cancel_goal("not_localized")
+
+    def measure_scan_fit(self) -> float | None:
+        """How well the latest scan fits the saved map from the lidar's TF pose
+        at the scan's time, 0..1, or None when there is nothing to say: mapping
+        mode, no fresh scan, no map pose yet, or the robot is turning."""
+        scan = self.latest_scan
+        if self.mode != "localize" or scan is None or self.map_info is None or not self.scanning():
+            return None
+        try:
+            transform = self.tf_buffer.lookup_transform("map", scan.header.frame_id, Time.from_msg(scan.header.stamp)).transform
+        except TransformException:
+            return None
+        rotation = transform.rotation
+        yaw = robot_nav.yaw_from_quaternion(rotation.x, rotation.y, rotation.z, rotation.w)
+        turned = self.scan_fit_yaw is not None and abs(normalize_angle(yaw - self.scan_fit_yaw)) > SCAN_FIT_MAX_TURN_RADIANS
+        self.scan_fit_yaw = yaw
+        if turned:
+            return None
+        laser_pose = {"x": transform.translation.x, "y": transform.translation.y, "yaw": yaw}
+        # map_rendered is the grid map_info describes (latest_map may be 2 s newer)
+        fit = robot_nav.scan_fit(
+            self.map_rendered.data, self.map_info, laser_pose, scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max
+        )
+        return None if fit is None else round(fit, 2)
+
     def update_map_png(self) -> None:
         grid = self.latest_map
-        if grid is None or time.monotonic() - self.map_png_time < MAP_PNG_MIN_INTERVAL:
+        if grid is None or grid is self.map_rendered or time.monotonic() - self.map_png_time < MAP_PNG_MIN_INTERVAL:
             return
-        self.latest_map = None
+        self.map_rendered = grid
         self.map_png_time = time.monotonic()
         info = grid.info
         try:
@@ -294,6 +354,7 @@ class NavNode(Node):
             "activity": self.activity,
             "pose": self.pose,
             "map_info": self.map_info,
+            "scan_fit": self.scan_fit,
             "places": self.places,
             "motor_power_requested": self.motor_power_requested or self.navigating(),
             "goal": self.goal,
@@ -309,8 +370,12 @@ class NavNode(Node):
             self.set_initial_pose(remembered)
             return
         log.info("AMCL active with no remembered pose: relocalizing")
+        self.start_relocalize()
+
+    def start_relocalize(self) -> dict:
+        """Relocalize over every saved map, the current one first."""
         maps = robot_nav.maps_to_try(robot_nav.saved_maps(self.args.maps_dir), self.map_name)
-        self.start_activity("localizing", self.relocalize, maps)
+        return self.start_activity("localizing", self.relocalize, maps)
 
     def set_initial_pose(self, pose: dict) -> None:
         message = PoseWithCovarianceStamped()
@@ -429,14 +494,11 @@ class NavNode(Node):
         if cmd == "localize":
             if self.mode != "localize":
                 return {"ok": False, "error": "not_localize_mode"}
-            maps = robot_nav.saved_maps(self.args.maps_dir)
-            if request.get("map"):
-                if request["map"] not in maps:
-                    return {"ok": False, "error": "unknown_map"}
-                maps = [request["map"]]
-            else:
-                maps = robot_nav.maps_to_try(maps, self.map_name)
-            return self.start_activity("localizing", self.relocalize, maps)
+            if not request.get("map"):
+                return self.start_relocalize()
+            if request["map"] not in robot_nav.saved_maps(self.args.maps_dir):
+                return {"ok": False, "error": "unknown_map"}
+            return self.start_activity("localizing", self.relocalize, [request["map"]])
         if cmd == "create_place":
             return self.create_place(request.get("name"))
         if cmd == "delete_place":
@@ -625,8 +687,6 @@ class NavNode(Node):
             place = self.places.get(place_name)
             if place is None:
                 return {"ok": False, "error": "unknown_place", "places": robot_nav.places_on_map(self.places, self.map_name)}
-            if self.mode != "localize" or not self.localized:
-                return {"ok": False, "error": "not_localized"}
             if place["map"] != self.map_name:
                 return {"ok": False, "error": "place_on_other_map", "map": place["map"]}
             x, y, yaw = place["x"], place["y"], place["yaw"]
@@ -634,8 +694,6 @@ class NavNode(Node):
             x, y, yaw = request.get("x"), request.get("y"), request.get("yaw")
             if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
                 return {"ok": False, "error": "bad_goal"}
-            if self.mode == "localize" and not self.localized:
-                return {"ok": False, "error": "not_localized"}
             if yaw is None:
                 # no heading asked for: arrive facing the way we came
                 yaw = robot_nav.yaw_toward(self.pose["x"], self.pose["y"], x, y) if self.pose else 0.0
@@ -648,7 +706,8 @@ class NavNode(Node):
         self.goal_serial += 1
         self.goal = {"target": place_name, "x": float(x), "y": float(y), "state": "navigating", "remaining_m": None}
         # navigating() asks for the motor rail; the lidar follows the rail and
-        # Nav2 follows the lidar, so tick() sends the goal once both are up
+        # Nav2 follows the lidar, so tick() sends the goal once both are up,
+        # after a relocalize if the robot does not know where it is
         self.goal_request = (self.goal_serial, float(x), float(y), yaw, time.monotonic())
         log.info("navigating to %s (%.2f, %.2f)", place_name or "a point", x, y)
         return {"ok": True, "accepted": True, "goal": self.goal}
@@ -657,6 +716,19 @@ class NavNode(Node):
         if self.goal_request is None:
             return
         serial, x, y, yaw, asked_at = self.goal_request
+        if self.activity is not None:
+            # a relocalize (or save) is running; the start clock runs from its end
+            self.goal_request = (serial, x, y, yaw, time.monotonic())
+            return
+        if self.mode == "localize" and not self.localized:
+            if self.goal_relocalized_serial == serial:
+                self.goal_request = None
+                self.end_goal(serial, "failed", "not_localized")
+            else:
+                self.goal_relocalized_serial = serial
+                log.info("navigating: not localized, relocalizing first")
+                self.start_relocalize()
+            return
         if time.monotonic() - asked_at > GOAL_START_SECONDS:
             self.goal_request = None
             self.end_goal(serial, "failed", "nav2_unavailable" if self.scanning() else "lidar_unavailable")

@@ -32,8 +32,11 @@ amcl:
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
+    # Recovery: when the scans stop matching the map for a while (the robot
+    # was carried), sprinkle random particles over the free space so a drive
+    # finds the real spot again. The textbook values; 0.0 would turn it off.
+    recovery_alpha_fast: 0.1
+    recovery_alpha_slow: 0.001
     random_seed: -1
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"

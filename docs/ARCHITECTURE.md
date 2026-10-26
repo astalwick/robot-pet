@@ -70,7 +70,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; starts configured but inactive, lifecycle `activate`/`deactivate` turns the lidar on/off |
 | `robot-nav` | ROS (apt) | `config/nav.launch.py`, mode from `~/.config/robot-pet/nav.json`: **mapping** runs `slam_toolbox` (`config/slam_toolbox.yaml`) building `/map`; **localize** runs nav2 `map_server` + `amcl` (`config/nav2.yaml`) on a saved map. Both modes also run Nav2's navigation servers and its keepout filter servers (the barriers for the map, or an empty mask). Either way: `/scan` + `odom` -> TF `map -> odom` |
 | `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/nav units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
-| `robot-nav-bridge` | ROS node | `nav_node.py` + `robot_nav.py`: owns `nav.json`, `places.json`, `barriers.json`, `maps/` and `keepout/`; serves `/run/robot-pet/nav.sock` (save map, switch mode, localize, create or delete a place, draw or delete a barrier, navigate, cancel) for the dashboard and voice; relocalizes by spinning once per saved map; publishes the `nav` hub message and `/run/robot-pet/map.png` |
+| `robot-nav-bridge` | ROS node | `nav_node.py` + `robot_nav.py`: owns `nav.json`, `places.json`, `barriers.json`, `maps/` and `keepout/`; serves `/run/robot-pet/nav.sock` (save map, switch mode, localize, create or delete a place, draw or delete a barrier, navigate, cancel) for the dashboard and voice; relocalizes by spinning the robot per saved map; scores each lidar scan against the map and drops a pose the scans contradict; publishes the `nav` hub message and `/run/robot-pet/map.png` |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -206,8 +206,18 @@ particles and spins the robot with a `turn` intent, twice if one spin is not
 enough; the first map whose pose covariance gets tight wins. That is how a robot carried to another floor
 works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
 When no map converges the bridge keeps reading `/amcl_pose`: AMCL goes on
-estimating, so a short drive with the gamepad usually finishes the job, and
-`localized` flips on (or off again, if the pose is lost) as the covariance says.
+estimating (with recovery on, it also re-scatters particles when the scans stop
+matching), so a short drive with the gamepad usually finishes the job.
+
+A tight covariance is not proof the pose is right: AMCL only grades its
+particles against each other, so a robot carried to another room keeps a
+confident wrong pose. Every tick the bridge therefore scores the latest scan
+against the map from the lidar's TF pose (`robot_nav.scan_fit`: the share of
+beams ending within 15 cm of a known wall; shown on the dashboard) and sets
+`localized` from both (`robot_nav.localized_change`): a run of bad fits, or a
+spread-out covariance, means lost; the remembered pose is dropped and a trip in
+progress is cancelled. A `navigate_to` while not localized relocalizes first,
+then goes. The bridge never spins on its own just because it looks lost.
 
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint

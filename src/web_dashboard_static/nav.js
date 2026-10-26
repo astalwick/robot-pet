@@ -36,6 +36,7 @@ export function renderNav(snapshot, sources) {
     row('mode', '', nav.mode, nav.mode === 'localize' ? 'ok' : ''),
     row('map', '', nav.map || (nav.mode === 'mapping' ? 'new map' : '--')),
     row('localized', '', nav.localized ? 'yes' : 'no', nav.localized ? 'ok' : 'muted'),
+    row('scan fit', '', nav.scan_fit == null ? '--' : `${Math.round(nav.scan_fit * 100)}%`, nav.scan_fit == null ? 'muted' : ''),
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),

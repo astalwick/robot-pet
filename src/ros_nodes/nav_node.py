@@ -121,11 +121,11 @@ class NavNode(Node):
         # a goal waiting for the lidar and Nav2: (serial, x, y, yaw, asked_at)
         self.goal_request: tuple | None = None
         self.nav_lock = False
-        # bt_navigator's lifecycle label (None while it is not up), and the
-        # our last lifecycle request: the label it was sent from, when, and its
+        # bt_navigator's lifecycle label (None while it is not up), and our
+        # last lifecycle request: the label it was sent from, when, and its
         # pending reply. The servers pass through "inactive" while a bringup
-        # runs, so no new request goes out until the reply is in, and a
-        # refused one is only retried every so often.
+        # runs, so no new request goes out until the reply is in (or it is
+        # NAV2_MANAGE_RETRY_SECONDS old), and a refused one waits as long.
         self.nav2_state: str | None = None
         self.nav2_managed_state: str | None = None
         self.nav2_manage_time = 0.0
@@ -483,9 +483,10 @@ class NavNode(Node):
         up for each trip and pauses a few seconds after the rail goes off."""
         if not self.nav2_manage_client.service_is_ready():
             return
-        if self.nav2_manage_future is not None and not self.nav2_manage_future.done():
-            return
-        if self.nav2_state == self.nav2_managed_state and time.monotonic() - self.nav2_manage_time < NAV2_MANAGE_RETRY_SECONDS:
+        # A reply from a manager that restarted meanwhile (mode switch, redeploy)
+        # never comes, so an old request only holds the next one off for so long.
+        waiting = self.nav2_manage_future is not None and not self.nav2_manage_future.done()
+        if (waiting or self.nav2_state == self.nav2_managed_state) and time.monotonic() - self.nav2_manage_time < NAV2_MANAGE_RETRY_SECONDS:
             return
         if self.nav2_state == "active":
             if self.scan_age() > NAV2_PAUSE_SECONDS:

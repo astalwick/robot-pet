@@ -133,6 +133,27 @@ class GamepadTeleopRunnerTest(unittest.TestCase):
         self.assertIn((250, 250), motion.commands)
         self.assertIn((0, 0), motion.commands)
 
+    def test_idle_controller_goes_quiet_after_one_zero(self):
+        # twist_mux hands /cmd_vel to whoever spoke last, so a paired but idle
+        # controller must not keep publishing zeros over Nav2.
+        state = controller_state(left_stick_y=0.0, right_stick_x=0.0, rb=False, lb=False)
+        controller = FakeController(state)
+        motion = FakeMotion()
+        sleeps = 0
+
+        def sleep(_seconds):
+            nonlocal sleeps
+            sleeps += 1
+            if sleeps == 5:
+                runner.request_stop()
+
+        runner = GamepadTeleopRunner(fast_config(), twist_publisher=motion.publish, sleep=sleep)
+
+        runner._run_connected(controller)
+
+        # one zero from the loop, one from the stop on the way out
+        self.assertEqual(motion.commands, [(0, 0), (0, 0)])
+
     def test_disconnect_sends_zero_speed(self):
         state = controller_state(left_stick_y=-1.0, right_stick_x=0.0, rb=True, lb=False)
         controller = FakeController(state)

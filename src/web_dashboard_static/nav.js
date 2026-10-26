@@ -76,7 +76,7 @@ function loadMap(info) {
 
 function drawMap() {
   const canvas = document.getElementById('nav-map');
-  if (!canvas || !mapImage || !mapInfo) return;
+  if (!canvas || !mapImage || !mapInfo || !latestNav) return;
   if (canvas.width !== mapImage.width || canvas.height !== mapImage.height) {
     canvas.width = mapImage.width;
     canvas.height = mapImage.height;

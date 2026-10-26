@@ -69,6 +69,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("gamepad-teleop.service")
             want("robot-motion.service")
             want("robot-voice.service")
+            want("robot-nav-bridge.service")
         elif path == "src/robot_vision.py":
             want("robot-vision.service")
         elif path in ("src/robot_sensors.py", "src/ros_nodes/sensors_node.py"):
@@ -206,6 +207,7 @@ class TestRedeployRobot(unittest.TestCase):
         services = planned_services(["src/robot_model.py"])
         self.assertIn("robot-motion.service", services)
         self.assertIn("gamepad-teleop.service", services)
+        self.assertIn("robot-nav-bridge.service", services)  # the footprint sizes the keepout mask
 
     def test_config_paths_restart_dashboard_too(self):
         services = planned_services(["src/config/voice.py"])

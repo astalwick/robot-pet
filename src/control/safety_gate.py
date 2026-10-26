@@ -36,7 +36,9 @@ class SafetyState:
 
 @dataclass(frozen=True)
 class Clearances:
-    """Nearest lidar return past the body's front and rear edges, in meters.
+    """How far the body can go forward and backward before it meets something,
+    in meters: the nearest lidar return past the front and rear edges, or the
+    nearest virtual barrier on the map while the robot knows where it is.
 
     None means nothing in the body's width was seen on that side.
     """

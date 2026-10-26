@@ -125,6 +125,7 @@ class GamepadTeleopRunner:
         last_stall_log_at = 0.0
         next_status_at = 0.0
         stop_reason = None
+        last_target_was_zero = False
         self._set_drive_state("driving")
 
         while not self.stop_requested and not disconnected.is_set():
@@ -147,7 +148,13 @@ class GamepadTeleopRunner:
                 log.error("%s; stopping", stop_reason)
                 break
 
-            self.twist_publisher(wheel_qpps_to_body_twist(target.left_qpps, target.right_qpps))
+            # Publish a zero twist once, then stay quiet: twist_mux hands /cmd_vel
+            # to whichever input spoke most recently, so a stream of zeros from a
+            # paired but idle controller would mute Nav2. robot-motion's deadman
+            # already stops the wheels when nobody is talking.
+            if not target_is_zero or not last_target_was_zero:
+                self.twist_publisher(wheel_qpps_to_body_twist(target.left_qpps, target.right_qpps))
+            last_target_was_zero = target_is_zero
 
             cycle_elapsed = self.clock() - cycle_started
             if (

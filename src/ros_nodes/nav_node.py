@@ -428,6 +428,9 @@ class NavNode(Node):
                     self.localized = True
                     return
             log.warning("relocalize: no saved map converged (%s)", ", ".join(maps) or "no maps")
+            if maps and maps[-1] != self.map_name:
+                # map_server is still showing the last map we tried
+                self.load_map(self.map_name)
         finally:
             self.motor_power_requested = False
 
@@ -445,21 +448,31 @@ class NavNode(Node):
     def scan_age(self) -> float:
         return math.inf if self.last_scan_time is None else time.monotonic() - self.last_scan_time
 
-    def try_map(self, name: str) -> bool:
-        log.info("relocalize: trying %s", name)
+    def load_map(self, name: str) -> bool:
+        """Hand a saved map to map_server, which publishes it to AMCL and the costmaps."""
         if not self.load_map_client.wait_for_service(SERVICE_WAIT_SECONDS):
-            log.warning("relocalize: map_server not available")
+            log.warning("load_map %s: map_server not available", name)
             return False
         request = LoadMap.Request()
         request.map_url = robot_nav.map_yaml_path(name, self.args.maps_dir)
         try:
             response = self.load_map_client.call(request, timeout_sec=SERVICE_WAIT_SECONDS)
-            if response.result != LoadMap.Response.RESULT_SUCCESS:
-                log.warning("relocalize: load_map %s failed with result %d", name, response.result)
-                return False
+        except TimeoutError:
+            log.warning("load_map %s: map_server did not answer", name)
+            return False
+        if response.result != LoadMap.Response.RESULT_SUCCESS:
+            log.warning("load_map %s failed with result %d", name, response.result)
+            return False
+        return True
+
+    def try_map(self, name: str) -> bool:
+        log.info("relocalize: trying %s", name)
+        if not self.load_map(name):
+            return False
+        try:
             self.global_localization_client.call(Empty.Request(), timeout_sec=SERVICE_WAIT_SECONDS)
         except TimeoutError:
-            log.warning("relocalize: AMCL or map_server did not answer")
+            log.warning("relocalize: AMCL did not answer")
             return False
         self.amcl_covariance = None
         # One spin usually leaves AMCL with a few candidate spots a metre apart;
@@ -708,26 +721,30 @@ class NavNode(Node):
         # navigating() asks for the motor rail; the lidar follows the rail and
         # Nav2 follows the lidar, so tick() sends the goal once both are up,
         # after a relocalize if the robot does not know where it is
-        self.goal_request = (self.goal_serial, float(x), float(y), yaw, time.monotonic())
+        self.goal_request = (self.goal_serial, self.map_name, float(x), float(y), yaw, time.monotonic())
         log.info("navigating to %s (%.2f, %.2f)", place_name or "a point", x, y)
         return {"ok": True, "accepted": True, "goal": self.goal}
 
     def send_pending_goal(self) -> None:
         if self.goal_request is None:
             return
-        serial, x, y, yaw, asked_at = self.goal_request
+        serial, map_name, x, y, yaw, asked_at = self.goal_request
         if self.activity is not None:
             # a relocalize (or save) is running; the start clock runs from its end
-            self.goal_request = (serial, x, y, yaw, time.monotonic())
+            self.goal_request = (serial, map_name, x, y, yaw, time.monotonic())
             return
         if self.mode == "localize" and not self.localized:
             if self.goal_relocalized_serial == serial:
                 self.goal_request = None
                 self.end_goal(serial, "failed", "not_localized")
-            else:
+            elif self.start_relocalize()["accepted"]:
                 self.goal_relocalized_serial = serial
                 log.info("navigating: not localized, relocalizing first")
-                self.start_relocalize()
+            return
+        if map_name != self.map_name:
+            # the relocalize found us on another map; the goal's x, y mean nothing here
+            self.goal_request = None
+            self.end_goal(serial, "failed", "place_on_other_map")
             return
         if time.monotonic() - asked_at > GOAL_START_SECONDS:
             self.goal_request = None
@@ -780,16 +797,16 @@ class NavNode(Node):
         self.goal["state"] = state
         if reason:
             self.goal["reason"] = reason
+        self.goal_handle = None
         log.info("navigation %s%s", state, f": {reason}" if reason else "")
 
     def cancel_goal(self, reason: str) -> None:
         if not self.navigating():
             return
-        self.end_goal(self.goal_serial, "cancelled", reason)
         self.goal_request = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
-            self.goal_handle = None
+        self.end_goal(self.goal_serial, "cancelled", reason)
 
 
 def build_parser() -> argparse.ArgumentParser:

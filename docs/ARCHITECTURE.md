@@ -66,7 +66,7 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-battery` | service | Motor-rail MOSFET and LiPo protection policy |
 | `robot-pi-battery` | ROS node | `pi_battery_node.py`: UPS HAT E; publishes `/battery/pi` |
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
-| `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
+| `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, Nav2), muted by `/nav_lock` while an intent runs -> `/cmd_vel` |
 | `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; starts configured but inactive, lifecycle `activate`/`deactivate` turns the lidar on/off |
 | `robot-nav` | ROS (apt) | `config/nav.launch.py`, mode from `~/.config/robot-pet/nav.json`: **mapping** runs `slam_toolbox` (`config/slam_toolbox.yaml`) building `/map`; **localize** runs nav2 `map_server` + `amcl` (`config/nav2.yaml`) on a saved map. Both modes also run Nav2's navigation servers and its keepout filter servers (the barriers for the map, or an empty mask). Either way: `/scan` + `odom` -> TF `map -> odom` |
 | `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/nav units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
@@ -100,10 +100,11 @@ a manual override that holds until the rail next switches.
 ### Motion and safety
 
 `robot-motion` owns `MotorDriver` / RoboClaw. It takes wheel targets only from
-`/cmd_vel`, which `twist_mux` builds from `/cmd_vel_teleop` and the reserved
+`/cmd_vel`, which `twist_mux` builds from `/cmd_vel_teleop` and Nav2's
 `/cmd_vel_nav`. A stale `/cmd_vel` (`DRIVE_COMMAND_STALE_SECONDS`) stops the
-motors; the teleop node publishes one zero twist on controller loss or stop and
-then goes quiet, so the deadman is the backstop. Safety gating
+motors; the teleop node publishes one zero twist when the sticks are released
+(and on controller loss or stop) and then goes quiet, so the deadman is the
+backstop and a paired but idle controller does not mute Nav2 in `twist_mux`. Safety gating
 (`control/safety_gate.py`) reads thresholds from `sensors.json`: the ToFs cover
 cliffs and low obstacles ahead, and `/scan` covers the rest. `motion_node.py`
 reduces each scan to the nearest return in the body's width past the front and

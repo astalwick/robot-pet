@@ -62,6 +62,26 @@ journals, no floor test in between):
   the slow stop is audit cluster A: the conversation owns the body, so a tool
   that waits 60 s deafens the robot. Also seen once: "elevenlabs tts send
   failed; retrying".
+- Section 7, check 29 (restart robot-nav with a remembered pose): no spin at
+  all; the bridge re-sends the remembered pose and localized stays yes. The
+  spin only happens with no remembered pose (boot). Audit item 23 (double
+  spin) does not arise. Pass.
+- Section 7, check 30 (restart robot-nav-bridge 4 s into a trip to the
+  kitchen): BUG, safety. The bridge died at 99848.5 but Nav2 kept the trip:
+  it drove on, hit "collision ahead", ran its own spin recovery (90 degrees),
+  a 5 s wait, then a backup, and only gave up at 99866.9 with "controller
+  patience exceeded", 18 s after the bridge was gone. The new bridge started
+  with goal None, so dashboard Cancel would have done nothing; only the
+  gamepad could have stopped it. Fix: the new bridge cancels any Nav2 goal
+  it finds running at startup (covers a crash too), and the old one cancels
+  its goal on the way out. Longer term robot-motion should lock Nav2 out when
+  the bridge's telemetry goes stale (audit cluster C).
+- Same test, second BUG: the restarted bridge re-sent the remembered pose to
+  an AMCL that had never stopped and was tracking fine, which reset the
+  particle cloud mid-drive (AMCL also warned "failed to transform initial
+  pose in time"). The robot ended lost: localized no, scan fit 0.32. Fix:
+  only send the remembered pose when AMCL itself has just come up (no AMCL
+  pose seen yet), not on a bridge-only restart.
 - Shelved idea (Arlen's): replace the spin with a background search of the
   whole map using the current scan (our scan fit score at every free cell and
   heading), acting only on a clearly better pose that wins twice while moving.

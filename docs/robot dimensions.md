@@ -14,8 +14,8 @@
 240mm deep
 
 - excludes caster, speaker and wheels
-  352.5mm deep
-- including caster, speaker and wheels (caster wheel rearmost at x = -285.5, speaker face at x = +67; 2026-10-26, replaces the earlier 330)
+  335mm from the bumper face to the caster wheel's rearmost point, wheel swung fully back
+- (caster rearmost at x = -280; 2026-10-26, replaces the earlier 330; the speaker on the bumper face adds its own protrusion, assumed 12)
 
 Ground clearance
 15.5mm to screws
@@ -67,7 +67,7 @@ Wheels:
 
 Rear caster:
 - swivel wheel caster, wheel diameter about 48
-- going straight, the wheel's rearmost point is about 68 behind the platform rear (x = -285.5)
+- wheel swung fully back, bumper face to the wheel's rearmost point is about 335 (x = -280, 62.5 behind the platform rear)
 
 Camera mast:
 - centred on the chassis, about 20 behind the platform front (x = +2.5), top at 180 off the ground

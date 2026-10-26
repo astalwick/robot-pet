@@ -106,10 +106,14 @@ class RobotMotionTest(unittest.TestCase):
         runner.on_barrier_clearances(Clearances(0.1, None))
         drive_wheels(runner, 250, 250)
 
-        runner._run_motor_loop(motor)
+        logging.getLogger("robot-motion").disabled = False  # the module quiets it; this test reads it
+        self.addCleanup(setattr, logging.getLogger("robot-motion"), "disabled", True)
+        with self.assertLogs("robot-motion", level="INFO") as logs:
+            runner._run_motor_loop(motor)
 
         self.assertIn((0, 0), motor.commands)
         self.assertEqual(runner._last_safety.reason, "barrier_ahead")
+        self.assertIn("INFO:robot-motion:safety block on: barrier_ahead", logs.output)
 
     def test_safety_disabled_allows_forward(self):
         motor = FakeMotor()

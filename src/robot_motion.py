@@ -176,6 +176,8 @@ class MotionRunner:
         self.telemetry_publish_failures = 0
         self.last_telemetry_publish_ok: bool | None = None
         self._last_safety = SafetyState(blocked=False)
+        # the reason last applied to the commanded direction; logged when it changes
+        self._last_blocked_by: str | None = None
         self._telemetry_read_slot = 0
         self._last_left_actual: int | None = None
         self._last_right_actual: int | None = None
@@ -459,6 +461,9 @@ class MotionRunner:
             blocked_by = blocking_reason(left_qpps, right_qpps, safety)
             left_qpps, right_qpps = cancel_blocked_qpps(left_qpps, right_qpps, safety)
             self._last_safety = safety
+            if blocked_by != self._last_blocked_by:
+                log.info("safety block %s", f"on: {blocked_by}" if blocked_by else f"off: was {self._last_blocked_by}")
+                self._last_blocked_by = blocked_by
 
             move_stop = None
             if self.intent_executor.active_move_distance_meters() is not None:

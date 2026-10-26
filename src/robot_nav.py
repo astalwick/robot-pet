@@ -7,7 +7,9 @@ Files, all under ~/.config/robot-pet:
 
     nav.json      {"mode": "mapping" | "localize", "map": "<name>"}
     places.json   {"<place>": {"map": "<name>", "x": .., "y": .., "yaw": ..}}
+    barriers.json {"<map>": [{"x1": .., "y1": .., "x2": .., "y2": ..}, ...]}
     maps/<name>.yaml + .pgm, written by nav2's map_saver_cli
+    keepout/<name>.yaml + .pgm, the barriers drawn as a Nav2 keepout mask
 
 config/nav.launch.py reads nav.json at robot-nav.service start; the bridge
 writes it and restarts the unit to switch modes.
@@ -33,6 +35,13 @@ from telemetry.socket_client import send_voice_command
 DEFAULT_NAV_CONFIG_PATH = "/home/pi/.config/robot-pet/nav.json"
 DEFAULT_PLACES_PATH = "/home/pi/.config/robot-pet/places.json"
 DEFAULT_MAPS_DIR = "/home/pi/.config/robot-pet/maps"
+DEFAULT_BARRIERS_PATH = "/home/pi/.config/robot-pet/barriers.json"
+DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
+
+# A barrier line is forbidden this far to each side. Keepout cells are not
+# inflated, and the tail sweeps 0.31 m from the axle when the robot turns.
+BARRIER_HALF_WIDTH_METERS = 0.3
+KEEPOUT_RESOLUTION_METERS = 0.05
 
 # AMCL has found the robot when the pose covariance is this tight. 0.25 m² is
 # half a meter of standard deviation; a lost filter sits at several meters.
@@ -69,6 +78,18 @@ def load_places(path: str = DEFAULT_PLACES_PATH) -> dict[str, dict[str, Any]]:
 
 def save_places(places: dict[str, dict[str, Any]], path: str = DEFAULT_PLACES_PATH) -> None:
     _write_json(path, places)
+
+
+def load_barriers(path: str = DEFAULT_BARRIERS_PATH) -> dict[str, list[dict[str, float]]]:
+    try:
+        values = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def save_barriers(barriers: dict[str, list[dict[str, float]]], path: str = DEFAULT_BARRIERS_PATH) -> None:
+    _write_json(path, barriers)
 
 
 def _write_json(path: str, data: Any) -> None:
@@ -149,6 +170,46 @@ def render_map_png(width: int, height: int, data, path: str) -> None:
     temp_path = f"{path}.tmp"
     Image.fromarray(np.flipud(pixels), "L").save(temp_path, format="PNG")
     os.replace(temp_path, path)
+
+
+def render_keepout_mask(barriers: list[dict[str, float]], stem: str) -> None:
+    """Write <stem>.pgm + <stem>.yaml, the Nav2 keepout mask for one map: a
+    white grid at 5 cm, just big enough for the barriers, with each one drawn
+    as a black band. Nav2 reads the mask in the map frame through the yaml's
+    origin and resolution, so it needs no relation to the map's own grid."""
+    margin = BARRIER_HALF_WIDTH_METERS + KEEPOUT_RESOLUTION_METERS
+    xs = [barrier[key] for barrier in barriers for key in ("x1", "x2")] or [0.0]
+    ys = [barrier[key] for barrier in barriers for key in ("y1", "y2")] or [0.0]
+    origin_x, origin_y = min(xs) - margin, min(ys) - margin
+    width = math.ceil((max(xs) + margin - origin_x) / KEEPOUT_RESOLUTION_METERS)
+    height = math.ceil((max(ys) + margin - origin_y) / KEEPOUT_RESOLUTION_METERS)
+    # cell centres, grid row 0 at the bottom like an OccupancyGrid
+    cell_x, cell_y = np.meshgrid(
+        origin_x + (np.arange(width) + 0.5) * KEEPOUT_RESOLUTION_METERS,
+        origin_y + (np.arange(height) + 0.5) * KEEPOUT_RESOLUTION_METERS,
+    )
+    blocked = np.zeros((height, width), dtype=bool)
+    for barrier in barriers:
+        blocked |= distance_to_segment(cell_x, cell_y, barrier) <= BARRIER_HALF_WIDTH_METERS
+    pixels = np.where(blocked, 0, 255).astype(np.uint8)
+    Path(stem).parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(np.flipud(pixels), "L").save(f"{stem}.pgm")
+    Path(f"{stem}.yaml").write_text(
+        f"image: {Path(stem).name}.pgm\nmode: trinary\nresolution: {KEEPOUT_RESOLUTION_METERS}\n"
+        f"origin: [{origin_x:.3f}, {origin_y:.3f}, 0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
+    )
+
+
+def distance_to_segment(x, y, barrier: dict[str, float]):
+    """Distance from (x, y), scalars or arrays, to the barrier's line segment."""
+    dx, dy = barrier["x2"] - barrier["x1"], barrier["y2"] - barrier["y1"]
+    length_sq = dx * dx + dy * dy
+    along = 0.0 if length_sq == 0 else np.clip(((x - barrier["x1"]) * dx + (y - barrier["y1"]) * dy) / length_sq, 0.0, 1.0)
+    return np.hypot(x - (barrier["x1"] + along * dx), y - (barrier["y1"] + along * dy))
+
+
+def valid_barrier(barrier: Any) -> bool:
+    return isinstance(barrier, dict) and all(isinstance(barrier.get(key), (int, float)) for key in ("x1", "y1", "x2", "y2"))
 
 
 def valid_map_name(name: Any) -> bool:

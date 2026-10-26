@@ -2,15 +2,23 @@ import { row, setRows, fmt, escapeHtml } from './dom.js';
 import { appendLog } from './logs.js';
 
 // The map: the live occupancy grid from the nav bridge with the robot, the
-// saved places and the navigation goal drawn on it. It shares the camera's box
-// (the Camera / Map switch picks one) and clicking it sends the robot there.
-// The Map panel holds the mode / map / place controls.
+// saved places, the barriers and the navigation goal drawn on it. It shares
+// the camera's box (the Camera / Map switch picks one) and clicking it sends
+// the robot there, unless a map tool is on: Draw barrier takes two clicks for
+// a wall Nav2 must not cross, Erase deletes the barrier or place clicked. The
+// Map panel holds the mode / map / place controls.
+
+// Same as robot_nav.BARRIER_HALF_WIDTH_METERS: how far each side of a barrier
+// line the bridge paints forbidden.
+const BARRIER_HALF_WIDTH_M = 0.3;
 
 let mapImage = null;
 let mapSerial = null;
 let mapInfo = null;
 let latestNav = null;
 let navStale = true;
+let mapTool = null; // 'barrier' | 'erase' | null (click drives there)
+let barrierStart = null; // the first click of a barrier, in map metres
 
 export function renderNav(snapshot, sources) {
   const nav = snapshot.nav;
@@ -94,6 +102,27 @@ function drawMap() {
     ctx.lineTo(px + 5, py - 5);
     ctx.stroke();
   }
+  for (const barrier of barriersOnMap(nav)) {
+    const [x1, y1] = toPixel(barrier.x1, barrier.y1);
+    const [x2, y2] = toPixel(barrier.x2, barrier.y2);
+    ctx.strokeStyle = 'rgba(248, 113, 113, 0.35)';
+    ctx.lineWidth = (2 * BARRIER_HALF_WIDTH_M) / mapInfo.resolution;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.strokeStyle = '#f87171';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  if (barrierStart) {
+    const [px, py] = toPixel(barrierStart.x, barrierStart.y);
+    ctx.fillStyle = '#f87171';
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
   for (const [name, place] of Object.entries(nav.places || {})) {
     if (place.map !== nav.map) continue;
     const [px, py] = toPixel(place.x, place.y);
@@ -118,6 +147,10 @@ function drawMap() {
     ctx.fill();
     ctx.restore();
   }
+}
+
+function barriersOnMap(nav) {
+  return (nav.barriers || {})[nav.map] || [];
 }
 
 // Like the lidar button: write the DOM only when something changed, so a
@@ -155,6 +188,17 @@ export function bindNavHandlers(bindOn) {
   bindOn('nav-map', 'click', onMapClick);
   bindOn('view-camera-button', 'click', () => showMap(false));
   bindOn('view-map-button', 'click', () => showMap(true));
+  bindOn('nav-draw-barrier-button', 'click', () => setMapTool('barrier'));
+  bindOn('nav-erase-button', 'click', () => setMapTool('erase'));
+}
+
+// A tool stays on until clicked again (or the other one is picked).
+function setMapTool(tool) {
+  mapTool = mapTool === tool ? null : tool;
+  barrierStart = null;
+  document.getElementById('nav-draw-barrier-button').classList.toggle('active', mapTool === 'barrier');
+  document.getElementById('nav-erase-button').classList.toggle('active', mapTool === 'erase');
+  drawMap();
 }
 
 function showMap(show) {
@@ -163,9 +207,10 @@ function showMap(show) {
   document.getElementById('view-map-button').classList.toggle('active', show);
 }
 
-// A click on the map drives the robot to that spot. The canvas fills the
-// camera box with object-fit: contain, so find where the image actually sits,
-// go from CSS pixels back to image pixels, then undo drawMap's toPixel.
+// A click on the map drives the robot to that spot, or draws or erases when a
+// tool is on. The canvas fills the camera box with object-fit: contain, so
+// find where the image actually sits, go from CSS pixels back to image
+// pixels, then undo drawMap's toPixel.
 function onMapClick(event) {
   if (!mapInfo || navStale) return;
   const canvas = event.currentTarget;
@@ -176,9 +221,48 @@ function onMapClick(event) {
   const px = (event.clientX - left) / scale;
   const py = (event.clientY - top) / scale;
   if (px < 0 || py < 0 || px > canvas.width || py > canvas.height) return;
-  const x = px * mapInfo.resolution + mapInfo.origin_x;
-  const y = (mapInfo.height - py) * mapInfo.resolution + mapInfo.origin_y;
-  sendNav({ cmd: 'navigate_to', x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+  const x = Number((px * mapInfo.resolution + mapInfo.origin_x).toFixed(2));
+  const y = Number(((mapInfo.height - py) * mapInfo.resolution + mapInfo.origin_y).toFixed(2));
+  if (mapTool === 'barrier') {
+    if (!barrierStart) {
+      barrierStart = { x, y };
+    } else {
+      sendNav({ cmd: 'create_barrier', x1: barrierStart.x, y1: barrierStart.y, x2: x, y2: y });
+      barrierStart = null;
+    }
+    drawMap();
+  } else if (mapTool === 'erase') {
+    eraseAt(x, y);
+  } else {
+    sendNav({ cmd: 'navigate_to', x, y });
+  }
+}
+
+// Delete whatever was clicked: a place within 0.3 m, or a barrier whose band
+// covers the point. The closest one wins.
+function eraseAt(x, y) {
+  const nav = latestNav;
+  let closest = { distance: BARRIER_HALF_WIDTH_M, cmd: null };
+  for (const [name, place] of Object.entries(nav.places || {})) {
+    if (place.map !== nav.map) continue;
+    const distance = Math.hypot(place.x - x, place.y - y);
+    if (distance <= closest.distance) closest = { distance, cmd: 'delete_place', name };
+  }
+  barriersOnMap(nav).forEach((barrier, index) => {
+    const distance = distanceToSegment(x, y, barrier);
+    if (distance <= closest.distance) closest = { distance, cmd: 'delete_barrier', index };
+  });
+  if (!closest.cmd) return;
+  const { distance, ...message } = closest;
+  sendNav(message);
+}
+
+function distanceToSegment(x, y, barrier) {
+  const dx = barrier.x2 - barrier.x1;
+  const dy = barrier.y2 - barrier.y1;
+  const lengthSq = dx * dx + dy * dy;
+  const along = lengthSq === 0 ? 0 : Math.min(1, Math.max(0, ((x - barrier.x1) * dx + (y - barrier.y1) * dy) / lengthSq));
+  return Math.hypot(x - (barrier.x1 + along * dx), y - (barrier.y1 + along * dy));
 }
 
 function onSaveMap() {

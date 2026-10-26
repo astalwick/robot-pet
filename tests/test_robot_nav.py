@@ -47,6 +47,19 @@ class NavConfigTest(unittest.TestCase):
         robot_nav.save_places(places, self.places_path)
         self.assertEqual(robot_nav.load_places(self.places_path), places)
 
+    def test_barriers_round_trip_and_default_to_empty(self):
+        path = os.path.join(self.tmpdir.name, "barriers.json")
+        self.assertEqual(robot_nav.load_barriers(path), {})
+        barriers = {"main": [{"x1": 0.0, "y1": 1.0, "x2": 2.0, "y2": 1.0}]}
+        robot_nav.save_barriers(barriers, path)
+        self.assertEqual(robot_nav.load_barriers(path), barriers)
+
+    def test_valid_barrier_needs_four_numbers(self):
+        self.assertTrue(robot_nav.valid_barrier({"cmd": "create_barrier", "x1": 0, "y1": 1.5, "x2": 2, "y2": 1.5}))
+        self.assertFalse(robot_nav.valid_barrier({"x1": 0, "y1": 1.5, "x2": "2", "y2": 1.5}))
+        self.assertFalse(robot_nav.valid_barrier({"x1": 0, "y1": 1.5}))
+        self.assertFalse(robot_nav.valid_barrier(None))
+
     def test_saved_maps_lists_yaml_stems_sorted(self):
         self.assertEqual(robot_nav.saved_maps(self.maps_dir), [])  # directory does not exist yet
         self.save_map_files("upstairs")
@@ -130,6 +143,49 @@ class RenderMapPngTest(unittest.TestCase):
         self.assertEqual(pixels.shape, (2, 3))
         self.assertEqual(list(pixels[1]), [255, 0, 128])  # grid row 0 at the bottom
         self.assertEqual(list(pixels[0]), [128, 255, 255])  # 50% occupied is mid gray
+
+
+class RenderKeepoutMaskTest(unittest.TestCase):
+    def read_mask(self, barriers):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stem = os.path.join(tmpdir, "keepout", "main")
+            robot_nav.render_keepout_mask(barriers, stem)
+            self.assertEqual(sorted(os.listdir(os.path.dirname(stem))), ["main.pgm", "main.yaml"])
+            with open(f"{stem}.yaml") as file_obj:
+                yaml_text = file_obj.read()
+            return np.asarray(Image.open(f"{stem}.pgm")), yaml_text
+
+    def test_a_barrier_is_a_black_band_on_a_white_grid_the_barriers_size(self):
+        # A 1 m line along x at y = 0: the band reaches 0.3 m to each side, the
+        # grid 0.35 m beyond the line's ends (a cell of white around the band).
+        pixels, yaml_text = self.read_mask([{"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0}])
+        self.assertIn("image: main.pgm\n", yaml_text)
+        self.assertIn("resolution: 0.05\n", yaml_text)
+        self.assertIn("origin: [-0.350, -0.350, 0]\n", yaml_text)
+        self.assertEqual(pixels.shape, (14, 34))  # 0.7 m tall, 1.7 m wide
+
+        def pixel_at(x, y):  # map metres to the image, row 0 at the top
+            column = int((x + 0.35) / 0.05)
+            row = pixels.shape[0] - 1 - int((y + 0.35) / 0.05)
+            return pixels[row, column]
+
+        self.assertEqual(pixel_at(0.5, 0.0), 0)  # on the line
+        self.assertEqual(pixel_at(0.5, 0.27), 0)  # inside the band
+        self.assertEqual(pixel_at(0.5, 0.33), 255)  # outside it
+        self.assertEqual(pixel_at(1.27, 0.0), 0)  # the band runs past the end
+        self.assertEqual(pixel_at(1.33, 0.0), 255)
+        self.assertEqual(pixels[0, 0], 255)  # corners are free
+
+    def test_no_barriers_is_a_small_free_grid(self):
+        pixels, yaml_text = self.read_mask([])
+        self.assertTrue((pixels == 255).all())
+        self.assertIn("origin: [-0.350, -0.350, 0]\n", yaml_text)
+
+    def test_distance_to_segment(self):
+        barrier = {"x1": 0.0, "y1": 0.0, "x2": 2.0, "y2": 0.0}
+        self.assertAlmostEqual(float(robot_nav.distance_to_segment(1.0, 0.5, barrier)), 0.5)
+        self.assertAlmostEqual(float(robot_nav.distance_to_segment(3.0, 0.0, barrier)), 1.0)  # past the end
+        self.assertAlmostEqual(float(robot_nav.distance_to_segment(1.0, 1.0, {"x1": 1.0, "y1": 0.0, "x2": 1.0, "y2": 0.0})), 1.0)  # a point
 
 
 class NavSocketServerTest(unittest.TestCase):

@@ -7,8 +7,14 @@ nav.json: the dashboard and the voice tools talk to it over
 /run/robot-pet/nav.sock, and it restarts robot-nav to switch modes.
 
 Twice a second it publishes a nav_update to the hub: mode, map, pose (TF
-map -> base_link), the saved maps and places, and whether it wants the motor
-rail. It writes /map as /run/robot-pet/map.png for the dashboard.
+map -> base_link), the saved maps, places and barriers, and whether it wants
+the motor rail. It writes /map as /run/robot-pet/map.png for the dashboard.
+
+Barriers are lines drawn on the dashboard that Nav2 must treat as walls (the
+steps down to the dining room). They live in barriers.json per map; this node
+draws the current map's as a keepout mask (robot_nav.render_keepout_mask) and
+hands it to Nav2's filter_mask_server with load_map, so a change applies to the
+next plan without a restart. nav.launch.py reads the same file at start.
 
 Localize mode has to tell AMCL where the robot is. Whenever AMCL becomes
 active (boot, mode switch, a redeploy of robot-nav) the bridge either sends
@@ -97,6 +103,7 @@ class NavNode(Node):
         self.nav = robot_nav.load_nav_config(args.nav_config)
         self.mode, self.map_name = robot_nav.resolve_mode(self.nav, args.maps_dir)
         self.places = robot_nav.load_places(args.places)
+        self.barriers = robot_nav.load_barriers(args.barriers)
         self.localized = False
         self.activity: str | None = None
         self.motor_power_requested = False
@@ -139,6 +146,7 @@ class NavNode(Node):
         self.initial_pose_publisher = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.amcl_state_client = self.create_client(GetState, "/amcl/get_state")
         self.load_map_client = self.create_client(LoadMap, "/map_server/load_map")
+        self.filter_mask_client = self.create_client(LoadMap, "/filter_mask_server/load_map")
         self.global_localization_client = self.create_client(Empty, "/reinitialize_global_localization")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.bt_navigator_state_client = self.create_client(GetState, "/bt_navigator/get_state")
@@ -148,6 +156,8 @@ class NavNode(Node):
         self.create_timer(0.5, self.tick)
         self.server = robot_nav.NavSocketServer(args.nav_socket, self.handle_request)
         self.server.start()
+        if self.mode == "localize":
+            self.update_keepout()
 
     # --- ROS callbacks ---------------------------------------------------
 
@@ -265,6 +275,7 @@ class NavNode(Node):
             "places": self.places,
             "motor_power_requested": self.motor_power_requested or self.navigating(),
             "goal": self.goal,
+            "barriers": self.barriers,
         }
 
     # --- localize mode -----------------------------------------------------
@@ -323,6 +334,7 @@ class NavNode(Node):
                     log.info("relocalize: converged on %s", name)
                     self.map_name = name
                     robot_nav.save_nav_config("localize", name, self.args.nav_config)
+                    self.update_keepout()
                     self.localized = True
                     return
             log.warning("relocalize: no saved map converged (%s)", ", ".join(maps) or "no maps")
@@ -395,6 +407,12 @@ class NavNode(Node):
             return self.start_activity("localizing", self.relocalize, maps)
         if cmd == "create_place":
             return self.create_place(request.get("name"))
+        if cmd == "delete_place":
+            return self.delete_place(request.get("name"))
+        if cmd == "create_barrier":
+            return self.create_barrier(request)
+        if cmd == "delete_barrier":
+            return self.delete_barrier(request.get("index"))
         if cmd == "navigate_to":
             return self.navigate_to(request)
         if cmd == "nav_cancel":
@@ -423,6 +441,8 @@ class NavNode(Node):
         self.localized = False
         self.amcl_covariance = None
         self.cancel_goal("mode_change")
+        if mode == "localize":
+            self.update_keepout()  # nav.launch.py reads the mask file
         # The old AMCL may still answer "active" for a moment. Count it as seen
         # so the edge we act on is the new one coming up.
         self.amcl_active = True
@@ -470,6 +490,52 @@ class NavNode(Node):
         robot_nav.save_places(self.places, self.args.places)
         log.info("saved place %s on %s", name, self.map_name)
         return {"ok": True, "place": self.places[name]}
+
+    def delete_place(self, name) -> dict:
+        if name not in self.places:
+            return {"ok": False, "error": "unknown_place"}
+        del self.places[name]
+        robot_nav.save_places(self.places, self.args.places)
+        log.info("deleted place %s", name)
+        return {"ok": True}
+
+    # --- barriers --------------------------------------------------------------
+
+    def create_barrier(self, request: dict) -> dict:
+        if not robot_nav.valid_barrier(request):
+            return {"ok": False, "error": "bad_barrier"}
+        if self.mode != "localize":
+            return {"ok": False, "error": "not_localize_mode"}
+        barrier = {key: round(float(request[key]), 2) for key in ("x1", "y1", "x2", "y2")}
+        self.barriers.setdefault(self.map_name, []).append(barrier)
+        robot_nav.save_barriers(self.barriers, self.args.barriers)
+        self.update_keepout()
+        log.info("added a barrier on %s", self.map_name)
+        return {"ok": True, "barrier": barrier}
+
+    def delete_barrier(self, index) -> dict:
+        barriers = self.barriers.get(self.map_name, [])
+        if not isinstance(index, int) or not 0 <= index < len(barriers):
+            return {"ok": False, "error": "unknown_barrier"}
+        del barriers[index]
+        robot_nav.save_barriers(self.barriers, self.args.barriers)
+        self.update_keepout()
+        log.info("deleted a barrier on %s", self.map_name)
+        return {"ok": True}
+
+    def update_keepout(self) -> None:
+        """Draw this map's barriers as the keepout mask and hand it to Nav2's
+        filter_mask_server if it is up (nav.launch.py reads the file otherwise)."""
+        stem = Path(self.args.keepout_dir) / self.map_name
+        robot_nav.render_keepout_mask(self.barriers.get(self.map_name, []), str(stem))
+        if self.filter_mask_client.service_is_ready():
+            request = LoadMap.Request()
+            request.map_url = f"{stem}.yaml"
+            self.filter_mask_client.call_async(request).add_done_callback(self.on_keepout_loaded)
+
+    def on_keepout_loaded(self, future) -> None:
+        if future.result().result != LoadMap.Response.RESULT_SUCCESS:
+            log.warning("filter_mask_server did not load the keepout mask (result %d)", future.result().result)
 
     # --- navigation goals ----------------------------------------------------
 
@@ -618,6 +684,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nav-config", default=robot_nav.DEFAULT_NAV_CONFIG_PATH)
     parser.add_argument("--places", default=robot_nav.DEFAULT_PLACES_PATH)
     parser.add_argument("--maps-dir", default=robot_nav.DEFAULT_MAPS_DIR)
+    parser.add_argument("--barriers", default=robot_nav.DEFAULT_BARRIERS_PATH)
+    parser.add_argument("--keepout-dir", default=robot_nav.DEFAULT_KEEPOUT_DIR)
     parser.add_argument("--map-png", default=DEFAULT_MAP_PNG_PATH)
     parser.add_argument("--nav-pose", default=DEFAULT_NAV_POSE_PATH)
     return parser

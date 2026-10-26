@@ -40,6 +40,10 @@
           <button id="view-camera-button" type="button" class="active">Camera</button>
           <button id="view-map-button" type="button">Map</button>
         </div>
+        <div id="map-tools">
+          <button id="nav-draw-barrier-button" type="button" title="Click two points on the map to draw a wall the robot must not cross">Draw barrier</button>
+          <button id="nav-erase-button" type="button" title="Click a barrier or a place on the map to delete it">Erase</button>
+        </div>
       </section>
 
       <section id="voice-timeline-section" class="panel">
@@ -143,7 +147,7 @@
             <button id="nav-save-place-button" type="button" disabled title="Remember the robot's current spot by name">Save place</button>
             <button id="nav-cancel-button" type="button" disabled title="Stop driving to the goal">Cancel trip</button>
           </div>
-          <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. The Map button above the camera shows it; click the map to drive there.</p>
+          <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. The Map button above the camera shows it; click the map to drive there. Draw barrier: click two points to draw a wall the robot must not cross (the steps down to the dining room). Erase: click a barrier or a place to delete it.</p>
         </article>
         <article id="imu-panel" class="panel hidden">
           <h2>IMU Orientation</h2>

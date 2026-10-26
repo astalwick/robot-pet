@@ -461,7 +461,13 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(send.call_args.args, (self.state.nav_socket, {"cmd": "save_map", "name": "main"}))
 
     async def test_nav_goal_commands_are_forwarded(self):
-        requests = [{"cmd": "navigate_to", "x": 1.5, "y": -2.0}, {"cmd": "nav_cancel"}]
+        requests = [
+            {"cmd": "navigate_to", "x": 1.5, "y": -2.0},
+            {"cmd": "nav_cancel"},
+            {"cmd": "create_barrier", "x1": 0.0, "y1": 1.0, "x2": 2.0, "y2": 1.0},
+            {"cmd": "delete_barrier", "index": 0},
+            {"cmd": "delete_place", "name": "kitchen"},
+        ]
         for request in requests:
             with mock.patch("robot_web_dashboard.send_voice_command", return_value={"ok": True, "accepted": True}) as send:
                 async with self.client.post("/nav/command", json=request) as resp:
@@ -883,6 +889,20 @@ class DashboardJsTest(unittest.TestCase):
         self.assertIn("#camera-section.show-map #camera-stream", self.dashboard_css)
         self.assertIn("#nav-panel {\n  grid-column: 1 / -1;", self.dashboard_css)
         self.assertIn("classList.toggle('show-map', show)", self._module("nav.js"))
+
+    def test_map_tools_draw_and_erase_barriers(self):
+        html = self.dashboard_html
+        camera_section = html[html.index('id="camera-section"'):html.index('id="voice-timeline-section"')]
+        self.assertIn('id="nav-draw-barrier-button"', camera_section)
+        self.assertIn('id="nav-erase-button"', camera_section)
+        self.assertIn("#camera-section:not(.show-map) #map-tools", self.dashboard_css)
+        nav_js = self._module("nav.js")
+        self.assertIn("cmd: 'create_barrier', x1: barrierStart.x", nav_js)
+        self.assertIn("cmd: 'delete_barrier'", nav_js)
+        self.assertIn("cmd: 'delete_place'", nav_js)
+        # the band drawn on the map is as wide as the one the bridge paints
+        self.assertIn("const BARRIER_HALF_WIDTH_M = 0.3;", nav_js)
+        self.assertIn("BARRIER_HALF_WIDTH_METERS = 0.3\n", Path(ROOT, "src", "robot_nav.py").read_text())
 
     def test_foxglove_link_targets_this_robot_in_the_desktop_app(self):
         self.assertIn("window.location.hostname", self.lidar_js)

@@ -38,6 +38,10 @@ class RobotModelTest(unittest.TestCase):
         nav2 = (CONFIG_DIR / "nav2.yaml").read_text()
         self.assertEqual(nav2.count(footprint), 1, footprint)  # the local costmap, for the controller
         self.assertIn(f"robot_radius: {FOOTPRINT_HALF_WIDTH_METERS}", nav2)  # the global costmap, for the planner
+        # Both costmaps take the barriers from the one costmap_filter_info_server.
+        self.assertEqual(nav2.count('filters: ["keepout_filter"]'), 2)
+        self.assertEqual(nav2.count('filter_info_topic: "/costmap_filter_info"'), 3)
+        self.assertEqual(nav2.count('"/keepout_mask"'), 2)
         # Our motion node speaks plain Twist; both cmd_vel publishers must agree.
         self.assertEqual(nav2.count("enable_stamped_cmd_vel: false"), 2)
         self.assertIn("/nav_lock", (CONFIG_DIR / "twist_mux.yaml").read_text())

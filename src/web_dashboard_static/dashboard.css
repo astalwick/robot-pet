@@ -173,21 +173,37 @@ main {
   display: none;
 }
 
-#view-switch {
+#view-switch,
+#map-tools {
   position: absolute;
   top: 0.5rem;
-  right: 0.5rem;
   z-index: 2;
   display: flex;
+  gap: 0.25rem;
 }
 
-#view-switch button {
+#view-switch {
+  right: 0.5rem;
+}
+
+/* The map's drawing tools: Draw barrier, Erase. Only shown with the map. */
+#map-tools {
+  left: 0.5rem;
+}
+
+#camera-section:not(.show-map) #map-tools {
+  display: none;
+}
+
+#view-switch button,
+#map-tools button {
   font-size: 0.75rem;
   padding: 0.25rem 0.6rem;
   opacity: 0.85;
 }
 
-#view-switch button.active {
+#view-switch button.active,
+#map-tools button.active {
   color: var(--accent);
   border-color: var(--accent);
   opacity: 1;

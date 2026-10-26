@@ -68,9 +68,9 @@ scripts/ros-node.sh       # ROS env + venv python wrapper used by every node uni
 | `robot-motion` | ROS node | `motion_node.py`: RoboClaw owner; subscribes `/cmd_vel`; publishes `/odom`, TF `odom -> base_link`, `/battery/motor`; hosts voice motion intents |
 | `robot-twist-mux` | ROS (apt) | `twist_mux`: `/cmd_vel_teleop` (priority 100) and `/cmd_vel_nav` (priority 10, reserved for Nav2) -> `/cmd_vel` |
 | `robot-lidar` | ROS (apt) | `rplidar_driver` via `config/rplidar.launch.py`: RPLidar A1 on `/dev/rplidar` -> `/scan` in the `laser` frame; udev starts/stops it with the device; starts configured but inactive, lifecycle `activate`/`deactivate` turns the lidar on/off |
-| `robot-nav` | ROS (apt) | `config/nav.launch.py`, mode from `~/.config/robot-pet/nav.json`: **mapping** runs `slam_toolbox` (`config/slam_toolbox.yaml`) building `/map`; **localize** runs nav2 `map_server` + `amcl` (`config/nav2.yaml`) on a saved map. Either way: `/scan` + `odom` -> TF `map -> odom` |
+| `robot-nav` | ROS (apt) | `config/nav.launch.py`, mode from `~/.config/robot-pet/nav.json`: **mapping** runs `slam_toolbox` (`config/slam_toolbox.yaml`) building `/map`; **localize** runs nav2 `map_server` + `amcl` (`config/nav2.yaml`) on a saved map. Both modes also run Nav2's navigation servers and its keepout filter servers (the barriers for the map, or an empty mask). Either way: `/scan` + `odom` -> TF `map -> odom` |
 | `robot-lidar-status` | ROS node | `lidar_status_node.py`: watches `/scan`, `/diagnostics` and the lidar/nav units; publishes lidar health to the hub for the dashboard; activates the lidar when the hub's `motor_rail` comes on and deactivates it 3 s after it drops |
-| `robot-nav-bridge` | ROS node | `nav_node.py` + `robot_nav.py`: owns `nav.json`, `places.json` and `maps/`; serves `/run/robot-pet/nav.sock` (save map, switch mode, localize, create place) for the dashboard and voice; relocalizes by spinning once per saved map; publishes the `nav` hub message and `/run/robot-pet/map.png` |
+| `robot-nav-bridge` | ROS node | `nav_node.py` + `robot_nav.py`: owns `nav.json`, `places.json`, `barriers.json`, `maps/` and `keepout/`; serves `/run/robot-pet/nav.sock` (save map, switch mode, localize, create or delete a place, draw or delete a barrier, navigate, cancel) for the dashboard and voice; relocalizes by spinning once per saved map; publishes the `nav` hub message and `/run/robot-pet/map.png` |
 | `gamepad-teleop` | ROS node | `gamepad_teleop_node.py`: Xbox controller -> `/cmd_vel_teleop` |
 | `robot-camera` | service | Owns the Pi camera; serves MJPEG stream and JPEG snapshots over HTTP |
 | `robot-vision` | service | Polls camera snapshots, publishes face-detection telemetry |
@@ -236,3 +236,17 @@ kitchen" mid-route simply replaces the goal. The voice tools are
 `navigate_to`, `check_navigation` (polls the bridge up to a minute),
 `cancel_navigation`, `create_place` and `where_am_i` (map, localized, nearest
 place); `stop` also sends `nav_cancel`.
+
+**Barriers** are lines drawn on the dashboard map that Nav2 treats as walls
+(the steps down to the dining room look like open floor to the lidar). They
+live per map in `~/.config/robot-pet/barriers.json`. The bridge paints the
+current map's barriers as a Nav2 keepout mask, a small occupancy grid in the
+map frame with each line a 0.6 m wide black band (keepout cells are not
+inflated, and the tail sweeps 0.31 m when the robot turns), into
+`~/.config/robot-pet/keepout/<map>.yaml` + `.pgm`. `nav.launch.py` serves it
+with a second `map_server` (`filter_mask_server`) and
+`costmap_filter_info_server`, and both costmaps carry a `keepout_filter`.
+After a barrier is drawn or deleted the bridge re-renders the mask and calls
+`/filter_mask_server/load_map`, so the next plan sees it without a restart.
+A robot already inside a band cannot plan its way out; drive it out by gamepad.
+See [plans/2026-10-25 - virtual-barriers.md](plans/2026-10-25%20-%20virtual-barriers.md).

@@ -687,6 +687,7 @@ def nav_update(
     places: dict[str, dict[str, Any]],
     motor_power_requested: bool,
     goal: dict[str, Any] | None = None,
+    barriers: dict[str, list[dict[str, float]]] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """The nav bridge's hub message.
@@ -697,6 +698,7 @@ def nav_update(
     current or last navigation goal {target, x, y, state, remaining_m}, state
     one of navigating / arrived / cancelled / failed, plus a reason once it has
     ended early (stopped, replaced, rejected, ...), or None if there was none.
+    barriers are the virtual walls per map, {map: [{x1, y1, x2, y2}, ...]}.
     """
     return {
         "type": "source_update",
@@ -712,4 +714,5 @@ def nav_update(
         "places": places,
         "motor_power_requested": motor_power_requested,
         "goal": goal,
+        "barriers": barriers or {},
     }

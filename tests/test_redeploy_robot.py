@@ -128,7 +128,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
-        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/slam_toolbox.yaml"):
+        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/slam_toolbox.yaml") or path.startswith("config/keepout-empty."):
             want("robot-nav.service")
         elif path == "config/rplidar.launch.py":
             want("robot-lidar.service")

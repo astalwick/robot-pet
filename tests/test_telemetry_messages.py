@@ -113,6 +113,11 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["places"], places)
         self.assertTrue(message["motor_power_requested"])
         self.assertEqual(message["goal"], goal)
+        self.assertEqual(message["barriers"], {})
+
+        barriers = {"main": [{"x1": 0.0, "y1": 1.0, "x2": 2.0, "y2": 1.0}]}
+        message = nav_update("localize", "main", ["main"], True, None, None, None, {}, False, barriers=barriers)
+        self.assertEqual(message["barriers"], barriers)
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")

@@ -11,6 +11,10 @@ localize: nav2 map_server serves ~/.config/robot-pet/maps/<name>.yaml and AMCL
 localizes against it with config/nav2.yaml. Nav2 1.5's localization_launch.py
 has no lifecycle manager, so we start the three nodes ourselves.
 
+Both modes also run Nav2's keepout filter servers on the barriers the bridge
+drew for the map (~/.config/robot-pet/keepout/<name>.yaml), or on an empty
+mask: without one the filter plugin in the costmaps warns every two seconds.
+
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from config/nav2.yaml, so the nav bridge can send
 NavigateToPose goals. Their cmd_vel goes to /cmd_vel_nav for twist_mux. They
@@ -32,22 +36,32 @@ from launch_ros.actions import Node
 
 NAV_CONFIG_PATH = "/home/pi/.config/robot-pet/nav.json"
 MAPS_DIR = "/home/pi/.config/robot-pet/maps"
+KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 NAV2_PARAMS = os.path.join(CONFIG_DIR, "nav2.yaml")
+EMPTY_KEEPOUT = os.path.join(CONFIG_DIR, "keepout-empty.yaml")
 NAV_CMD_VEL_REMAP = [("cmd_vel", "cmd_vel_nav")]
 
 
 def map_to_localize() -> str | None:
     """The map yaml to localize against, or None for mapping mode."""
+    map_name = nav_config().get("map")
+    map_yaml = os.path.join(MAPS_DIR, f"{map_name}.yaml")
+    return map_yaml if nav_config().get("mode") == "localize" and map_name and os.path.exists(map_yaml) else None
+
+
+def keepout_mask(map_yaml: str | None) -> str:
+    """The keepout mask yaml for the map in use, else the empty one."""
+    mask_yaml = os.path.join(KEEPOUT_DIR, f"{nav_config().get('map')}.yaml")
+    return mask_yaml if map_yaml is not None and os.path.exists(mask_yaml) else EMPTY_KEEPOUT
+
+
+def nav_config() -> dict:
     try:
         with open(NAV_CONFIG_PATH) as handle:
-            nav = json.load(handle)
+            return json.load(handle)
     except (OSError, ValueError):
-        return None
-    if nav.get("mode") != "localize" or not nav.get("map"):
-        return None
-    map_yaml = os.path.join(MAPS_DIR, f"{nav['map']}.yaml")
-    return map_yaml if os.path.exists(map_yaml) else None
+        return {}
 
 
 def mapping_nodes() -> list:
@@ -85,6 +99,32 @@ def localize_nodes(map_yaml: str) -> list:
             name="lifecycle_manager_localization",
             output="screen",
             parameters=[{"autostart": True, "node_names": ["map_server", "amcl"]}],
+        ),
+    ]
+
+
+def keepout_nodes(mask_yaml: str) -> list:
+    return [
+        Node(
+            package="nav2_map_server",
+            executable="map_server",
+            name="filter_mask_server",
+            output="screen",
+            parameters=[NAV2_PARAMS, {"yaml_filename": mask_yaml}],
+        ),
+        Node(
+            package="nav2_map_server",
+            executable="costmap_filter_info_server",
+            name="costmap_filter_info_server",
+            output="screen",
+            parameters=[NAV2_PARAMS],
+        ),
+        Node(
+            package="nav2_lifecycle_manager",
+            executable="lifecycle_manager",
+            name="lifecycle_manager_keepout",
+            output="screen",
+            parameters=[{"autostart": True, "node_names": ["filter_mask_server", "costmap_filter_info_server"]}],
         ),
     ]
 
@@ -139,4 +179,4 @@ def navigation_nodes() -> list:
 def generate_launch_description() -> LaunchDescription:
     map_yaml = map_to_localize()
     mode_nodes = mapping_nodes() if map_yaml is None else localize_nodes(map_yaml)
-    return LaunchDescription(mode_nodes + navigation_nodes())
+    return LaunchDescription(mode_nodes + keepout_nodes(keepout_mask(map_yaml)) + navigation_nodes())

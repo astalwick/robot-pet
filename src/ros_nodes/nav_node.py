@@ -118,6 +118,9 @@ RELOCALIZE_SPINS = 2
 # relocalize spin, so it is tight and the particles gather around it.
 INITIAL_POSE_XY_VARIANCE = 0.1
 INITIAL_POSE_YAW_VARIANCE = 0.07
+# A new bridge under a running AMCL waits this long for AMCL's map pose to
+# reach it over TF before deciding AMCL is fresh and needs a pose from us.
+AMCL_POSE_WAIT_SECONDS = 3.0
 # No scan fit on a tick where the lidar turned more than this since the last:
 # a scan taken while spinning at gamepad speed is smeared by several degrees.
 SCAN_FIT_MAX_TURN_RADIANS = 0.2
@@ -151,8 +154,9 @@ class NavNode(Node):
         self.scan_fit_yaw: float | None = None
         # AMCL's best guess, for a relocalize to hand back once the scan fits there
         self.amcl_pose: dict[str, float] | None = None
-        # the AMCL lifecycle state the timer last saw; None until the first tick
+        # the AMCL lifecycle state the timer last saw; None until decided
         self.amcl_active: bool | None = None
+        self.started = time.monotonic()
         # one localize or save at a time
         self.busy = threading.Lock()
         # the current or last navigation goal (see nav_update); the serial
@@ -230,14 +234,20 @@ class NavNode(Node):
 
     def on_amcl_state(self, future) -> None:
         active = future.result().current_state.label == "active"
-        if active and self.amcl_active is None and self.pose is not None and self.remembered_pose() is not None:
-            # Only this bridge restarted: AMCL is up and tracking (it gives us a
-            # pose) where the last bridge left it localized. Handing it the
-            # remembered pose again would reset its particles, mid-move for all
-            # we know. A fresh AMCL gives no pose until it gets one.
-            log.info("AMCL already tracking on %s: keeping its pose", self.map_name)
-            self.localized = True
-        elif active and self.amcl_active is not True:
+        if active and self.amcl_active is None:
+            # Only this bridge restarted? Then AMCL is up and tracking (it gives
+            # us a map pose) where the last bridge left it localized, and
+            # handing it the remembered pose again would reset its particles,
+            # mid-move for all we know. A fresh AMCL gives no pose until it gets
+            # one; TF takes a moment to reach a new node, so wait for it.
+            if self.pose is not None and self.remembered_pose() is not None:
+                log.info("AMCL already tracking on %s: keeping its pose", self.map_name)
+                self.localized = True
+                self.amcl_active = True
+                return
+            if time.monotonic() - self.started < AMCL_POSE_WAIT_SECONDS:
+                return
+        if active and self.amcl_active is not True:
             self.on_amcl_became_active()
         self.amcl_active = active
 

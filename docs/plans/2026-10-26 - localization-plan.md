@@ -249,12 +249,13 @@ doesn't this work the way I expected":
   Emotes and in-place actions never wait for a map fix. The rest of the
   lidar power rules live in another plan.
 - **What is allowed while not tracking.** Gamepad driving: yes, always, at
-  a capped speed while the pose is unsure, because map barriers cannot
-  protect a robot that does not know where it is and the sensors (cliff,
-  forward distance, lidar stop) are then the only guard. Trips: allowed
-  from a clean `checking` (see part 3), refused while `searching` or
-  `off_map`. Emotes and in-place actions: yes. None of this is announced;
-  the dashboard marker going soft is the only sign.
+  full speed. A week ago the gamepad ran on cliff and forward sensors
+  alone and that was fine; map barriers are a bonus when the pose is known,
+  never something the gamepad depends on (Arlen, 2026-10-27: "lidar is
+  additive to what we have"). Trips: allowed from a clean `checking` (see
+  part 3), refused while `searching` or `off_map`. Emotes and in-place
+  actions: yes. None of this is announced; the dashboard marker going soft
+  is the only sign.
 - **Not on a map needs motion.** Standing still in an unmapped room the
   honest state is `searching` ("nothing found yet"). `off_map` is declared
   after about 2 m of travel or 60 s of trying with no candidate surviving on
@@ -272,9 +273,9 @@ doesn't this work the way I expected":
   `checking` or `stale`, at most three ghost candidates while `searching`,
   gone when `off_map`. State words, agree and through shares, the reason
   text, the full candidate list and the learner's change overlay live
-  behind the existing debug toggle. The Localize button goes when the
-  search runs on its own (phase 3); a "find yourself" button says the robot
-  cannot be trusted to.
+  behind the existing debug toggle. The Localize button moves behind it too
+  once the search runs on its own (phase 3): useful to the engineer, and a
+  "find yourself" button in front says the robot cannot be trusted to.
 
 Mine, added:
 
@@ -305,9 +306,9 @@ Mine, added:
 11. **Honest surface.** One new node and one pure-function module carry the
     maths. The plan also touches, and says so: the bridge (recorder, state
     relay into `nav_update`, trip-from-checking, resume), the motion node
-    (the rare turn nudge, the gamepad speed cap), the voice (three
-    sentences), the dashboard (marker, debug panel, Localize button
-    removed), the replay tool, and AMCL's configuration: the seed covariance
+    (the rare turn nudge), the voice (three sentences), the dashboard
+    (marker, debug panel, Localize button moved into it), the replay tool,
+    and AMCL's configuration: the seed covariance
     tightens from today's 0.1 m² (a 32 cm spread, useless for a 10 cm
     target) to about 0.02, and `recovery_alpha_slow`/`fast` go to zero once
     the search exists, because two recovery mechanisms fighting (AMCL
@@ -414,8 +415,8 @@ What each state allows:
 | state | trips | gamepad | emotes, in-place actions | barriers |
 | --- | --- | --- | --- | --- |
 | tracking | yes | yes | yes | map barriers plus sensors |
-| checking | yes when clean | yes, speed capped | yes | sensors only |
-| searching, stale, off_map | refused, running trip stopped | yes, speed capped | yes | sensors only |
+| checking | yes when clean | yes | yes | sensors only |
+| searching, stale, off_map | refused, running trip stopped | yes | yes | sensors only |
 
 The user sees three of these, as the marker: solid (tracking), soft
 (checking, stale), ghosts or gone (searching, off_map).
@@ -716,8 +717,8 @@ evening of far smaller changes produced three fix batches.
   one-turn request to robot_motion for the tied case, and the bridge taught
   that the turn is not a reason to cancel a waiting trip.
 - Relocalize becomes "search now": spin code deleted, `RELOCALIZE_SPINS`
-  gone. The Localize button stays only until phase 3 gives the search its
-  own triggers.
+  gone. The Localize button stays in front only until phase 3 gives the
+  search its own triggers.
 - All saved maps are searched; the winner names the map.
 - Exit, on the floor: carried to twenty spots, set down, Localize pressed
   (phase 3 removes the button): the right candidate within 5 s where the
@@ -737,7 +738,7 @@ evening of far smaller changes produced three fix batches.
   trip asked for in a clean `checking` leaves at once. `stale` when the
   lidar goes off. The trip's start allowance is sized from the measured
   spin-up, and should rarely be reached.
-- The Localize button is removed (or moved behind the debug toggle).
+- The Localize button moves behind the debug toggle.
 - `off_map` after the search fails on every map and the robot has moved
   about 2 m or tried for 60 s.
 - AMCL `recovery_alpha_slow` and `recovery_alpha_fast` set to zero; the
@@ -745,8 +746,8 @@ evening of far smaller changes produced three fix batches.
 - Nav2 coupling finished: `searching` mid-trip stops the trip; a re-find
   within 30 s with the goal still standing resumes the trip by itself;
   otherwise the trip is given up and the voice says so. Trips refused in
-  `searching` and `off_map`; the barrier gate hands over to sensors only
-  and the gamepad speed is capped, with no announcement.
+  `searching` and `off_map`; the barrier gate hands over to sensors only,
+  with no announcement and no change to gamepad speed.
 - The voice: "give me a second" only to a trip request while genuinely
   searching after being moved; the give-up; "I need a map of this room".
   Nothing after an ordinary idle.
@@ -884,12 +885,17 @@ Arlen: "yes, take all"):
   places and barriers; "forget what you learned" is the correction. Per
   visit verdict (20 votes, 90 percent) so wall edges do not erode; the
   ten-visit return rule is cut.
-- Localize button removed in phase 3. The user's dashboard is the marker
+- Localize button behind the debug toggle from phase 3 (Arlen: "keep
+  localize behind a debug toggle"). The user's dashboard is the marker
   (solid, soft, ghosts, gone); state words, shares, reasons, candidate
   lists and the change overlay live behind the debug toggle. The voice
   speaks only after a genuine move, a give-up, or off the map.
-- Barriers hand over to sensors silently; gamepad speed is capped while
-  the pose is unsure.
+- Barriers hand over to sensors silently. The gamepad is never slowed:
+  the review suggested a speed cap while the pose is unsure, it went in
+  under "take all", and Arlen struck it the same day ("a week ago we didn't
+  have lidar at all, and gamepad was fine. lidar is additive"). The one
+  turn for tied candidates and the lidar staying on a minute after a
+  conversation were confirmed as fine.
 - Evening estimates doubled. The localizer state is relayed into
   `nav_update` by the bridge. "Tracker swap" in phase 5 means the refine
   step run every tick, replacing AMCL, not Beluga.

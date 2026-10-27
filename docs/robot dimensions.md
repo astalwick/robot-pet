@@ -47,7 +47,7 @@ Forward ToF boards: Adafruit VL53L1X 3967, 25.5 wide x 17.5 tall per Adafruit, 4
 
 Downward facing cliff ToF sensors (measured):
 Blue VL53L0X boards with a white JST plug, 20 x 20, 9 thick including the plug (measured 2026-10-26; not the Adafruit 3317 the doc used to guess; the size matches Seeed's Grove boards)
-67mm off the ground (`z = 0.067`)
+67mm off the ground (`z = 0.067`); the top of the tilted board is 77 off the floor (measured 2026-10-26), which puts the board's centre at about 66, so the two agree
 128mm off center, left and right (`cliff_left y = +0.128`, `cliff_right y = -0.128`)
 angled 35 degrees downward (`pitch = +0.611 rad`; positive pitch is nose-down in a z-up frame)
 mounted at the leading edge — top edge sits ~9mm forward of the bumper (`x ≈ +0.060`)

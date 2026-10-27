@@ -238,27 +238,27 @@ class RenderKeepoutMaskTest(unittest.TestCase):
 
 
 class BarrierClearancesTest(unittest.TestCase):
-    """Body edges: 0.064 m ahead of the axle, 0.266 m behind, 0.1655 m to each side."""
+    """Body edges: 0.060 m ahead of the axle, 0.284 m behind, 0.166 m to each side."""
 
     FACING_X = {"x": 0.0, "y": 0.0, "yaw": 0.0}
     ACROSS_AT_X1 = {"x1": 1.0, "y1": -2.0, "x2": 1.0, "y2": 2.0}
 
     def test_a_barrier_ahead_is_measured_from_the_front_edge(self):
         forward_m, rear_m = robot_nav.barrier_clearances(self.FACING_X, [self.ACROSS_AT_X1])
-        self.assertAlmostEqual(forward_m, 1.0 - 0.064)
+        self.assertAlmostEqual(forward_m, 1.0 - 0.060)
         self.assertEqual(rear_m, math.inf)
 
     def test_a_barrier_behind_is_measured_from_the_rear_edge(self):
         behind = {"x1": -1.0, "y1": -2.0, "x2": -1.0, "y2": 2.0}
         forward_m, rear_m = robot_nav.barrier_clearances(self.FACING_X, [behind])
         self.assertEqual(forward_m, math.inf)
-        self.assertAlmostEqual(rear_m, 1.0 - 0.266)
+        self.assertAlmostEqual(rear_m, 1.0 - 0.284)
 
     def test_the_pose_and_heading_count(self):
         # facing -y from (3, 5): the line at y = 4 is 1 m ahead of the axle
         pose = {"x": 3.0, "y": 5.0, "yaw": -math.pi / 2}
         forward_m, _ = robot_nav.barrier_clearances(pose, [{"x1": 0.0, "y1": 4.0, "x2": 6.0, "y2": 4.0}])
-        self.assertAlmostEqual(forward_m, 1.0 - 0.064)
+        self.assertAlmostEqual(forward_m, 1.0 - 0.060)
 
     def test_a_barrier_beside_the_body_is_not_in_the_way(self):
         beside = {"x1": -2.0, "y1": 0.5, "x2": 2.0, "y2": 0.5}
@@ -266,9 +266,9 @@ class BarrierClearancesTest(unittest.TestCase):
 
     def test_a_short_barrier_counts_only_where_it_crosses_the_body_width(self):
         # a line from (2, 0.1) back to (1, 1.1): it is inside the body's width
-        # only up to y = 0.1655, which is x = 1.9345, so that is the nearest point
+        # only up to y = 0.166, which is x = 1.934, so that is the nearest point
         forward_m, _ = robot_nav.barrier_clearances(self.FACING_X, [{"x1": 2.0, "y1": 0.1, "x2": 1.0, "y2": 1.1}])
-        self.assertAlmostEqual(forward_m, 1.9345 - 0.064)
+        self.assertAlmostEqual(forward_m, 1.934 - 0.060)
         # the same line starting past the body's width is not in the way
         self.assertEqual(robot_nav.barrier_clearances(self.FACING_X, [{"x1": 1.0, "y1": 0.2, "x2": 2.0, "y2": 1.2}]), (math.inf, math.inf))
 
@@ -281,7 +281,7 @@ class BarrierClearancesTest(unittest.TestCase):
     def test_the_nearest_of_several_barriers_wins(self):
         further = {"x1": 2.0, "y1": -2.0, "x2": 2.0, "y2": 2.0}
         forward_m, _ = robot_nav.barrier_clearances(self.FACING_X, [further, self.ACROSS_AT_X1])
-        self.assertAlmostEqual(forward_m, 1.0 - 0.064)
+        self.assertAlmostEqual(forward_m, 1.0 - 0.060)
         self.assertEqual(robot_nav.barrier_clearances(self.FACING_X, []), (math.inf, math.inf))
 
 

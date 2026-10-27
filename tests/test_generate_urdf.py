@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from robot_model import LIDAR_MOUNT, SENSOR_MOUNTS, TRACK_WIDTH_METERS, WHEEL_RADIUS_METERS
+from robot_model import IMU_MOUNT, LIDAR_MOUNT, SENSOR_MOUNTS, TRACK_WIDTH_METERS, WHEEL_RADIUS_METERS
 
 spec = importlib.util.spec_from_file_location("generate_urdf", os.path.join(ROOT, "scripts", "generate-urdf.py"))
 generate_urdf = importlib.util.module_from_spec(spec)
@@ -56,7 +56,8 @@ class GenerateUrdfTest(unittest.TestCase):
         self.assertEqual(rpy[2], round(LIDAR_MOUNT.yaw, 4))
 
     def test_imu_frame_matches_the_imu_message_frame_id(self):
-        self.assertIn("imu_link", joint_origins(self.root))
+        xyz, _ = joint_origins(self.root)["imu_link"]
+        self.assertEqual(xyz, (round(IMU_MOUNT.x, 4), round(IMU_MOUNT.y, 4), round(IMU_MOUNT.z, 4)))
 
     def test_urdf_survives_the_systemd_parameter_handoff(self):
         # robot-state-publisher.service passes the file as `-p robot_description:=...`,

@@ -4,14 +4,14 @@ Use three forward-facing VL53L1X sensors for near-front obstacle detection.
 
 > Positions are in `base_link` (REP-103: +x forward, +y left, +z up, meters).
 > The origin is the drive-axle midpoint on the ground centerline. The drive axle
-> sits 55 mm behind the bumper front face, so the bumper front is at `x = +0.055 m`.
+> sits 51 mm behind the bumper front face, so the bumper front is at `x = +0.051 m`.
 > Authoritative mount poses live in `src/robot_model.py` (`SENSOR_MOUNTS`).
 
 Coordinate system:
 
 - `y` is side-to-side position from the centerline. **+y is left, -y is right.**
 - `S` is sensor inset behind the front bumper. A sensor inset `S` is at
-  `x = 0.055 - S` (a larger inset means a smaller, more negative x).
+  `x = 0.051 - S` (a larger inset means a smaller, more negative x).
 - `B` is obstacle clearance in front of the bumper.
 - `D` is distance from the sensor to the obstacle plane.
 
@@ -25,26 +25,26 @@ The VL53L1X field of view is treated as a 27 degree cone, or +/- 13.5 degrees.
 - `tan(13.5 degrees) = 0.240`
 - One straight-ahead sensor covers `y +/- 0.240D` at distance `D`.
 
-### Mounting (measured)
+### Mounting (measured 2026-10-26, to the sensor chip's face)
 
 Left sensor (`forward_left`):
 
-- `y = +110 mm` (left of center)
-- `S = 118 mm` behind the front bumper  →  `x = -63 mm`
+- `y = +112 mm` (left of center)
+- `S = 112 mm` behind the front bumper  →  `x = -61 mm`
 - height `z = 126 mm`
 - yaw = `0 degrees`, facing straight forward
 
 Center sensor (`forward_center`):
 
 - `y = 0 mm`
-- `S = 45 mm` behind the front bumper  →  `x = +10 mm`
+- `S = 39.5 mm` behind the front bumper  →  `x = +11.5 mm`
 - height `z = 110 mm` (lower than the side sensors)
 - yaw = `0 degrees`, facing straight forward
 
 Right sensor (`forward_right`):
 
-- `y = -110 mm` (right of center)
-- `S = 118 mm` behind the front bumper  →  `x = -63 mm`
+- `y = -112 mm` (right of center)
+- `S = 112 mm` behind the front bumper  →  `x = -61 mm`
 - height `z = 126 mm`
 - yaw = `0 degrees`, facing straight forward
 
@@ -87,7 +87,7 @@ At that range, walls should be detected cleanly. Chair legs around 2 inches wide
 ### Vertical clearance
 
 > Nominal-mounting analysis (side sensors at 120 mm height, 110 mm inset). The
-> measured mounting (126 mm height, 118 mm inset) clears the bumper by a little
+> measured mounting (126 mm height, 112 mm inset, bumper top now 65 mm) clears the bumper by
 > more, so the conclusion below is conservative.
 
 The side sensors sit `110 mm` behind the bumper. At that inset, the cone spreads vertically by:

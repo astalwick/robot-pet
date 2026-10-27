@@ -16,6 +16,7 @@ from robot_model import (  # noqa: E402
     FOOTPRINT_FRONT_X_METERS,
     FOOTPRINT_HALF_WIDTH_METERS,
     FOOTPRINT_REAR_X_METERS,
+    IMU_MOUNT,
     LIDAR_MOUNT,
     SENSOR_MOUNTS,
     TRACK_WIDTH_METERS,
@@ -69,10 +70,10 @@ def render_urdf() -> str:
         parts.append(f'  <link name="{mount.name}"/>\n')
         parts.append(fixed_joint(mount.name, mount.x, mount.y, mount.z, pitch=mount.pitch, yaw=mount.yaw))
     parts.append("""
-  <!-- IMU mount is not measured yet; it sits at the base_link origin until it is. -->
+  <!-- BNO085 IMU; the mount position is IMU_MOUNT in robot_model.py -->
   <link name="imu_link"/>
 """)
-    parts.append(fixed_joint("imu_link", 0.0, 0.0, 0.0))
+    parts.append(fixed_joint("imu_link", IMU_MOUNT.x, IMU_MOUNT.y, IMU_MOUNT.z))
     parts.append("""
   <!-- RPLidar A1 scan frame; the mount pose is LIDAR_MOUNT in robot_model.py -->
   <link name="laser"/>

@@ -122,20 +122,20 @@ class SafetyGateTest(unittest.TestCase):
         self.assertIsNone(blocking_reason(0, 0, both))
 
     def test_scan_clearances_measures_from_the_body_edges(self):
-        # the laser sits 82 mm behind the axle; the front edge is 64 mm ahead of it
+        # the laser sits 82 mm behind the axle; the front edge is 60 mm ahead of it
         ahead = one_return(1.0, 0.0)
-        self.assertAlmostEqual(ahead.forward_m, 0.854)
+        self.assertAlmostEqual(ahead.forward_m, 0.858)
         self.assertIsNone(ahead.rear_m)
 
-        # the rear edge is 266 mm behind the axle, so 184 mm behind the laser
+        # the rear edge is 284 mm behind the axle, so 202 mm behind the laser
         behind = one_return(1.0, math.pi)
         self.assertIsNone(behind.forward_m)
-        self.assertAlmostEqual(behind.rear_m, 0.816)
+        self.assertAlmostEqual(behind.rear_m, 0.798)
 
     def test_scan_clearances_ignores_points_beside_and_inside_the_body(self):
         self.assertEqual(one_return(0.5, math.pi / 2), Clearances(None, None))
         self.assertEqual(one_return(0.5, -math.pi / 2), Clearances(None, None))
-        # 0.1 m ahead of the laser is still 18 mm behind the front edge
+        # 0.1 m ahead of the laser is still 42 mm behind the front edge
         self.assertEqual(one_return(0.1, 0.0), Clearances(None, None))
         # out of range: no return, and short reflections off the deck
         self.assertEqual(one_return(math.inf, 0.0), Clearances(None, None))
@@ -145,12 +145,12 @@ class SafetyGateTest(unittest.TestCase):
         # 0, 90, 180 and 270 degrees; a nearer return straight ahead comes later
         ranges = [2.0, 0.3, 1.5, 0.3]
         clearances = scan_clearances(ranges, 0.0, math.pi / 2, 0.15, 12.0)
-        self.assertAlmostEqual(clearances.forward_m, 2.0 - 0.082 - 0.064)
-        self.assertAlmostEqual(clearances.rear_m, 1.5 - (0.266 - 0.082))
+        self.assertAlmostEqual(clearances.forward_m, 2.0 - 0.082 - 0.060)
+        self.assertAlmostEqual(clearances.rear_m, 1.5 - (0.284 - 0.082))
 
         ranges = [2.0, 0.3, 1.5, 0.3, 0.6]
         clearances = scan_clearances(ranges, 0.0, math.pi / 2, 0.15, 12.0)
-        self.assertAlmostEqual(clearances.forward_m, 0.6 - 0.082 - 0.064)
+        self.assertAlmostEqual(clearances.forward_m, 0.6 - 0.082 - 0.060)
 
     def test_lidar_forward_clearance_blocks_forward_only(self):
         state = evaluate_safety(

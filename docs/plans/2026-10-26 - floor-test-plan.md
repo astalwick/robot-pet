@@ -98,7 +98,16 @@ journals, no floor test in between):
   after the restart command (102924.4 to 102928.4); fix 1 PASS. Fix 2 did not
   trigger: the first AMCL poll came 0.5 s after start, before any map pose had
   reached the new bridge over TF, so it re-sent the remembered pose as before.
-  Harmless this time (localized yes, fit 0.55 standing still) but not the fix.
+  Not harmless: the dashboard said localized yes at fit 0.55, but Arlen found
+  the robot about a metre from where the map showed it (0.92, 1.06). The
+  handed pose sets localized yes unconditionally and 0.55 sits in the dead
+  band between the 0.4 lost and 0.6 found bars, so nothing ever re-checked
+  it. BUG, same hole as the wrong-heading case in section 3. Fix candidates:
+  show "checking" after a handed pose until the fit confirms it (three ticks
+  above the found bar, as a relocalize does); make the fit score stricter
+  than "a beam within 3 cells of any occupied cell" so a metre off scores
+  clearly worse than the real spot; then revisit the bars. Run 2 below kept
+  AMCL's pose, which was probably still this wrong one.
   Commit d3b2d50 waits up to 3 s for AMCL's pose before deciding it is fresh.
   Run 2 (d3b2d50): cancel 3.8 s after the restart command, then "AMCL already
   tracking on groundfloor: keeping its pose" 1 s after start, no

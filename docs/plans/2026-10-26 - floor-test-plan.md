@@ -92,13 +92,27 @@ journals, no floor test in between):
   poll finds it active and giving a map pose, with a remembered pose on this
   map, the bridge keeps AMCL's pose and marks localized instead of re-sending
   the old one. A fresh AMCL gives no map pose until it gets one, so boot and
-  a robot-nav restart (check 29) still behave as before. NOT YET VERIFIED on
-  the floor: the motor switch was off when it deployed (the redeploy's own
-  relocalize asked for the rail, the RoboClaw never answered, "no scans after
-  20s"). To verify: switch on, Localize, start a trip, restart
-  robot-nav-bridge mid-trip; expect Nav2 "Client requested to cancel the goal"
-  within 4 s, the bridge log "AMCL already tracking on groundfloor: keeping
-  its pose", and localized staying yes.
+  a robot-nav restart (check 29) still behave as before.
+  Floor results (two runs, bridge restarted 4 s into a kitchen trip):
+  run 1 (584be58): Nav2 logged "Client requested to cancel the goal" 4.0 s
+  after the restart command (102924.4 to 102928.4); fix 1 PASS. Fix 2 did not
+  trigger: the first AMCL poll came 0.5 s after start, before any map pose had
+  reached the new bridge over TF, so it re-sent the remembered pose as before.
+  Harmless this time (localized yes, fit 0.55 standing still) but not the fix.
+  Commit d3b2d50 waits up to 3 s for AMCL's pose before deciding it is fresh.
+  Run 2 (d3b2d50): cancel 3.8 s after the restart command, then "AMCL already
+  tracking on groundfloor: keeping its pose" 1 s after start, no
+  initialPoseReceived in AMCL's log, localized stayed yes, fit 0.52 to 0.57
+  before and after. Both PASS. The redeploy's own bridge restart while
+  standing still also took the new path. Side notes: the restart gap is now
+  the whole exposure (about 3.8 s of Nav2 driving alone); audit cluster C
+  (robot-motion locks Nav2 out when the bridge's telemetry goes stale) would
+  close that. Scan fit along this trip and at its end was 0.52 to 0.57, below
+  the 0.6 found bar, so localized here rests on the rule's stickiness, more
+  evidence for the open "60% may be too strict" item. Before this session's
+  tests the motor board ignored the rail for three attempts with the switch
+  on (GPIO 24 confirmed high); it came back on its own, Arlen suspects a loose
+  GPIO lead.
 - Shelved idea (Arlen's): replace the spin with a background search of the
   whole map using the current scan (our scan fit score at every free cell and
   heading), acting only on a clearly better pose that wins twice while moving.

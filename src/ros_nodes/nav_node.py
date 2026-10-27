@@ -63,6 +63,7 @@ from pathlib import Path
 
 import rclpy
 from action_msgs.msg import GoalStatus
+from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
 from nav2_msgs.action import NavigateToPose
@@ -163,6 +164,8 @@ class NavNode(Node):
         # and the serial of the goal a relocalize was already run for
         self.goal_request: tuple | None = None
         self.goal_relocalized_serial = 0
+        # a trip Nav2 was still driving when the last bridge went away
+        self.orphan_trip_checked = False
         self.nav_lock = False
         # bt_navigator's lifecycle label (None while it is not up), and our
         # last lifecycle request: the label it was sent from, when, and its
@@ -185,6 +188,7 @@ class NavNode(Node):
         self.filter_mask_client = self.create_client(LoadMap, "/filter_mask_server/load_map")
         self.global_localization_client = self.create_client(Empty, "/reinitialize_global_localization")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        self.nav_cancel_client = self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal")
         self.bt_navigator_state_client = self.create_client(GetState, "/bt_navigator/get_state")
         self.nav2_manage_client = self.create_client(ManageLifecycleNodes, "/lifecycle_manager_navigation/manage_nodes")
         self.create_subscription(Bool, "/nav_lock", self.on_nav_lock, 10)
@@ -226,7 +230,14 @@ class NavNode(Node):
 
     def on_amcl_state(self, future) -> None:
         active = future.result().current_state.label == "active"
-        if active and self.amcl_active is not True:
+        if active and self.amcl_active is None and self.pose is not None and self.remembered_pose() is not None:
+            # Only this bridge restarted: AMCL is up and tracking (it gives us a
+            # pose) where the last bridge left it localized. Handing it the
+            # remembered pose again would reset its particles, mid-move for all
+            # we know. A fresh AMCL gives no pose until it gets one.
+            log.info("AMCL already tracking on %s: keeping its pose", self.map_name)
+            self.localized = True
+        elif active and self.amcl_active is not True:
             self.on_amcl_became_active()
         self.amcl_active = active
 
@@ -244,6 +255,8 @@ class NavNode(Node):
         self.update_pose()
         self.update_localized()
         self.manage_nav2()
+        if not self.orphan_trip_checked and self.nav_cancel_client.service_is_ready():
+            self.cancel_orphan_trip()
         self.send_pending_goal()
         self.update_map_png()
         self.remember_pose()
@@ -678,6 +691,17 @@ class NavNode(Node):
 
     def navigating(self) -> bool:
         return self.goal is not None and self.goal["state"] == "navigating"
+
+    def cancel_orphan_trip(self) -> None:
+        """A bridge that died or restarted mid-trip left Nav2 driving with
+        nothing watching it. An empty CancelGoal (zero goal id and stamp) asks
+        Nav2 to cancel every goal it still has; once, when Nav2 first answers."""
+        self.orphan_trip_checked = True
+        self.nav_cancel_client.call_async(CancelGoal.Request()).add_done_callback(self.on_orphan_trip_cancelled)
+
+    def on_orphan_trip_cancelled(self, future) -> None:
+        if future.result().goals_canceling:
+            log.warning("cancelled a trip Nav2 was still driving from before this bridge started")
 
     def manage_nav2(self) -> None:
         """Keep the Nav2 navigation servers active while the lidar scans and

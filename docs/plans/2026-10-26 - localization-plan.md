@@ -161,6 +161,25 @@ house the simple version is enough: a slow, confidence-gated occupancy
 update of a copy of the map, which is what a vacuum effectively does when it
 "adjusts" after you move a sofa.
 
+## The goal
+
+A robot that always knows where it is, without being told. It finds its
+position on the map from where it stands, without spinning. It keeps
+checking that position while it drives or is driven and fixes it when it is
+wrong. It knows which saved map it is on. It never calls itself localized
+when it is not. Carried, dragged mid-trip, rebooted: it works it out on its
+own, and the dashboard tells the truth about what it believes. Later, the
+map absorbs changes to the house, and the robot knows when it is on no map
+at all. Done cleanly, as one design, not more patches on the current score.
+
+One principle runs through the design: **contradiction triggers, prior
+guides, motion confirms.** A robot that knew where it was and drove into a
+featureless corner is not lost; it has little to see. Only evidence that
+contradicts where odometry says it should be (beams through mapped walls, a
+world that moved while the wheels did not) starts a search, the search
+starts from where odometry says the robot should be, and nothing is believed
+until a little motion confirms it.
+
 ## Requirements
 
 Arlen's, in his order:
@@ -173,11 +192,61 @@ Arlen's, in his order:
 
 Later: learns changes to the map; knows when it is on no map at all.
 
+Agreed with Arlen on 2026-10-27, after asking what would make him say "why
+doesn't this work the way I expected":
+
+- **Everyday changes are not errors.** A moved chair, an open door, a person
+  walking past, the dog: the robot stays `tracking` through all of them. The
+  judge tolerates things that are closer than the map says (something new in
+  the way) and only distrusts things that are farther (a beam through a
+  mapped wall), with a tolerance read off recordings. Map learning (phase 4)
+  is what keeps this true over months, not a luxury.
+- **The map is audited before any bar is trusted.** A strict judge punishes
+  a correct pose wherever the map is wrong: doubled walls from an imperfect
+  loop closure, ghosts of people or open doors from mapping day, missing
+  glass or dark surfaces. Unknown (grey) cells are "no opinion", never a
+  wall. Through-beams at known-true poses that cluster on a few cells mark
+  map errors to fix or re-map; through-beams spread everywhere mean the
+  judge's tolerance is wrong. Re-map with care if needed: doors in their
+  usual state, nobody walking, slow drive with loop closures.
+- **Numbers to hold it to.** Position within 10 cm and heading within 5
+  degrees while `tracking`. A clear commit within 5 s of being set down
+  where the spot is unambiguous, within 20 s with one nudge. Zero false
+  `tracking` over twenty carried-and-set-down trials; one miss is a bug, not
+  a statistic.
+- **After a stop mid-trip.** If the robot re-finds itself within 30 s and
+  the goal still stands, the trip resumes by itself. If it cannot, it says so
+  out loud through the voice and gives the trip up.
+- **Lidar off means belief stale.** Continuous localization exists only
+  while the lidar spins. When it has been off, the state is `stale`: the
+  dashboard says so, and the rail coming back re-checks before any trip.
+  Pickup detection from the cliff sensors and IMU works with the lidar off.
+  The lidar power rules themselves live in another plan, with Arlen's rule
+  recorded here: a voice interaction delays the lidar going off (one minute
+  after the last interaction) but does not start it unless it triggers
+  motion; emotes and in-place actions never wait for a map fix.
+- **What is allowed while not tracking.** Gamepad driving: yes, always.
+  Trips: refused. Barriers live on the map, so barrier protection is
+  replaced by the sensors alone (cliff, forward distance, lidar stop) and the
+  dashboard says so. Emotes and in-place actions: yes.
+- **Not on a map needs motion.** Standing still in an unmapped room the
+  honest state is `searching`, waiting for motion. `off_map` is declared
+  after about 2 m of travel or 60 s of trying with no candidate surviving on
+  any map, and the dashboard says it is waiting for motion until then.
+- **The voice reports the state.** "Go to the kitchen" while uncertain gets
+  "I'm not sure where I am yet, give me a second", not a refusal or a spin.
+  A failed re-find after a stop is announced. (The deafness-during-trips
+  item from the UX audit is separate and still open.)
+- **Dashboard honesty.** While searching, the map shows the candidate spots,
+  not a confident marker at the old pose. Expect the nudge to fire more often
+  in hallways and symmetric corners; if that annoys, the prior (below) is
+  what reduces it.
+
 Mine, added:
 
 5. **Honest states, not a flag.** The robot reports one of `tracking`,
    `checking`, `uncertain`, `searching`, `ambiguous`, `lost`, `off_map`,
-   `carried`, and which map. Every state is earned by evidence; none is set
+   `carried`, `stale`, and which map. Every state is earned by evidence; none is set
    as a side effect of a button or a restart.
 6. **Right beats fast.** Committing to a wrong pose is worse than taking ten
    more seconds. A hypothesis is believed only after confirmation.
@@ -223,9 +292,17 @@ occupied cell and compare that predicted range with the measured one:
 
 Two numbers come out: `agree` share and `through` share. A right pose has
 high agree and near-zero through; a wrong room has middling agree and lots
-of through, which is exactly the case today's score cannot see. Ray casting
-360 beams over at most 240 steps of 5 cm is one vectorised numpy step
-array, well under 10 ms on the Pi.
+of through, which is exactly the case today's score cannot see. Beams that
+end in or pass through unknown cells count for neither. Ray casting 360
+beams over at most 240 steps of 5 cm is one vectorised numpy step array,
+well under 10 ms on the Pi.
+
+The two numbers mean different things and are used differently. `through`
+is contradiction: the only thing that moves the state toward `uncertain`.
+`agree` is confidence: low agree with near-zero through means "little to
+see here" (a hallway, a corner, an open room), and the state stays
+`tracking` riding on odometry, with the lower confidence shown. This is the
+"I drove here from a spot I knew, so this is that corner" rule.
 
 The state machine runs every tick, in localize mode, and owns the only
 `localized`-like word anyone else reads:
@@ -234,16 +311,27 @@ The state machine runs every tick, in localize mode, and owns the only
   the last commit. The only state that permits a trip.
 - `checking`: a pose was just handed over (boot, restart, AMCL seed) and has
   not yet earned `tracking`. Replaces today's unconditional yes.
-- `uncertain`: the score has degraded for a few ticks, or the robot was
-  dragged (odometry says still, scan says the world moved), or AMCL's
+- `uncertain`: the through share has been high for a few ticks, or the robot
+  was dragged (odometry says still, scan says the world moved), or AMCL's
   estimate and our search disagree. A trip in progress is stopped. A
-  background search starts.
+  background search starts, from the odometry prior.
 - `searching`, `ambiguous`, `lost`: the search is running, has several
   candidates it cannot separate, or has none. See part 3.
 - `carried`: both cliff sensors say no floor, or the IMU sees a lift. Exits
   to `searching` when set down.
+- `stale`: the lidar is off, so nothing has checked the pose since it went
+  off. The last pose is kept and shown as stale; the rail coming back enters
+  `checking` first.
 - `off_map`: the search found no acceptable candidate on any saved map and
-  the robot has since moved enough that it should have.
+  the robot has since moved about 2 m, or tried for 60 s, so it should have.
+
+What each state allows:
+
+| state | trips | gamepad | emotes, in-place actions | barriers |
+| --- | --- | --- | --- | --- |
+| tracking | yes | yes | yes | map barriers plus sensors |
+| checking, uncertain, searching, ambiguous, lost, stale, off_map | refused, running trip stopped | yes | yes | sensors only, dashboard says so |
+| carried | refused | no | yes | none, wheels off the floor |
 
 Thresholds and tick counts are read off the recordings in phase 1, not
 guessed. The bars are stored in `robot_nav.py` next to the pure functions,
@@ -266,6 +354,15 @@ instead scores one scan at every pose on every saved map:
   degrees), refine each at 1 degree and one cell, then run the strict judge
   on each. Candidates whose `through` share is high are discarded here, the
   step today's relocalize lacks.
+- **The prior guides.** When the search starts from `uncertain` the robot
+  has a prior: the last `tracking` pose carried forward by odometry, with a
+  doubt that grows with the distance driven since (a few percent of the
+  distance, a few degrees per turn). Candidates inside that doubt need little
+  evidence to win; candidates outside it need strong evidence over motion.
+  A carried or dragged robot has broken the prior on purpose (the wheels
+  said still, the world moved), and only then does the whole map get
+  searched with no prior. This is what keeps a hallway from turning into a
+  relocalize.
 - **Confirm before believing.** If one candidate clearly beats the rest it
   is committed at once: seed AMCL, enter `checking`, then `tracking` as the
   judge agrees over the next ticks. If two or more remain close the state is
@@ -282,8 +379,10 @@ instead scores one scan at every pose on every saved map:
   map_server and AMCL on the new one) but decided by evidence, not by trying
   maps in turn.
 - **Not on a map.** No candidate survives the judge on any map, the robot
-  has moved enough for the confirmation step to have had its chance, and the
-  judge still fails: `off_map`. The dashboard says so and offers mapping.
+  has moved about 2 m or tried for 60 s so the confirmation step has had its
+  chance, and the judge still fails: `off_map`. Until then the state is
+  `searching` and the dashboard says it is waiting for motion. Once declared,
+  the dashboard says so and offers mapping.
 
 Where it lives: a small `robot-localizer` unit of its own (approved),
 because the search can take up to a second and the nav bridge's half-second
@@ -299,8 +398,10 @@ scans.
 1. No spin: one scan, whole map, candidates in a quarter of a second,
    confirmed by ordinary motion or a small nudge.
 2. Continuous: the judge runs every tick in every mode of driving; a
-   degraded score or a drag starts a search without anyone pressing a
-   button. Above the `tracking` bar nothing is disturbed.
+   contradiction or a drag starts a search without anyone pressing a
+   button, from where odometry says the robot should be. A featureless
+   corner reached from a known spot is not a contradiction and disturbs
+   nothing.
 3. Which map: the search scores all maps and picks the one that survives.
 4. Accurate: nothing is called `tracking` without a high agree share, a near
    zero through share, and a confirmation over a few ticks. A 55 percent
@@ -342,6 +443,11 @@ and recordings accumulate during the floor tests we already do.
 - `tools/localization_replay.py` prints today's `scan_fit` and the new
   `agree` and `through` shares for every recording. That table goes into
   this document and the bars are read off it, with margin.
+- Map audit: the replay also draws where through-beams land at the
+  known-true poses. Clusters on a few cells are map errors: fix those cells
+  or re-map (doors in their usual state, nobody walking, slow drive). Spread
+  everywhere means the tolerance is wrong, not the map. The audit's verdict
+  on `groundfloor` goes into this document before any bar is set.
 - `robot_nav.beam_check(...)`: the ray-cast score, pure numpy, tests on
   synthetic maps and on the recordings, which run in the normal suite.
 - The state machine in the new localizer node; the bridge and dashboard
@@ -351,9 +457,11 @@ and recordings accumulate during the floor tests we already do.
 - Dashboard: state word, agree and through shares, map name.
 - Exit, on the floor: a metre off and the wrong room are never shown as
   `tracking`; a correct pose reaches `tracking` within three ticks of a
-  seed; a hand-dragged robot drops to `uncertain` within the chosen ticks.
-  The relocalize spin still exists in this phase and now has a judge that
-  rejects wrong rooms.
+  seed; a hand-dragged robot drops to `uncertain` within the chosen ticks;
+  a correctly localized robot driven by gamepad through the hallway and
+  into corners, past a moved chair and an open door, stays `tracking` the
+  whole way. The relocalize spin still exists in this phase and now has a
+  judge that rejects wrong rooms.
 
 ### Phase 2: the search (two to three evenings)
 
@@ -366,28 +474,35 @@ and recordings accumulate during the floor tests we already do.
 - Relocalize becomes "search now": spin code deleted, `RELOCALIZE_SPINS`
   gone, Localize button stays as a manual trigger.
 - All saved maps are searched; the winner names the map.
-- Exit, on the floor: carried to ten spots, set down, no button pressed by
-  the end of the phase (phase 3 adds the trigger; here Localize is pressed):
-  committed to the right spot with at most one nudge every time, never to a
-  wrong room; a search on the counter ends `ambiguous` or `lost`, not
-  committed.
+- Exit, on the floor: carried to twenty spots, set down, Localize pressed
+  (phase 3 adds the trigger): committed to the right spot within 5 s where
+  the spot is unambiguous and within 20 s with at most one nudge, within 10
+  cm and 5 degrees, never to a wrong room, zero misses; a search on the
+  counter ends `ambiguous` or `lost`, not committed.
 
 ### Phase 3: always on (one to two evenings)
 
 - Triggers for a search: `uncertain` for a few ticks, `carried` ending,
   boot with no remembered pose, boot with a remembered pose that fails
   `checking`, drag detection (scan moves while odometry is still).
-- `carried` from the cliff sensors and IMU; the lidar stays on while
-  carried only if the rail rules allow it (they do not today; the search
-  then starts at set-down when the rail comes back).
-- `off_map` after the search fails on every map and the robot has moved.
-- Nav2 coupling finished: `uncertain` mid-trip stops the trip, re-plans
-  after a re-commit if the goal still stands, refuses while `lost`.
+- `carried` from the cliff sensors and IMU, lidar on or off; `stale` when
+  the lidar goes off; the rail coming back enters `checking`.
+- `off_map` after the search fails on every map and the robot has moved
+  about 2 m or tried for 60 s.
+- Nav2 coupling finished: `uncertain` mid-trip stops the trip; a re-find
+  within 30 s with the goal still standing resumes the trip by itself;
+  otherwise the trip is given up and the voice says so. Trips refused in
+  every state but `tracking`; the barrier gate hands over to sensors only
+  and the dashboard says so.
+- The voice answers from the state: "I'm not sure where I am yet, give me a
+  second" to a trip request while not tracking.
 - Exit, on the floor: drag the robot mid-trip two metres and turn it: trip
   stops within two ticks, state goes `uncertain` then `searching`, re-finds
-  itself, and the dashboard tells the story without a button press. Carry it
-  to another room: same. Put it on the counter: `off_map` or `lost`, no
-  trip accepted.
+  itself and resumes the trip, and the dashboard tells the story without a
+  button press. Carry it to another room: same, minus the resume. Put it on
+  the counter: `off_map` or `lost`, no trip accepted, voice says why. Lidar
+  off, carry it, rail on: `stale` then `checking` then a search, never the
+  old pose shown as tracking.
 
 ### Phase 4: later
 
@@ -404,13 +519,34 @@ and recordings accumulate during the floor tests we already do.
 - **Tracker swap.** Beluga AMCL if it gets packaged for our distro or AMCL
   misbehaves. Nothing above changes.
 
-## Decisions (2026-10-26)
+## Decisions
+
+2026-10-26:
 
 - The nudge is allowed: turn in place or forward, respecting the forward
   distance sensor and both cliff sensors, one per search.
 - The localizer is its own unit, `robot-localizer`.
 - No separate measuring evening; recordings are collected during normal
   floor tests, starting with the two wrong poses we already have.
+
+2026-10-27 (the "Agreed with Arlen" list under Requirements, in short):
+
+- Everyday changes never cost `tracking`; through-beams, not low agreement,
+  are the only trigger; the search starts from the odometry prior.
+- The map is audited against recordings before any bar is set.
+- Targets: 10 cm, 5 degrees; commit in 5 s unambiguous, 20 s with a nudge;
+  zero false tracking in twenty trials.
+- A stopped trip resumes by itself after a re-find within 30 s, else the
+  voice announces the give-up.
+- Lidar off means `stale`; voice interaction delays lidar off by a minute
+  but does not start it unless it triggers motion; emotes and in-place
+  actions never wait for a fix (the lidar power rules get their own plan).
+- Gamepad always allowed; trips only in `tracking`; barriers hand over to
+  sensors while not tracking and the dashboard says so.
+- `off_map` after about 2 m or 60 s; `searching` says it is waiting for
+  motion until then.
+- The voice reports the state; the dashboard shows candidates while
+  searching.
 
 ## Sources
 

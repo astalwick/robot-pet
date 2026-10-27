@@ -122,6 +122,13 @@ journals, no floor test in between):
   tests the motor board ignored the rail for three attempts with the switch
   on (GPIO 24 confirmed high); it came back on its own, Arlen suspects a loose
   GPIO lead.
+- BUG (2026-10-26 night, after run 2): a Localize from the metre-off state
+  accepted (-0.67, -1.11) yaw -0.59 at scan fit 0.69 after spin 1; Arlen:
+  "It's in a completely different room. Not even close." The fit score put a
+  wrong room inside the true-pose range (0.55 to 0.94), so no threshold can
+  separate them: the score itself is the defect. Not patched; the clean plan
+  is [2026-10-26 - localization-plan.md](2026-10-26%20-%20localization-plan.md).
+  The robot's map pose is wrong until that lands; do not start a trip.
 - Shelved idea (Arlen's): replace the spin with a background search of the
   whole map using the current scan (our scan fit score at every free cell and
   heading), acting only on a clearly better pose that wins twice while moving.

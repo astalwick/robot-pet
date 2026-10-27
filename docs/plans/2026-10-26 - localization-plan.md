@@ -199,8 +199,8 @@ doesn't this work the way I expected":
   walking past, the dog: the robot stays `tracking` through all of them. The
   judge tolerates things that are closer than the map says (something new in
   the way) and only distrusts things that are farther (a beam through a
-  mapped wall), with a tolerance read off recordings. Map learning (phase 4)
-  is what keeps this true over months, not a luxury.
+  mapped wall), with a tolerance read off recordings. The learner (design
+  part 4, phase 4) is what keeps this true over months, not a luxury.
 - **The map is audited before any bar is trusted.** A strict judge punishes
   a correct pose wherever the map is wrong: doubled walls from an imperfect
   loop closure, ghosts of people or open doors from mapping day, missing
@@ -266,7 +266,8 @@ Mine, added:
 
 ## The design
 
-Three parts; the first exists.
+Four parts; the first exists. The tracker follows, the judge doubts, the
+search finds, the learner keeps the map true.
 
 ### 1. Tracker: AMCL, as now
 
@@ -393,6 +394,72 @@ used to spin. All the maths is pure numpy functions in `robot_nav.py` (or a
 sibling module if it outgrows the file) with tests on synthetic and recorded
 scans.
 
+### 4. Learner: the map follows the house
+
+Arlen: "If I move a chair or close a door or remove a coffee table, the map
+gets updated and persisted. groundfloor is groundfloor. I don't want a
+million different iterations of the same map."
+
+**One map, changed in place.** `groundfloor.pgm` and its yaml are the map,
+the same files mapping wrote. The learner changes their cells and writes
+them back (to a temporary file, then renamed over the original, so a crash
+mid-write cannot leave half a map) when the robot goes idle, and at most
+once every few minutes while it is busy. No learned copy, no versions.
+Places and barriers are unaffected: they live in map coordinates, and the
+map's origin and size never move; only cells change.
+
+**Four kinds of cell.** The PGM already has occupied (black), free (white)
+and unknown (grey). The learner adds **sometimes**: a cell that has been seen
+solid on some visits and open on others, which is what a door, a gate or a
+chair that moves daily looks like. It is stored as a second grey the map
+server reads as unknown, so Nav2 plans through it with caution and the live
+scan paints it into the costmap when it is actually there. The judge treats
+sometimes like unknown: no opinion, never a contradiction. The search's
+lookup grid ignores it. Nothing else in the stack needs to know.
+
+**What counts as evidence.** Only while `tracking` with a high agree share,
+only cells within about 4 m of the lidar (ray accuracy falls off with
+distance), only while moving slowly or standing. Each tick, every beam
+casts a vote: cells it passed through vote free, the cell it ended in votes
+occupied. Votes are grouped into **visits**: all the votes a cell receives
+within one pass, where a pass ends when the robot has been away from the
+area for 30 minutes. One lap of the kitchen is one visit, however many
+scans it took. A cell changes state after it has been contradicted on three
+separate visits (default; Arlen may change this) with no visit agreeing in
+between. A cell that changes state and later changes back becomes sometimes,
+and a sometimes cell returns to a fixed state only after ten consistent
+visits. The counters live in one sidecar file beside the map
+(`groundfloor.evidence.npz`), which is bookkeeping, not another map.
+
+**What this does for the three examples.**
+
+- Coffee table removed: on three visits the beams pass through its cells;
+  they fade to free; from then on the judge sees no contradiction there. In
+  the meantime the judge's tolerance covers them.
+- Chair moved: its old cells fade to free as above; its new cells are hit
+  on three visits and become occupied. A chair that moves daily never
+  settles and becomes sometimes, which is honest.
+- Door: solid one day, open the next. After one flip it is sometimes, and
+  neither the judge nor the search is ever surprised by it again.
+
+**Who reads the new map.** The bridge already asks map_server to load a map
+file by its `load_map` service (it does this today for map switching and
+for the keepout mask). After a write the learner asks for the same reload;
+map_server republishes `/map`, and AMCL, the costmap and the search pick it
+up. AMCL's behaviour on a map reload (it may re-initialise its particles
+from its last pose) is checked in phase 4 and, if needed, the reload waits
+for the robot to be idle and is followed by a seed from the current pose.
+
+**Why it does not eat itself.** Learning from a slightly wrong pose smears
+the map and a smeared map makes the next pose slightly wrong. The guards:
+evidence only while `tracking` with high agreement, three separate visits
+before any change, no change at all while the state is anything else, and
+the sometimes state as the honest answer for cells that keep arguing. The
+dashboard's Map card shows what changed in the last week as a coloured
+overlay, so a wrong lesson is seen. If one is seen there is no undo copy by
+Arlen's choice; a re-map of that room (mapping mode already exists) is the
+correction.
+
 ### What this gives Arlen's four points
 
 1. No spin: one scan, whole map, candidates in a quarter of a second,
@@ -504,16 +571,29 @@ and recordings accumulate during the floor tests we already do.
   off, carry it, rail on: `stale` then `checking` then a search, never the
   old pose shown as tracking.
 
-### Phase 4: later
+### Phase 4: the learner (two evenings)
 
-- **Map learning.** A `groundfloor.learned` copy of the map, updated only
-  while `tracking` with a high agree share: cells the lidar sees through on
-  several separate visits fade toward free, cells hit on several visits grow
-  toward occupied, a few percent per visit, never in one go. AMCL, the
-  search and the costmap read the learned copy; the saved original is never
-  touched; the dashboard shows the difference as a coloured overlay and
-  offers "accept into map" and "reset". If slam_toolbox's lifelong mode
-  matures, it is the alternative.
+- `robot_nav.map_votes(...)`: the per-tick vote from one scan at a tracking
+  pose, pure numpy, reusing the judge's ray cast. `robot_nav.apply_visits(...)`:
+  the visit grouping and the three-visit rule, with the sometimes state.
+  Tests on synthetic maps: a removed box fades after three visits, not two;
+  a flipping door becomes sometimes; nothing changes from an `uncertain`
+  pose.
+- The learner node (inside `robot-localizer`, it already has the scan, the
+  pose and the state) keeps the counters, writes the PGM and the evidence
+  file atomically when idle, and asks map_server to reload.
+- AMCL's reaction to a map reload is measured on the robot and the reload
+  is gated on idle plus a re-seed if it resets its particles.
+- Dashboard Map card: last week's changes as an overlay.
+- Exit, on the floor: remove the coffee table; after three visits on
+  separate occasions the table is gone from the map and the judge's through
+  share at that spot is back to zero. Open a door that was closed when
+  mapped, then close it: after the flip the door cells read as sometimes.
+  Localization accuracy is unchanged across the whole phase; the map's
+  origin, places and barriers are untouched.
+
+### Phase 5: later
+
 - **Dock or boot anchor.** A known parking spot gives a free, strong prior
   at boot, the way vacuums use the dock.
 - **Tracker swap.** Beluga AMCL if it gets packaged for our distro or AMCL
@@ -547,6 +627,11 @@ and recordings accumulate during the floor tests we already do.
   motion until then.
 - The voice reports the state; the dashboard shows candidates while
   searching.
+- Map learning is part of the design (part 4, phase 4), not a later idea.
+  One map file changed in place, no learned copies or versions, no undo
+  copy; a re-map is the correction. Defaults awaiting Arlen's word: three
+  separate visits before a cell changes, a visit ends after 30 minutes
+  away, the dashboard shows a week of changes.
 
 ## Sources
 

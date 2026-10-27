@@ -3,8 +3,8 @@
 <robot name="robo_pet">
   <link name="base_link">
     <visual>
-      <origin xyz="-0.1120 0 0.0630" rpy="0 0 0"/>
-      <geometry><box size="0.3440 0.3320 0.1260"/></geometry>
+      <origin xyz="-0.1120 0 0.0620" rpy="0 0 0"/>
+      <geometry><box size="0.3440 0.3320 0.1240"/></geometry>
     </visual>
   </link>
 
@@ -35,7 +35,7 @@
   <joint name="base_to_forward_left" type="fixed">
     <parent link="base_link"/>
     <child link="forward_left"/>
-    <origin xyz="-0.0610 0.1120 0.1260" rpy="0.0000 0.0000 0.0000"/>
+    <origin xyz="-0.0610 0.1120 0.1240" rpy="0.0000 0.0000 0.0000"/>
   </joint>
   <link name="forward_center"/>
   <joint name="base_to_forward_center" type="fixed">
@@ -47,7 +47,7 @@
   <joint name="base_to_forward_right" type="fixed">
     <parent link="base_link"/>
     <child link="forward_right"/>
-    <origin xyz="-0.0610 -0.1120 0.1260" rpy="0.0000 0.0000 0.0000"/>
+    <origin xyz="-0.0610 -0.1120 0.1240" rpy="0.0000 0.0000 0.0000"/>
   </joint>
   <link name="cliff_left"/>
   <joint name="base_to_cliff_left" type="fixed">

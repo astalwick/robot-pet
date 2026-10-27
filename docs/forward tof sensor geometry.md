@@ -31,7 +31,7 @@ Left sensor (`forward_left`):
 
 - `y = +112 mm` (left of center)
 - `S = 112 mm` behind the front bumper  →  `x = -61 mm`
-- height `z = 126 mm`
+- height `z = 124 mm`
 - yaw = `0 degrees`, facing straight forward
 
 Center sensor (`forward_center`):
@@ -45,7 +45,7 @@ Right sensor (`forward_right`):
 
 - `y = -112 mm` (right of center)
 - `S = 112 mm` behind the front bumper  →  `x = -61 mm`
-- height `z = 126 mm`
+- height `z = 124 mm`
 - yaw = `0 degrees`, facing straight forward
 
 ### Horizontal coverage
@@ -87,7 +87,7 @@ At that range, walls should be detected cleanly. Chair legs around 2 inches wide
 ### Vertical clearance
 
 > Nominal-mounting analysis (side sensors at 120 mm height, 110 mm inset). The
-> measured mounting (126 mm height, 112 mm inset, bumper top now 65 mm) clears the bumper by
+> measured mounting (124 mm height, 112 mm inset, bumper top now 65 mm) clears the bumper by
 > more, so the conclusion below is conservative.
 
 The side sensors sit `110 mm` behind the bumper. At that inset, the cone spreads vertically by:

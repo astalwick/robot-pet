@@ -78,9 +78,9 @@ CLIFF_DOWN_PITCH = math.radians(35)
 # behind the bumper (so they land behind the axle); the center one is 39.5 mm behind.
 # Cliff VL53L0X ToFs sit on the bumper ends, angled down toward the floor.
 SENSOR_MOUNTS: tuple[SensorMount, ...] = (
-    SensorMount("forward_left", x=-0.061, y=0.112, z=0.126),
+    SensorMount("forward_left", x=-0.061, y=0.112, z=0.124),
     SensorMount("forward_center", x=0.0115, y=0.0, z=0.110),
-    SensorMount("forward_right", x=-0.061, y=-0.112, z=0.126),
+    SensorMount("forward_right", x=-0.061, y=-0.112, z=0.124),
     SensorMount("cliff_left", x=0.060, y=0.128, z=0.067, pitch=CLIFF_DOWN_PITCH),
     SensorMount("cliff_right", x=0.060, y=-0.128, z=0.067, pitch=CLIFF_DOWN_PITCH),
 )

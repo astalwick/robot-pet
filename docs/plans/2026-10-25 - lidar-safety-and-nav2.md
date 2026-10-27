@@ -105,8 +105,9 @@ connects and disconnects again.
   backstop for the gamepad, voice moves and a misbehaving planner.
 
 Claude verifies: unit tests for the geometry (a point dead ahead at 1 m from
-the laser is 0.854 m past the front edge; a point behind at 1 m is 0.816 m
-past the rear edge, since the rear edge is 184 mm behind the laser; a point
+the laser is 0.858 m past the front edge; a point behind at 1 m is 0.798 m
+past the rear edge, since the rear edge is 202 mm behind the laser (numbers
+updated 2026-10-26 for the measured footprint); a point
 0.5 m to the side is ignored), and the gate's stale, forward, rear and turning
 cases. Done 2026-10-25.
 

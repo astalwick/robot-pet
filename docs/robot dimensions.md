@@ -9,9 +9,9 @@
 272mm wide (silver frame, outside to outside, measured beside the wheels 2026-10-26, replaces 275)
 
 - excluding wheels and power button
-  332mm wide
+  272mm wide
 - including wheels and power button
-  332 = 272 frame + 6 gap + 24 tyre on each side (2026-10-26); a tape across the wheels read 330, about 2 short; the power switch stays inside the wheels
+  332mm wide: 272 frame + 6 gap + 24 tyre on each side (2026-10-26); a tape across the wheels read 330, about 2 short; the power switch stays inside the wheels
 
 240mm deep (silver frame, outside to outside, confirmed 2026-10-26)
 
@@ -38,11 +38,11 @@ bumper
 
 ---
 
-Forward ToF boards: Adafruit VL53L1X 3967, 25.5 x 17.5 x 4.6 per Adafruit, standing upright (measured 2026-10-26):
-- the two side boards stand on round posts 6.7 thick; their top edges are 60 above the platform top (133 off the floor)
+Forward ToF boards: Adafruit VL53L1X 3967, 25.5 wide x 17.5 tall per Adafruit, 4 thick with the sensor chip (measured), standing upright (measured 2026-10-26):
+- the two side boards stand on round posts 6.7 thick; their top edges are 60 above the platform top (133 off the floor), so the board centres, where the chips sit, are about 124 off the floor (`z = 0.124`)
 - the side posts are mirrored: each post centre is 24 in from its side of the frame (y = ±112) and 88 behind the frame front (x = -64), in line with the IMU post on the left
 - each side board is 2 thick and centred on its post; the sensor chip adds 2, so the chip face is 3 ahead of the post centre (x = -61); the two connectors stick out about 1 past the chip
-- the centre board is clipped to the camera post below the camera; its top edge is 46 above the platform top (119 off the floor)
+- the centre board is clipped to the camera post below the camera; its top edge is 46 above the platform top (119 off the floor), so its centre is about 110 off the floor (`z = 0.110`)
 - the back of the centre board is 16.5 behind the frame front (x = +7.5), so its chip face is 12.5 behind the frame front (x = +11.5)
 
 Downward facing cliff ToF sensors (measured):

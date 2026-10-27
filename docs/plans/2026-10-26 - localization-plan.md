@@ -394,9 +394,11 @@ instead scores one scan at every pose on every saved map:
 - **Nothing detects a carry or a drag.** Arlen: "Do I know where I am? Is
   there another point that makes more sense? covers drag, carry,
   everything." If the robot was moved by hand, the candidates near the
-  prior fail the judge, and the search widens to the whole map, every map,
-  with no prior. The cost is a few extra seconds after a carry. Wheel
-  readings during a drag are garbage anyway, whichever way it is pulled.
+  prior fail the judge, and the far candidates win instead. It is one
+  search, not two: the whole map is always scored, the prior only decides
+  how much evidence a candidate needs, so a carry costs nothing extra.
+  Wheel readings during a drag are garbage anyway, whichever way it is
+  pulled.
 - **Believe, then confirm by motion.** If one candidate clearly beats the
   rest it is committed at once: seed AMCL, enter `checking`. `checking`
   becomes `tracking` only after the robot has moved and the judge still

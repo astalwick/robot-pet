@@ -245,7 +245,7 @@ The state machine runs every tick, in localize mode, and owns the only
 - `off_map`: the search found no acceptable candidate on any saved map and
   the robot has since moved enough that it should have.
 
-Thresholds and tick counts are set in phase 1 from recorded data, not
+Thresholds and tick counts are read off the recordings in phase 1, not
 guessed. The bars are stored in `robot_nav.py` next to the pure functions,
 with the recorded evidence noted in the comment.
 
@@ -273,7 +273,10 @@ instead scores one scan at every pose on every saved map:
   each odometry-chained scan either strengthens or kills a candidate (the
   prism_loc pattern). The motion is whatever is already happening: a
   teleop drive or, when standing still, a short nudge of about 30 cm or 30
-  degrees that the search asks the motion node for. Not two spins.
+  degrees that the search asks the motion node for. Not two spins. Arlen
+  approved the nudge: turn in place or forward, forward only when the
+  forward distance sensor and both cliff sensors are clear, one nudge per
+  search.
 - **Which map.** The search runs on every saved map and the best confirmed
   candidate names the map. Switching maps is what it is today (restart
   map_server and AMCL on the new one) but decided by evidence, not by trying
@@ -282,8 +285,9 @@ instead scores one scan at every pose on every saved map:
   has moved enough for the confirmation step to have had its chance, and the
   judge still fails: `off_map`. The dashboard says so and offers mapping.
 
-Where it lives: a small `localizer` node of its own, because the search can
-take up to a second and the nav bridge's half-second tick must not stall.
+Where it lives: a small `robot-localizer` unit of its own (approved),
+because the search can take up to a second and the nav bridge's half-second
+tick must not stall.
 The bridge keeps everything it does today except the spin and the fit; it
 reads the localizer's state from the hub and asks it for a search where it
 used to spin. All the maths is pure numpy functions in `robot_nav.py` (or a
@@ -323,28 +327,23 @@ scans.
 ## Phases
 
 Each phase ends with something Arlen can see on the floor or in a replay.
-Code lands only from phase 1; phase 0 is data.
+There is no separate measuring phase: the recorder lands first in phase 1
+and recordings accumulate during the floor tests we already do.
 
-### Phase 0: measure (one evening)
+### Phase 1: the judge (two evenings)
 
-- The bridge gains a `record` command that writes, each tick, the latest
-  scan, the lidar's map pose from TF, odometry, AMCL covariance and the hub
-  state to a JSON lines file under `~/.config/robot-pet/recordings/`.
-- A script `tools/localization_replay.py` reads a recording and a map and
-  prints, per tick, today's `scan_fit`, the new `agree` and `through`
-  shares, and the search's top candidates, so scores can be compared without
-  the robot.
-- Recordings to collect, each labelled with the truth: true pose at ten
-  spots incl. the kitchen and living room places; right spot wrong heading;
-  a metre off; the wrong room pose from today; on the counter; carried
-  across the house; a gamepad drive around the whole floor at the true pose.
-- Exit: a table in this document of the three scores for every labelled
-  situation. Phase 1's bars are read off that table, with margin.
-
-### Phase 1: the judge (one to two evenings)
-
+- A `record` command in the bridge saves the latest scan, the lidar's map
+  pose from TF, odometry and AMCL covariance to a JSON lines file under
+  `~/.config/robot-pet/recordings/`. Arlen says where the robot really is in
+  a sentence; that label goes in the file. Tonight's wrong room and the
+  metre-off pose are the first two entries. Further recordings: true pose at
+  about ten spots incl. the places, right spot wrong heading, on the counter,
+  carried, and a gamepad drive around the floor while correctly localized.
+- `tools/localization_replay.py` prints today's `scan_fit` and the new
+  `agree` and `through` shares for every recording. That table goes into
+  this document and the bars are read off it, with margin.
 - `robot_nav.beam_check(...)`: the ray-cast score, pure numpy, tests on
-  synthetic maps and on phase 0 recordings.
+  synthetic maps and on the recordings, which run in the normal suite.
 - The state machine in the new localizer node; the bridge and dashboard
   read its state; `localized` becomes "state is tracking". Handed poses
   enter `checking`. A trip is only accepted in `tracking`; a drop out of it
@@ -405,14 +404,13 @@ Code lands only from phase 1; phase 0 is data.
 - **Tracker swap.** Beluga AMCL if it gets packaged for our distro or AMCL
   misbehaves. Nothing above changes.
 
-## Open questions for Arlen
+## Decisions (2026-10-26)
 
-- The nudge in phase 2: is a short automatic 30 cm move or 30 degree turn
-  acceptable when the robot is standing still and ambiguous, or should it
-  wait for a gamepad or trip motion only?
-- Where the new node lives: a separate `robot-localizer` unit (recommended,
-  keeps the bridge tick safe) or inside the bridge as a worker thread.
-- Phase 0 wants about an hour of the floor with the rail on; which evening.
+- The nudge is allowed: turn in place or forward, respecting the forward
+  distance sensor and both cliff sensors, one per search.
+- The localizer is its own unit, `robot-localizer`.
+- No separate measuring evening; recordings are collected during normal
+  floor tests, starting with the two wrong poses we already have.
 
 ## Sources
 

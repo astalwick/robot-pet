@@ -82,6 +82,23 @@ journals, no floor test in between):
   pose in time"). The robot ended lost: localized no, scan fit 0.32. Fix:
   only send the remembered pose when AMCL itself has just come up (no AMCL
   pose seen yet), not on a bridge-only restart.
+- Third fix batch (commit 584be58, deployed 2026-10-26 evening), both check 30
+  bugs: (1) the new bridge sends Nav2 one "cancel every goal" request as soon
+  as Nav2 answers, so a trip orphaned by a bridge crash or restart stops
+  within the restart gap (3.5 s from stop to the new bridge's first tick, was
+  18 s driving to its own failure). The exit-time cancel was dropped: rclpy
+  has already shut the node down when the stop signal lands, so nothing can
+  be sent then; the startup cancel covers both cases. (2) When the first AMCL
+  poll finds it active and giving a map pose, with a remembered pose on this
+  map, the bridge keeps AMCL's pose and marks localized instead of re-sending
+  the old one. A fresh AMCL gives no map pose until it gets one, so boot and
+  a robot-nav restart (check 29) still behave as before. NOT YET VERIFIED on
+  the floor: the motor switch was off when it deployed (the redeploy's own
+  relocalize asked for the rail, the RoboClaw never answered, "no scans after
+  20s"). To verify: switch on, Localize, start a trip, restart
+  robot-nav-bridge mid-trip; expect Nav2 "Client requested to cancel the goal"
+  within 4 s, the bridge log "AMCL already tracking on groundfloor: keeping
+  its pose", and localized staying yes.
 - Shelved idea (Arlen's): replace the spin with a background search of the
   whole map using the current scan (our scan fit score at every free cell and
   heading), acting only on a clearly better pose that wins twice while moving.

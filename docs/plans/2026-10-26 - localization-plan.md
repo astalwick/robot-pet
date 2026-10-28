@@ -27,16 +27,17 @@ score that counts beams passing *through* mapped walls) plus a **search**
 brute-force correlation, no spinning, running the whole time the lidar is
 on) plus, once those three hold on the floor, a **learner** that keeps the
 one map true as the house changes. Arlen's two questions are asked
-literally, every second: the judge asks "does this pose contradict the
-map", the search asks "is there another spot that makes more sense", and
-nothing is believed until a little motion confirms it. Those two questions
-cover drags, carries, heading flips, hallway slips and reboots alike. No
-lift sensors, no carried state, no detection of anything, no special cases.
-From Arlen's chair the whole thing is invisible: the lidar wakes with the
-wake word, a trip leaves without a pause or a wiggle, and the robot speaks
-only when it has genuinely been moved somewhere it cannot place. One thread
-in the nav bridge, one module of pure functions, one scan count, two
-margins, five states, three phases plus the learner.
+literally, every scan: the judge asks "does this pose contradict the map",
+the search asks "is there another spot that makes more sense", and nothing
+is believed until a little motion confirms it. Those two questions cover
+drags, carries, heading flips, hallway slips and reboots alike. No lift
+sensors, no carried state, no detection of anything, no special cases. From
+Arlen's chair the whole thing is invisible: the lidar wakes with the wake
+word, a trip leaves without a pause or a wiggle, and the robot speaks only
+when it has genuinely been moved somewhere it cannot place. A 55 percent
+match of any kind is `searching`, and the marker says so. One thread in the
+nav bridge, one module of pure functions, one scan count, two margins, five
+states, three phases plus the learner.
 
 ## Where we are and why it fails
 
@@ -81,11 +82,11 @@ Three smaller defects ride along:
   because it needs no motion and answers "which map".)
 - AMCL corrects its pose only every 25 cm or 12 degrees of travel
   (`update_min_d`, `update_min_a`); between corrections the published pose
-  is stale odometry. Its seed covariance (32 cm, 15 degrees) is three times
-  wider than the error of the pose handed in. And the bridge reads AMCL's
-  belief a second late: AMCL post-dates its `map -> odom` transform by
+  follows odometry uncorrected. Its seed covariance (32 cm, 15 degrees) is
+  three times wider than the error of the pose handed in. And the bridge
+  reads AMCL's belief late: AMCL post-dates its `map -> odom` transform by
   `transform_tolerance` (1.0 s), so a TF lookup at the scan's own time
-  returns the belief from the scan one second earlier.
+  returns the belief from the update before.
 
 ## How people actually do this
 
@@ -127,13 +128,15 @@ pose scores at least as well as the true pose itself and cannot be lost to
 pooling; wrong cells can still outscore it, which is why several peaks
 survive to the fine level, not one. The closest reference design is
 prism_loc (ROS 2 Humble, C++, 2026-07): branch-and-bound over the whole map,
-top 8 modes, re-matched over odometry-chained scans with a motion gate of
-0.3 m or 0.3 rad between counted scans (the README's recommendation; the
+top 8 modes, re-matched over nine odometry-chained scans with a motion gate
+of 0.3 m or 0.3 rad between counted scans (the README's recommendation; the
 shipped default is zero), committed only at 90 percent of the posterior; 97
 of 100 synthetic kidnapped-robot queries succeeded at 38 ms per search
 ([prism_loc](https://github.com/kjungmo/prism_loc),
 [parameters](https://github.com/kjungmo/prism_loc/blob/main/PARAMS.md)).
-Too new and Humble-only to depend on, right to copy the shape of.
+Too new and Humble-only to depend on, right to copy the shape of; where it
+verifies over nine scans before committing, we commit on one and verify
+afterwards in `checking`, a choice stated below.
 
 **Knowing you are lost.** The classic fixes for the kidnapped robot problem
 (Sensor Resetting Localization, Mixture MCL, Augmented MCL, which is what
@@ -185,11 +188,11 @@ at all.
 
 One principle runs through the design: **the judge catches contradictions,
 the search catches better answers, motion confirms.** A pose is dropped
-when its scans contradict the map or when the search finds a clearly better
-pose elsewhere; nothing is believed until a little motion confirms it. A
-robot that knew where it was and drove down a plain hallway is not lost: its
-scan agrees with the map, no other pose fits better than the one it drove
-to, and it stays where odometry put it.
+when its scans contradict the map or when the search keeps finding a
+clearly better pose elsewhere; nothing is believed until a little motion
+confirms it. A robot that knew where it was and drove down a plain hallway
+is not lost: its scan agrees with the map, no other pose fits better than
+the one it drove to, and it stays where odometry put it.
 
 ## Requirements
 
@@ -249,11 +252,11 @@ Mine, added:
    both in numpy (scipy is not on the robot).
 10. **One count, two margins.** One number N of consecutive verdict scans
     decides when a pose is dropped and when it is earned. One margin M says
-    when one candidate clearly beats another (rooms apart; from the
-    wrong-room recording) and gives the search its commit bar. One smaller
-    margin R says when a nearby pose is a rival (a hallway slip or a
-    heading flip; from the metre-off recording). The judge runs on the
-    bridge's 0.5 s tick, so N scans is N/2 seconds.
+    when one candidate clearly beats another and lifts the search's commit
+    bar above the judge's. One smaller margin R says when a pose elsewhere
+    is a rival to the one held (a hallway slip or a heading flip). Both
+    margins are read off recordings. The judge runs on the bridge's 0.5 s
+    tick, so N scans is N/2 seconds.
 11. **Honest surface.** One thread in the nav bridge and one module of pure
     functions carry the maths. The plan also touches, and says so: the
     bridge (recorder, judge, state, search thread, held trips, reasons on
@@ -278,13 +281,15 @@ measured at the taped crosses in phase 1:
 
 - `update_min_d` 0.25 to 0.1 and `update_min_a` 0.2 to 0.1: corrections
   every 10 cm or 6 degrees instead of 25 cm or 12, so the published pose is
-  never more than that stale. The heading requirement is 5 degrees; if the
-  crosses show 6 degrees of staleness is what breaks it, `update_min_a`
-  drops to 0.08.
+  never more than that behind. The heading requirement is 5 degrees; if the
+  crosses show 6 degrees of lag is what breaks it, `update_min_a` drops to
+  0.08. More updates means more resampling; `resample_interval` 2 if
+  depletion shows.
 - `sigma_hit` 0.2 to 0.1: a sharper per-beam weight on a 5 cm map (Nav2 sums
   the cube of each beam's probability, so the beam count barely matters and
-  `max_beams` stays), at the cost of faster depletion on map errors;
-  `resample_interval` 2 if depletion shows.
+  `max_beams` stays). 0.1 is two cells, and the A1's one percent range noise
+  is 6 cm at 6 m, so far beams turn to noise; 0.15 is the intermediate if
+  0.1 depletes. `laser_likelihood_max_dist` stays 2.0.
 - Seed covariance 0.1 m² and 0.07 rad² to 0.02 and 0.01: a 14 cm, 6 degree
   spread, a little wider than the search's own error.
 - **Seed transport.** A search takes up to two seconds, in which a gamepad
@@ -294,33 +299,40 @@ measured at the taped crosses in phase 1:
   a live robot the lookup always fails (the "failed to transform initial
   pose in time" warning seen on the floor) and AMCL plants the seed as the
   pose *now*. So the bridge does the carrying: the found pose is moved
-  forward by the odometry between the scan's stamp and the newest
-  `odom -> base_link` the bridge holds, and the seed is stamped with that
-  newest odometry time. The error is one odometry period at 20 Hz, about
-  2 cm.
+  forward by the odometry between the scan's middle (the time the judge
+  uses too) and the newest `odom -> base_link` the bridge holds, and the
+  seed is stamped with that newest odometry time. The error is one odometry
+  period at 20 Hz: 2 cm at gamepad speed, 5 cm at turbo, inside the spread.
 - **Seed landed.** After a seed AMCL publishes exactly one `/amcl_pose` on
   its next scan, stamped with that scan's time (which is earlier than the
   seed's), and then nothing more until the robot moves; so the rule goes by
-  arrival, not stamp: the first `/amcl_pose` the bridge receives after it
-  published the seed, with a pose within 0.5 m of the seed (AMCL's first
+  arrival, not stamp order: the first `/amcl_pose` the bridge receives after
+  it published the seed, with a pose within 0.5 m of the seed (AMCL's first
   mean is already scan-corrected, so it will not sit inside the 14 cm
   spread), says AMCL took it, and verdict scans count from the next tick.
-  If none arrives within two ticks the seed is sent again. This also covers
-  the map switch below: AMCL range-checks a seed against the map it holds,
-  and a seed that reaches it before the new map is dropped with an error.
-- `recovery_alpha_slow` 0.001 and `fast` 0.1 to zero in the same phase that
+  Two stale messages are skipped by one test: `/amcl_pose` is a latched
+  topic, so a fresh subscription replays AMCL's last pose, and a scan AMCL
+  finished just before the seed arrived can be published just after; both
+  carry a stamp older than one revolution before the seed's, and any such
+  message is ignored. If none arrives within two ticks the seed is sent
+  again. This also covers the map switch below: AMCL range-checks a seed
+  against the map it holds, and a seed that reaches it before the new map
+  is dropped with an error.
+- `recovery_alpha_slow` 0.001 and `fast` 0.1 to zero, which is Nav2's own
+  default (ours are the ROS 1 wiki's suggestions), in the same phase that
   ships the search (phase 2): two recovery mechanisms fighting is the
   classic failure. From then on AMCL cannot recover from a wrong seed by
   itself; the judge and the search are the only way out, by design.
+  `tests/test_robot_model.py` asserts the current values and changes with
+  them.
 
 Accuracy while `tracking` is AMCL's: the judge's tolerance (part 2) is
 wider than 10 cm on purpose, so a pose 25 cm off still passes the judge,
 and the search's rival distance (0.3 m) is where a slip begins to be seen.
 Whether AMCL holds 10 cm and 5 degrees is therefore measured, not assumed:
 phase 1's recordings at the crosses carry AMCL's pose beside the true one.
-If it holds, the tracker question is closed. If not, the scan-to-map refine
-step from part 3 becomes the tracker (on the shelf), decided at phase 1
-exit.
+If it holds, the tracker question is closed. If not, the refine-step
+tracker comes off the shelf, decided at phase 1 exit.
 
 ### 2. Judge: a strict score, a rival from the search, one count
 
@@ -328,24 +340,29 @@ exit.
 composed from the *latest* `map -> odom` (a single-edge lookup of that one
 transform at time zero, AMCL's current belief; a lookup at the scan's own
 time, or of the chained `map -> base_link` at time zero, returns the belief
-from a second earlier because of the post-dating above) and `odom -> laser`
-at the scan's stamp plus half its duration (at 0.25 m/s half a second of
-lag is 12 cm). The driver is assumed to stamp a scan at its first ray, the
-sensor_msgs convention; phase 1's first recording confirms it, along with
-the revolution time: the lidar plan's 5.5 Hz at 8000 samples a second
+from the update before because of the post-dating above) and `odom ->
+laser` at the scan's stamp plus half its duration (at 0.25 m/s half a
+second of lag is 12 cm). The driver is assumed to stamp a scan at its first
+ray, the sensor_msgs convention; phase 1's first recording confirms it,
+along with the revolution time: the A1's 5.5 Hz at 8000 samples a second
 gives about 1440 points in 182 ms, and those are the working numbers.
 
 **The score** replaces `scan_fit`. The judge uses every fourth point, 360
-beams at 1 degree spacing. For each, ray-cast across the map in half-cell
-steps to the first occupied cell (a one-cell wall at an angle can still
-show corner gaps; the map audit looks for through clusters along diagonal
-walls). To blunt the beam model's brittleness in angle, each beam is
-compared against the predictions of itself and its three neighbours on
-either side (±3 degrees, seven predictions), in the direction that makes
-"through" harder to claim. Three degrees because a scan taken at the turn
-gate's limit skews ±2.1 degrees about its middle, and Nav2 turns under the
-gate while path-following; the replay reports the shares at ±2 and ±3 so
-the narrower rule can be chosen if it separates better.
+beams at 1 degree spacing; all beam counts below are of these 360. Beams
+that always hit the robot's own body are masked once, from a recording, and
+beams with no return (the A1 drops returns on black and matte surfaces, so
+a no-return where the map predicts a wall must never count as through) are
+set aside; what is left are the **returned** beams, the denominator of
+every share below. For each, ray-cast across the map in half-cell steps to
+the first occupied cell (a one-cell wall at an angle can still show corner
+gaps; the map audit looks for through clusters along diagonal walls). To
+blunt the beam model's brittleness in angle, each beam is compared against
+the predictions of itself and its three neighbours on either side (±3
+degrees, seven predictions), in the direction that makes "through" harder
+to claim. Three degrees because a scan taken at the turn gate's limit skews
+±2.1 degrees about its middle, and our Nav2 config turns under the gate
+while path-following; the replay reports the shares at ±2 and ±3 so the
+narrower rule can be chosen if it separates better.
 
 - **agree**: measured within the tolerance of *any* of the seven
   predictions (20 cm plus five percent of range to start; read off
@@ -357,81 +374,94 @@ the narrower rule can be chosen if it separates better.
 - **short**: anything else. Something unmapped is in the way. Tolerated,
   but counted: this is what a changing house looks like, and also what a
   crowd or an unmapped room looks like, which is why agree can fail.
-- **no opinion**: the ray reaches an unknown cell before any wall, or the
-  lidar returned nothing (the A1 drops returns on black and matte surfaces,
-  so a no-return where the map predicts a wall must never count as through).
-  Beams that always hit the robot's own body are masked once, from a
-  recording. A scan whose counted beams are fewer than a third of the total
-  (a design constant) has **no verdict** and counts for nothing anywhere: it
-  neither passes nor fails a pose and advances no clock. A robot facing the
-  open front door is uninformed, not lost. A scan taken while turning faster
-  than the bridge's existing `SCAN_FIT_MAX_TURN_RADIANS` per tick is a
-  no-verdict scan too, the turn read from odometry yaw rather than the map
-  pose (a seed's heading correction must not read as a turn); Nav2 turns in
-  place at 0.8 rad/s, so every such scan is skipped.
+- **no opinion**: the ray reaches an unknown cell before any wall. A robot
+  facing the open front door is uninformed, not lost.
 
-**The patch rule.** Before the shares are taken, the single largest patch
-of through beams that is contiguous over counted beams (no-opinion beams in
-between do not break it; the A1 drops returns exactly on dark furniture) is
-dropped from the count entirely. A removed coffee table, a sofa moved away
-or an open door is one patch of beams going through where the map drew
-something, and that is "something changed", not a wrong pose. A wrong pose
-sends beams through mapped walls in more than one direction, and those
-remain. The dropped patch has no width cap to start; if the replay shows a
-wrong pose passing only because its through sat in one patch, a cap comes
-in, read off that recording. (The learner, part 4, is what eventually
-erases the patch from the map.) Two numbers then come out of a scan with a
-verdict: the `agree` share and the `through` share, both over the counted
-beams less the dropped patch.
+A beam with an opinion is **counted**. A scan is a **verdict scan** only if
+its counted beams, less the dropped patch below, are at least a third of
+the returned beams (a design constant); otherwise it has no verdict: it
+neither passes nor fails a pose and advances no pass or fail count. A scan
+taken while turning faster than the bridge's existing turn gate (0.2 rad
+per tick, the constant `SCAN_FIT_MAX_TURN_RADIANS` renamed) is a no-verdict
+scan too, the turn read from odometry yaw rather than the map pose (a
+seed's heading correction must not read as a turn); our Nav2 config turns
+in place at 0.8 rad/s, so every such scan is skipped.
+
+**The patch rule.** The single largest patch of through beams that is
+contiguous over counted beams (no-opinion and no-return beams in between do
+not break it; the A1 drops returns exactly on dark furniture) is forgiven:
+its beams are not through. They are not agree either; they stay in the
+denominator as beams that fit nothing. A removed coffee table, a sofa moved
+away or an open door is one patch of beams going through where the map
+drew something, and that is "something changed", not a wrong pose. A wrong
+pose sends beams through mapped walls in more than one direction, and those
+remain; and a wrong pose whose through all sits in one wide arc (a corner
+scan judged at another room's corner does this) is forgiven the arc but
+pays for it in agree, which is why the forgiven beams must stay in the
+denominator: a simulated house gave such poses agree 1.00 when the patch
+was removed from it. (The learner, part 4, is what eventually erases a
+real patch from the map.) Two numbers then come out of a verdict scan: the
+`agree` share and the `through` share, both over the counted beams.
 
 A pose **passes** a scan when agree ≥ A and through ≤ T. A wrong room
 fails on through: it puts walls at plausible distances but sends beams
 through mapped walls on several sides. From the counter, beams either run
 over the mapped counter top to the far walls (through) or hit the cabinets
-at wrong distances (agree low); either way it fails. An unmapped room is
-short beams everywhere and low agree. What the shares alone cannot catch,
-and are not asked to, is a pose that agrees with the map in the wrong
-place: a metre's slip along a hallway, a half turn in a room whose
-furniture the lidar sees past. Those have high agree and a through share
-that one dropped patch can hide. They are the search's job, below.
+at wrong distances (agree low); the floor scan there fit 0.23. An unmapped
+room is short beams everywhere and low agree. What the shares alone cannot
+catch, and are not asked to, is a pose that agrees with the map in the
+wrong place: a metre's slip along a hallway, a half turn in a room whose
+furniture the lidar sees past (a simulated house gave a half turn agree
+0.73 and through 0.05). Those are the search's job, below.
 
 **Everyday life must pass.** A person walking past is short beams, counted
-and tolerated; an open door and a removed table are one dropped patch
+and tolerated; an open door and a removed table are one forgiven patch
 each; T must sit above the highest through share left after the patch rule
 in the drive-past and removed-table recordings and below the wrong room's.
-A person standing a metre in front covers about a tenth of the beams, all
-short, and at a low-agree spot that can push agree under A; phase 1 records
-that case at the weakest cross, and if it fails, agree is graded over
-counted beams minus short ones whenever through ≤ T (a crowded true pose
-has low agree and low through; wrong poses have through). Phase 1 measures
-whether these shares separate the wrong room and the counter from every
-true pose; if they do not, this plan stops and is rethought rather than
-tuned.
+A is set under every true pose recorded, the one beside the removed sofa
+included (a 2.2 m sofa removed, seen from a metre away, is a hundred
+forgiven beams, so that pose's agree is about 0.7; A is a floor for
+catastrophes, and through and the rival do the real work). A person
+standing a metre in front covers about a tenth of the beams, all short,
+and pushes agree to about 0.9. Phase 1 measures whether these shares
+separate the wrong room and the counter from every true pose; if they do
+not, this plan stops and is rethought rather than tuned.
 
 **The rival** is the search of part 3, which runs the whole time the lidar
-scans, one search after another on every saved map, with the current pose
-scored as a candidate alongside on the same scan. While the state is
-`tracking` or `checking` its result is read for a rival: a candidate more
-than 0.3 m or 10 degrees from the current pose that is committable (the
-search's own pass rule, agree ≥ A + M, through ≤ T, two thirds of beams
-counted), has no more through than the current pose, and beats it by R in
-agree. A rival result **stands** against the pose until the next search
-result replaces it: every verdict scan in between counts as failed on
-agree, so N consecutive failures are reached in N/2 seconds (a result that
-only marked one scan would be undone by the passing scan after it). This
-is how the slip and the flip are caught: a robot slipped a metre along a
-hallway has the side walls agreeing at every position and only a sliver of
-end wall disagreeing, no wider than an open door; but the true pose a metre
-away agrees on the end wall too, and wins by R. A robot turned half round in
-a room agrees on the walls; the true heading also agrees on the sofa, and
-wins. A plain featureless corridor has no winner, both poses score alike,
-and the robot rightly stays where odometry put it. R comes from the
-metre-off recording: below the agree gain the true pose shows there, above
-the largest lead any other candidate ever has over the true pose along the
-gamepad-drive recording. One residual case is accepted: a room symmetric
-under a half turn, seen from a spot where nothing breaks the symmetry, has
-two equal poses; only seeing its door or furniture tells them apart, so
-there a trip from its middle may run out its deadline.
+scans, one search after another on every saved map, with the pose held at
+the scan's time scored as a candidate alongside, refined like the others.
+While the state is `tracking` or `checking` its result is read for a rival:
+a committable candidate (the search's pass rule, below) more than 0.3 m or
+10 degrees from the held pose's refined candidate that outranks it by R,
+where **X outranks Y by m** means X's agree is at least m ahead of Y's; the
+one relation the clear rule uses too. A rival may be on another map. A
+result whose scan was taken before the held pose was handed over is thrown
+away: its "held pose" is the dropped one, and the pose just committed would
+read as its own rival. One result is one scan's opinion, so a rival
+**stands** only when two consecutive results name one (within 0.3 m and 10
+degrees of each other); from then on every verdict scan counts as failed
+until a result names no rival, so N consecutive failures are reached
+within one search cycle and N/2 seconds of the second result. This is how
+the slip and the flip are caught: a robot slipped a metre along a hallway
+has the side walls agreeing at every position and only a sliver of end
+wall disagreeing, no wider than an open door; but the true pose a metre
+away agrees on the end wall too, and wins by R. A robot turned half round
+in a room agrees on the walls; the true heading also agrees on the sofa,
+and wins (simulated leads 0.18 to 0.9 in furnished rooms, 0.07 in a
+near-symmetric hallway). A plain featureless corridor has no winner, both
+poses score alike, and the robot rightly stays where odometry put it. The
+held pose is refined before the comparison because AMCL's own wobble
+(10 cm, 5 degrees) costs an unrefined pose up to 0.13 agree in a hallway,
+which is a false lead; refined, the simulated false leads stay under 0.04.
+R comes from recordings: below the lead the true pose shows in the
+metre-off and wrong-heading recordings, above the largest lead any other
+candidate ever has over the refined true pose along the gamepad-drive
+recording; the window is thin (about 0.04 to 0.07 simulated), and if the
+near-symmetric flips sit below R they are caught by motion, not by the
+rival, which phase 2's exit says. One residual case is accepted: a room
+symmetric under a half turn, seen from a spot where nothing breaks the
+symmetry, has two equal poses; only seeing its door or furniture tells
+them apart, so there a trip from its middle may run out its deadline.
 
 **The state machine** runs on every tick in localize mode and owns the only
 `localized`-like word anyone else reads. One count N (about four, from
@@ -444,94 +474,101 @@ recordings) drives it:
   prism_loc's gate, distance only, a design constant). It stays `tracking`
   through odd failing scans; see "dropping a pose" below.
 - `checking`: a pose (boot, a search result, the first scan after `stale`)
-  that has not yet earned `tracking`. **Clean** once a verdict scan has
-  passed since it was handed over or since `stale`, and the latest verdict
+  that has not yet earned `tracking`. **Clean** when its latest verdict
   scan passed. A clean `checking` may start or release a trip, and the
   trip's first 0.3 m is the confirmation; the tick judges before it
   releases. A `checking` pose that has seen only no-verdict scans for 5 s
   (a design constant: a remembered pose facing the open front door) also
   releases a held trip; today such a pose leaves at once, and the trip's own
-  motion brings the verdict scans that judge it. A running trip continues
-  through `checking`.
+  motion brings the verdict scans that judge it (this is the one way a
+  carried-asleep robot can drive off on its old pose, accepted). A running
+  trip continues through `checking`.
 - `searching`: the pose was dropped, or there is no pose at all (after a
   reboot). A running trip has been stopped and held; new trips are held.
   The tick does not judge TF's pose here; the search judges its candidates,
   the TF pose among them, and a clear winner is committed and enters
   `checking`. The reason for the debug panel: "nothing passes", "several
-  candidates", "other map, confirming", "nothing found yet".
+  candidates", "other map, confirming".
 - `stale`: no fresh scan (the bridge's existing `scanning()` is false),
   whatever the pose. The other four states exist only while scanning. The
   pose, if any, is kept and shown softly; the first scan after the wake
   word or boot enters `checking` (pose) or `searching` (none).
-- `off_map`: 20 s of searches with no candidate passing on any map, counted
-  only over scans with two thirds of their beams counted (a scan that could
-  not commit a candidate cannot argue for no map either); the clock does not
-  advance across other scans. 20 s so it lands inside a held trip's
-  deadline. The search keeps running; a clear winner leaves for `checking`.
+- `off_map`: 20 s of search results in which no candidate passes even the
+  judge's bar A and T, counted only over results whose scan had two thirds
+  of its beams returned (a scan that could not commit a candidate cannot
+  argue for no map either); the clock does not advance across other
+  results. 20 s so it lands inside a held trip's deadline. The search keeps
+  running; any passing candidate returns the state to `searching`, and a
+  clear winner goes on to `checking`.
 
 **Dropping a pose.** A pose fails a verdict scan when it does not pass it or
 when a rival stands against it. After N consecutive failing scans the pose
-is dropped: `searching`, and a running trip is stopped and held. That is
-the whole rule. A wrong room, a wrong heading, a drag, a carry with the
-lidar on, the counter, an unmapped room, a hallway slip, a wrong seed all
-fail this way; a moved chair, an open door, a removed table, a person never
-do, because the patch rule and the short class absorb them. There is no
-special case for a map change and no state that survives one.
+is dropped: `searching`, and a running trip is stopped and held. If the
+standing rival is clear in the result that stands, it is committed on that
+same tick; otherwise the next result decides. That is the whole rule. A
+wrong room, a wrong heading, a drag, a carry with the lidar on, the counter,
+an unmapped room, a hallway slip, a wrong seed all fail this way; a moved
+chair, an open door, a removed table, a person never do, because the patch
+rule and the short class absorb them. There is no special case for a map
+change and no state that survives one.
 
 Why this is enough. A contradiction fails N scans in a row at once and goes
 straight to `searching`; a wrong seed fails the same way; a pose that
-agrees in the wrong place is out-scored by the true pose within one search
-and N scans more. A plain hallway driven from a known pose is neither: the
-side and end walls agree, nothing goes through, no other pose beats it by
-R, and the robot stays `tracking` on odometry. Floor run 1's lesson, never
-re-seed a tracking AMCL mid-drive, is built in: the search commits only
-over a pose that has failed N scans. A carry with the lidar on is expected
-to fail during the carry itself (turning scans are skipped, the rest see
-over the furniture to walls behind, and the search finds no committable
-pose from mid-air); phase 1 records one in a furnished room and a bare one
-to check, and if either slips past the judge the anchored scan check comes
-off the shelf.
+agrees in the wrong place is out-scored by the true pose within two
+searches and N scans more. A plain hallway driven from a known pose is
+neither: the side and end walls agree, nothing goes through, no other pose
+beats it by R, and the robot stays `tracking` on odometry. Floor run 1's
+lesson, never re-seed a tracking AMCL mid-drive, is built in: the search
+commits only over a pose that has failed N scans. A carry with the lidar on
+is expected to fail during the carry itself (turning scans are skipped, the
+rest see over the furniture to walls behind, and the search finds no
+committable pose from mid-air); phase 1 records one in a furnished room and
+a bare one to check, and the anchored scan check waits on the shelf for
+them.
 
 What each state allows:
 
 | state | trips | gamepad | emotes, in-place | barriers | save place |
 | --- | --- | --- | --- | --- | --- |
-| tracking | yes | yes | yes | from the pose, plus sensors | yes |
-| checking | start or release when clean or uninformed for 5 s, else held; a running trip continues | yes | yes | from the pose, plus sensors | no |
-| stale | held | yes | yes | from the last pose, plus sensors | no |
-| searching | held; a running trip is stopped and held | yes | yes | from TF's pose, plus sensors | no |
+| tracking | yes | yes | yes | TF's pose, plus sensors | yes |
+| checking | start or release when clean or uninformed for 5 s, else held; a running trip continues | yes | yes | TF's pose, plus sensors | no |
+| stale | held | yes | yes | TF's pose, plus sensors | no |
+| searching | held; a running trip is stopped and held | yes | yes | TF's pose, plus sensors | no |
 | off_map | refused, with the one sentence | yes | yes | sensors only | no |
 
 Emotes hold the nav lock for two seconds, as today, and the nav lock ends a
 held trip exactly as it ends a running one. Save place is refused in every
 state but `tracking` with one text beside the button, "drive me a little
 first" (right even in `stale`: a gamepad drive wakes the rail and the lidar
-with it), and the voice's `create_place` tool turns the bridge's
-`not_localized` error into that same sentence as its note. Barriers come
-from whatever pose TF has in every state but `off_map`: a soft or doubted
-pose is still the best guess, the barriers mark the steps (the floor test
-plan's check 30 fix, kept), and the docstring's rule stands, a wrong stop
-over no stop. `off_map` is the one exception because a robot in a
-genuinely unmapped room would otherwise stop at phantom steps for as long
-as it stayed; the cost is that a false `off_map` loses map barriers until
-the next find, with the cliff and forward sensors still guarding. One
-accepted wrinkle, no worse than today (where `localized` stays true through
-a carry): a robot carried while asleep publishes barriers from its old pose
-until the first search commits, so a robot that was parked by the steps may
-stop once on its first gamepad push in the new room; it clears itself
-within seconds.
+with it; wrong only in `off_map`, accepted), and the voice's `create_place`
+tool turns the bridge's `not_localized` refusal into that same sentence as
+its note (that word stays for Save place, "not yet tracking"; a trip that
+gives up ends `lost`, a different condition). Barriers come from whatever
+pose TF has in every state but `off_map`: a soft or doubted pose is still
+the best guess, the barriers mark the steps (the floor test plan's check 30
+fix, kept), and the docstring's rule stands, a wrong stop over no stop.
+`off_map` is the one exception because a robot in a genuinely unmapped room
+would otherwise stop at phantom steps for as long as it stayed; the cost is
+that a false `off_map` loses map barriers until the next find, with the
+cliff and forward sensors still guarding. One accepted wrinkle, no worse
+than today (where `localized` stays true through a carry): a robot carried
+while asleep publishes barriers from its old pose until the first search
+commits, so a robot that was parked by the steps may stop once on its first
+gamepad push in the new room; it clears itself within seconds.
 
 **Numbers.** The bars read off recordings in phases 1 and 2 and stored in
 `robot_nav.py` beside the pure functions, each with its recording named in
 the comment as `SCAN_FIT_*` is today: A, T, M, R, the agree tolerance, N.
 The design constants, chosen and checked against recordings but not derived
-from them: the third of beams for a verdict and the two thirds for a
-commit; the 2× tolerance factor for through and its 6 m cap; the ±3 degree
-neighbour rule; the 0.3 m motion gate; the 5 s uninformed release; the
-0.3 m / 10 degree rival distance; the 20 s `off_map` clock; the 4 m beam
-cap and 20 cm / 3 degree steps of the coarse search; the sixty candidates;
-the two ticks before a seed is re-sent; the two clear wins for a map
-switch; the 30 s trip deadline and the 3 s before "hang on" (part 3).
+from them: the third of returned beams for a verdict and the two thirds for
+a commit; the 2× tolerance factor for through and its 6 m cap; the ±3
+degree neighbour rule; the 0.3 m motion gate; the 5 s uninformed release;
+the 0.3 m / 10 degree rival distance and the two results before a rival
+stands; the 20 s `off_map` clock; the 4 m beam cap and 20 cm / 3 degree
+steps of the coarse search and its 20 cm / 3 degree merge distance; the
+sixty candidates; the one revolution before a seed's stamp that marks a
+stale `/amcl_pose`, and the two ticks before a seed is re-sent; the two
+clear wins for a map switch; the 30 s trip deadline (part 3).
 
 ### 3. Search: whole map, one scan, no spin
 
@@ -539,37 +576,48 @@ A RPLidar scan already covers 360 degrees. Spinning the robot adds no
 information; it only gave AMCL's particles time to collapse. The search
 instead scores one scan at every pose on every saved map:
 
-- Precompute per map one **score grid** from distance to the nearest wall:
-  1 at the wall falling linearly to 0 at 30 cm, computed by the ring
-  dilation `scan_fit` uses today, so the distance is quantised to cells.
-  The **sharp** grid is that score at 5 cm; the **coarse** grid is its max
-  over a 13 cell (65 cm) window. Built at bridge start for every PGM on
-  disk, and again for a map the learner rewrites.
+- Precompute per map two grids from distance to the nearest wall, computed
+  by the ring dilation `scan_fit` uses today (kept, renamed), so the
+  distance is quantised to cells. The **sharp** grid scores 1 at the wall
+  falling linearly to 0 at 30 cm, at 5 cm; the **coarse** grid is its max
+  over a 13 cell (65 cm) window. A third, the **wall** grid, is the
+  occupied cells dilated by one cell. Built at bridge start for every PGM
+  on disk, and again for a map the learner rewrites.
 - Coarse pass: a plain grid of poses every 20 cm over the map's free cells
   dilated by one grid step (so a robot standing where the map drew the old
   sofa is still found; only wall cells are excluded), and every 3 degrees of
-  heading, scored by summing coarse-grid values at the end points of every
-  sixth beam (60 beams), dropping beams longer than 4 m. The numbers fit
-  together by Hess's step rule, with the slop pooled instead of enumerated:
-  a 20 cm grid puts the true pose up to 14 cm from a grid pose, a 3 degree
-  step moves a 4 m beam end up to 10.5 cm at the half step, cell
-  quantisation adds 5 cm, and the 32.5 cm half-window covers the sum, so
-  the true pose's cell cannot be lost to pooling. About 40 m² of free floor
-  is 1000 poses, 1300 with the dilation, times 120 headings, times 60
-  beams: 9 million gathers. No ray casting here: ray casting every grid
-  pose is billions of samples.
-- The pooled score saturates: in a house a large share of coarse cells put
-  every end point within the window of some wall and score full marks, and
-  from a hallway dozens of positions tie with the true one. So ties at the
-  top are broken by the sharp score at the same pose (one more gather per
-  tied pose, a few million at most), and the **sixty** best distinct peaks
-  are kept by non-maximum suppression in that order: a kept peak suppresses
-  every cell within one grid step and one heading step of it, and
-  suppression does not chain. This departs from Olson's rule of expanding
-  every coarse cell whose bound beats the best fine score so far: that rule
-  guarantees the fine maximum, and the fine maximum, "end points near
-  walls", is exactly the score the floor has shown we cannot trust; the
-  list is wide instead, and the judge decides.
+  heading, scored on every sixth beam (60 beams), dropping beams longer
+  than 4 m: the sum of coarse-grid values at the end points, **minus one
+  for each of two samples along each beam (at a third and two thirds of
+  its length) that lands in the wall grid.** The through term is what keeps
+  the true pose in the list in a lived-in room: the end-point sum alone
+  saturates (in a simulated house a large share of coarse cells put every
+  end point within the window of some wall and score full marks), and a
+  true pose whose beams hit two unmapped chairs fell below hundreds of
+  wrong poses that cross walls freely; charging for the crossings is what
+  tells them apart at this level. The numbers fit together by Hess's step
+  rule, with the slop pooled instead of enumerated: a 20 cm grid puts the
+  true pose up to 14 cm from a grid pose, a 3 degree step moves a 4 m beam
+  end up to 10.5 cm at the half step, cell quantisation adds 5 cm, and the
+  32.5 cm half-window covers the sum, so the true pose's cell cannot be
+  lost to pooling. About 40 m² of free floor is 1000 poses, 1300 with the
+  dilation, times 120 headings, times 60 beams: 9 million end-point gathers
+  and 19 million wall-grid gathers; looped over the 120 headings, not one
+  flat array, for the Pi's cache. No ray casting here: ray casting every
+  grid pose is billions of samples.
+- Ties at the top are broken by the sharp score at the same grid pose, and
+  the **sixty** best distinct peaks are kept by non-maximum suppression in
+  that order: a kept peak suppresses every cell within one grid step and
+  one heading step of it, and suppression does not chain. The through term
+  and the tie-break are heuristics with no bound behind them, and this
+  departs from Olson's rule of expanding every coarse cell whose bound
+  beats the best fine score so far: that rule guarantees the fine maximum,
+  and the fine maximum, "end points near walls", is exactly the score the
+  floor has shown we cannot trust; the list is wide instead, and the judge
+  decides. The safety net is phase 2's replay test that every labelled true
+  pose, the cluttered-room recordings included, is in the sixty; the named
+  fallback is a score-relative list (every peak within two beams of the
+  best, judged while the time bar allows).
 - Refine each of the sixty on the sharp grid over ±35 cm and ±5 degrees at
   5 cm and 1 degree on every third beam (120): about 2500 poses times 120
   beams times sixty, 18 million gathers. Per axis, one grid step plus the
@@ -578,31 +626,43 @@ instead scores one scan at every pose on every saved map:
   of the peak that absorbed its cell. Pooling leaves each real mode as a
   plateau up to three cells wide, so one mode can take several slots; after
   refining, results within one grid step and heading step of a better one
-  are merged. Then run the ray-cast judge on the survivors, all 360 beams,
-  about 3 ms each on the Pi. The whole pipeline, about 30 million gathers
-  and their numpy passes plus sixty judges, is timed on the robot in phase
-  2 against the two-seconds-per-map bar; if it misses, the knobs in order:
-  every twelfth beam in the coarse pass, a 3 m cap, forty candidates, the
-  FFT pass on the shelf. The coarse and sharp scores only choose which
-  poses get judged; the judge decides, by agree and through shares, never by
-  raw score, and the same shares rank candidates across maps.
-- **Rules, written as formulas.** A candidate **passes** when agree ≥ A + M
-  and through ≤ T and at least two thirds of its beams are counted (a pose
-  on the map's edge with most of its beams in unknown is not a find; the
-  judge's one-third rule is for a pose already held). The commit bar A + M
-  is the hysteresis: the judge drops at A, so a candidate that only just
-  passed the judge would be dropped by its first wobble and found again a
-  second later, for ever. Phase 1 reads A so that A + M still sits below
-  every unambiguous true pose recorded, the true pose beside the removed
-  table included (its through beams are the dropped patch, so they are not
-  in its agree denominator); if one cannot be committed, A was set too
-  thin, not M too wide. M comes from the wrong-room recording. The
-  **winner** is the passing candidate with the highest agree, and it is
-  **clear** when every other passing candidate is at least M behind it in
-  agree or has more through. There is no prior: the last known pose is a
-  candidate like any other (it is TF's pose, scored on every search), and
-  a tie between two passing candidates is broken by the next scan from a
-  new spot, not by where the robot used to be.
+  are merged. The held pose, when there is one, is refined the same way and
+  is never merged away. Then run the ray-cast judge on the survivors, all
+  360 beams, an estimated 3 ms each on the Pi when the ray axis is one
+  gather and one argmax (a Python loop over the steps is five times that).
+  The whole pipeline, about 45 million gathers and their numpy passes plus
+  sixty judges, is timed on the robot in phase 2 against the
+  two-seconds-per-map bar (a local run extrapolates to about 1.5 s); if it
+  misses, the knobs in order: every twelfth beam in the coarse pass, a 3 m
+  cap, forty candidates, 180 judge beams, the FFT pass on the shelf. The
+  non-maximum suppression and the merge are vectorised; a Python loop over
+  thousands of sorted cells holds the GIL for hundreds of milliseconds. The
+  coarse and sharp scores only choose which poses get judged; the judge
+  decides, by agree and through shares, never by raw score, and the same
+  shares rank candidates across maps.
+- **Rules, written as formulas.** A candidate **passes** (is committable)
+  when agree ≥ A + M and through ≤ T and at least two thirds of its
+  returned beams are counted (a pose on the map's edge with most of its
+  beams in unknown is not a find; the judge's one-third rule is for a pose
+  already held). The commit bar A + M is the hysteresis: the judge drops at
+  A, so a candidate that only just passed the judge would be dropped by its
+  first wobble and found again a second later, for ever. The **winner** is
+  the passing candidate with the highest agree, and it is **clear** when it
+  outranks every other passing candidate by M. Phase 1 reads A and M
+  together off the first recordings: A under every true pose, A + M under
+  every true pose that must be committable from a cold carry (the removed
+  coffee table and the standing guest included; the true pose a metre from
+  a removed sofa is accepted as the one everyday scene that cannot be
+  committed cold, since the robot that wakes there on its remembered pose
+  passes the judge and drives), and M as wide as that leaves, so that a
+  wrong corner pose forgiven a door-sized arc (agree about 0.85 in a
+  simulated house) is not clear against a true pose at 1.0. Where clutter
+  pulls the true pose down to the wrong pose's level, nothing is clear and
+  the robot waits for the next scan from a new spot; that is the honest
+  answer, not a wrong commit. There is no prior: the last known pose is a
+  candidate like any other, and a tie between two passing candidates is
+  broken by the next scan from a new spot, not by where the robot used to
+  be.
 - **No carried state, no lift sensor, no detector.** Arlen: "Do I know
   where I am? Is there another point that makes more sense? covers drag,
   carry, everything." It is one search, run the same way in every state;
@@ -631,109 +691,138 @@ instead scores one scan at every pose on every saved map:
   the new `/map` has arrived at the bridge and the seed has landed by the
   arrival rule of part 1 (a map load leaves AMCL's particles where they
   were, which on the new map is simply a wrong pose; verified in Nav2's
-  source, checked once on the robot in phase 2). A held trip whose place is
-  on the old map ends `failed` with the existing `place_on_other_map`. A
-  learner reload of the same map needs no re-seed: the origin never moves,
-  so the particles are still right; only the mute applies.
-- **Not on a map.** 20 s of searches with nothing passing on any map:
+  source, checked once on the robot in phase 2). AMCL's own `/map`
+  subscriber is separate from the bridge's, so a seed inside the old map's
+  extent can be planted a scan before AMCL swaps maps; harmless beyond a
+  mean shift inside the spread, and the two-tick re-send covers the
+  rejected case. A learner reload of the same map needs no re-seed: the
+  origin never moves, so the particles are still right; only the mute
+  applies. Rooms stacked on two floors with the same footprint tie across
+  maps exactly like a symmetric room and are broken the same way, by a
+  scan that sees something that differs; phase 2 tests with a real second
+  floor, not one spare room.
+- **Not on a map.** 20 s of results with nothing passing on any map:
   `off_map`, as above.
 
 Where it lives: one `threading.Thread` per search, started from the tick
 whenever the lidar is scanning and no search is running, on the latest
-scan with a verdict (never a no-verdict scan, never one older than TF's
-ten-second cache); one result attribute that the next tick reads. Its own
-flag, not the bridge's `busy` activity lock that relocalize uses today: an
-activity refuses trips, pauses the state machine and resets the pending
-goal's clock every tick, all of which the trip rules forbid. No queue, no
-result class, no localizer object; the maths is pure numpy functions in
-`robot_nav.py` (or a sibling module if it outgrows the file) with tests on
-synthetic and recorded scans. The search takes up to two seconds per map
-and runs continuously while the lidar is on, which is minutes at a time;
-numpy releases the GIL for its big gathers, but whether the tick and the
-barrier publisher stall is measured in phase 2; if they do, the search
-moves to a subprocess.
+scan not taken while turning (never one older than TF's ten-second cache);
+one result attribute that the next tick reads. Its own flag, not the
+bridge's `busy` activity lock that relocalize uses today: an activity
+refuses trips, pauses the state machine and resets the pending goal's clock
+every tick, all of which the trip rules forbid. No queue, no result class,
+no localizer object; the maths is pure numpy functions in `robot_nav.py`
+(or a sibling module if it outgrows the file) with tests on synthetic and
+recorded scans. The search takes up to two seconds per map and runs
+continuously while the lidar is on, which is minutes at a time, one core at
+full load; numpy releases the GIL for its big gathers, but whether the
+tick and the barrier publisher stall, and what the CPU and thermal headroom
+look like beside Nav2 and the voice, is measured in phase 2. If they
+suffer, the search while `tracking` runs every few seconds instead of back
+to back (the rules do not change; a slip is caught a few seconds later),
+and if the tick still stalls the search moves to a subprocess.
 
 **Held trips** reuse the pending slot the bridge already has
 (`goal_request`, today a tuple, with `GOAL_START_SECONDS` = 30 s): the
-pending request becomes a dict with a `state` of `held` and a
-`held_seconds`, and a dropped pose writes the running goal back into that
-slot instead of cancelling it. Waiting for the lidar and Nav2 to come up
-keeps today's clock and today's reasons, unspoken. `held_seconds`
-accumulates on every tick the trip is held for the localizer (the state is
-`searching`, or `checking` that is neither clean nor uninformed for 5 s)
-and never resets, so one 30 s deadline covers all of a trip's localizer
-holds together. Two consequences, intended: a trip asked for from a cold
-idle on the counter can take up to a minute to give up (today's bring-up
-clock, then this one); a long trip held 5 s at its start and dragged a
-minute later has 25 s left to re-find and resume. The trip keeps its one
-serial, the one in the reply, for its whole life; a release is a new Nav2
-goal under the same serial, and the bridge tells a late result from the
-stopped Nav2 goal apart by its goal handle, so it cannot kill the resumed
-trip. The bridge's `navigating()` counts `held` as in flight, so the rail
-and lidar stay up through a hold and every path that gates on it sees the
-held goal: "stop", the dashboard's Cancel trip button, a gamepad twist and
-the nav lock cancel a held trip (the person took over; they can ask
-again), the voice's `check_navigation` keeps waiting through it, and the
-map draws a held goal hollow. New behaviour, with a test: a request for
-the same place during a hold returns the held goal, accepted, under its
-serial (today every request replaces the goal and bumps the serial, which
-would reset the voice's line memory and repeat "hang on"); a different
-place replaces it as today. When the deadline passes the goal ends `failed`
-with reason `lost`; when the state reaches `off_map` a held goal ends at
-once with reason `off_map`. The deadline is what bounds the robot stuck on
-a rug: wheels turn, odometry advances, the world does not, which reads as
-a dropped pose, a re-find at the true pose and a resume into the same rug;
-without the deadline that loop is silent and endless.
+pending request becomes a dict with `state: "held"` and a `held_seconds`,
+and a dropped pose writes the running goal back into that slot instead of
+cancelling it. Waiting for the lidar and Nav2 to come up keeps today's
+clock and today's reasons. `held_seconds` accumulates on every tick the
+trip is held for the localizer (the state is `searching`, or `checking`
+that is neither clean nor uninformed for 5 s) and never resets, so one 30 s
+deadline covers all of a trip's localizer holds together. Two consequences,
+intended: a trip whose candidates tie and never break gives up after 30 s
+of holding, however many finds and drops came before; a long trip held 5 s
+at its start and dragged a minute later has 25 s left to re-find and
+resume. The trip keeps its one serial, the one in the reply, for its whole
+life; a release is a new Nav2 goal under the same serial, and the bridge
+tells a late result from the stopped Nav2 goal apart by its goal handle, so
+it cannot kill the resumed trip. The bridge's `navigating()` counts `held`
+as in flight, so the rail and lidar stay up through a hold and every path
+that gates on it sees the held goal: "stop", the dashboard's Cancel trip
+button and the nav lock cancel a held trip, the voice's `check_navigation`
+keeps waiting through it, and the map draws a held goal hollow (`nav.js`
+tests the string `'navigating'` in four places, goal text, goal class, the
+map marker and the Cancel button; each gains `'held'`). A gamepad twist
+cancels a running trip, as today, but not a held one: the robot is not
+moving, the caption asks for exactly that push, and the trip leaves on its
+own when the pose is found. A trip to a place on another map is refused
+with `place_on_other_map` only while `tracking`; in any other state it is
+held like any trip, released when the robot is clean on that place's map,
+and ended `place_on_other_map` if the robot reaches `tracking` on a map
+without it (a robot carried upstairs asleep must not say "the bedroom is
+on another map" while standing in it). New behaviour, with a test: a
+request for the place the current goal already names, held or running,
+returns that goal, accepted, under its serial (today every request
+replaces the goal and bumps the serial, which would reset the voice's line
+memory and repeat "hang on"); a different place replaces it as today. When
+the deadline passes the goal ends `failed` with reason `lost`; when the
+state reaches `off_map` a held goal ends at once with reason `off_map`. The
+deadline is what bounds the robot stuck on a rug: wheels turn, odometry
+advances, the world does not, which reads as a dropped pose, a re-find at
+the true pose and a resume into the same rug; without the deadline that
+loop is silent and endless, and with it the row reads `failed (lost)`,
+which is close enough to true.
 
 **The voice** has no standing poll today: the trip tool returns the moment
 the bridge accepts, and the goal is looked at again only if the model
 chooses to call the check tool. So a held trip is the tool's to wait out,
 but only when the robot already has something to say about it: when the
-bridge's reply carries `accepted: true`, the serial, `held: true` and a
-state of `searching` or unclean `checking`, the trip tool keeps polling
-`nav_status` inside the call until the trip leaves, is cancelled or fails
-(bounded by the deadline), and only then returns to the model. A hold for
-the lidar or Nav2 coming up (`stale`) returns at once as today, so a trip
-asked for from idle is acknowledged at once and leaves on its own, and
-whatever happens after the tool has returned is dashboard-only for now: a
-drag after the trip left, a carry while asleep whose search fails, the rug.
-Giving the robot a voice during a trip it is no longer being asked about is
-the UX audit's cluster A, not this plan. The canned lines are spoken from
-the poll as the turn's own speech: the tool context on both of the voice's
-paths (the plain assistant turn, which is where "go to the kitchen" runs,
-and the goal runner) gains the speaker, the poll waits for the turn's own
-narration to finish before a line, and a line is the turn's playback, so a
-"stop" shouted over it is a barge-in. Today a barge-in on an explicit stop
-word cancels the turn and returns to listening without running any tool,
-and during a working turn a stop word can be stitched into the next
-request; so the trip tool's poll, when its task is cancelled, sends the
-bridge a cancel for its serial before it dies, and the stitching branch
-routes an explicit stop word to the stop tool. Which lines have been said
-is remembered per goal serial in one place in the voice module, so a second
-ask about the same trip (which returns the same serial) never repeats one.
-What the model sees is a normal trip in flight, or a handled outcome with
-the reason word as today and, when a line was said, `spoken: true` with the
-note "the robot already explained this out loud; a short acknowledgement at
-most"; the tool dispatcher treats a result carrying `spoken: true` as
-handled, not an error, whatever its `accepted` flag says. Nothing was said,
-nothing is claimed: the model tells the user what happened in a sentence,
-as it does today. A refused trip in `off_map` carries the same `spoken`
-note. `where_am_i` keeps its boolean and a canned note, "the robot sorts
-this out itself, just ask for the trip", or in `off_map` the off-map
-sentence, never the state word. The trip tool's description loses "spins
+bridge's reply carries `accepted: true`, the serial and a goal state of
+`held` with the localizer state `searching` or unclean `checking`, the trip
+tool keeps polling `nav_status` inside the call until the trip leaves, is
+cancelled or fails (bounded by the deadline), and only then returns to the
+model. A hold for the lidar or Nav2 coming up (`stale`) returns at once as
+today, with `held` and the state and the note "the lidar is starting; the
+trip leaves on its own", so the model acknowledges without claiming to be
+on its way; whatever happens after the tool has returned is dashboard-only
+for now: a drag after the trip left, a carry while asleep whose search
+fails, the rug. That silent case, carried asleep and asked from idle, is
+the moment a human is most needed, and it is the UX audit's cluster A, not
+this plan; the exit list below names it so it is not read as a bug. The
+canned lines are spoken from the poll as the turn's own speech: the tool
+context on both of the voice's paths (the plain assistant turn, which is
+where "go to the kitchen" runs, and the goal runner) gains the speaker, the
+poll waits for the turn's own narration to finish before a line, and a line
+is the turn's playback, so a "stop" shouted over it is a barge-in. Today
+the turn is cancelled for more than a stop word: a stop word cancels it and
+returns to listening without running any tool, and any other speech during
+a working turn cancels it and stitches the words into the next request. So
+the poll, when its task is cancelled, sends the bridge a cancel for its
+serial only when the cancel reason is the explicit stop, and otherwise
+simply dies and leaves the held goal where it is (a stray "okay" or a
+second "go to the kitchen" then changes nothing: the re-ask returns the
+same serial); and the stitching branch routes an explicit stop word to the
+stop tool. Which lines have been said is remembered per goal serial in one
+place in the voice module, so a second ask about the same trip never
+repeats one. What the model sees is a normal trip in flight, or a handled
+outcome with the reason word as today and, when a line was said or the
+person themselves ended the trip (Cancel on the dashboard, "stop"),
+`spoken: true` with the note "the robot already explained this out loud,
+or the user ended it; a short acknowledgement at most"; the tool dispatcher
+treats a result carrying `spoken: true` as handled, not an error, whatever
+its `accepted` flag says. Nothing was said, nothing is claimed: the model
+tells the user what happened in a sentence, as it does today. A refused
+trip in `off_map` carries the same `spoken` note. `where_am_i` keeps its
+boolean and a canned note, "the robot sorts this out itself, just ask for
+the trip", or in `off_map` the off-map sentence, never the state word; its
+place list is the loaded map's. The trip tool's description loses "spins
 in place to find itself", says the call may take up to half a minute to
 leave, and that the tool speaks for itself about position. The three
 lines, spoken verbatim and only in these cases:
 
-- "Hang on, I'm working out where I am." Once per trip, when the trip has
-  been held with the state `searching` for about 3 s. If this line is ever
-  heard after an ordinary idle, that is the pre-trip pause leaking through
-  the speaker, and the fix is the lidar rules, not a nicer sentence.
+- "Hang on, I'm working out where I am." Once per trip, when the first
+  search result since the hold began has come back without a clear winner
+  (two to four seconds in). If this line is ever heard after an ordinary
+  idle, that is the pre-trip pause leaking through the speaker, and the fix
+  is the lidar rules, not a nicer sentence.
 - "I've lost track of where I am. Move me a little and ask again." Once per
-  trip, when the poll sees the goal `failed` with `lost`.
-- "I can't work out where I am from here. Put me on the floor somewhere I
-  know." When a trip is asked for in `off_map` (from the reply), or the
-  poll sees its goal end `failed` with `off_map`; never unprompted.
+  trip, when the poll sees the goal `failed` with `lost`. Between the two
+  lines the robot is silent for up to 27 s while it waits for a nudge it
+  cannot give itself; accepted, and written into the exit list.
+- "I can't work out where I am from here. Put me somewhere I know." When a
+  trip is asked for in `off_map` (from the reply), or the poll sees its
+  goal end `failed` with `off_map`; never unprompted.
 
 ### 4. Learner: the map follows the house
 
@@ -752,12 +841,12 @@ Outline only; re-planned at phase 3 exit with the measured judge in hand.
   untouched.
 - **Votes**, only while `tracking`, within 4 m (where 1 degree beams are
   still closer together than two cells), hitting the wall at more than 20
-  degrees from grazing. A through beam, including one in the dropped patch,
-  votes free on the wall cell it crossed; a short beam votes occupied where
-  it stopped; an agreeing beam votes *for* the wall cell it hit, which can
-  only block or reset a change, never make one. That is what stops the
-  learner eating itself: a pose 10 cm off for a whole lap casts only
-  confirming votes, because 10 cm is inside the agree tolerance.
+  degrees from grazing. A through beam, including one in the forgiven
+  patch, votes free on the wall cell it crossed; a short beam votes
+  occupied where it stopped; an agreeing beam votes *for* the wall cell it
+  hit, which can only block or reset a change, never make one. That is what
+  stops the learner eating itself: a pose 10 cm off for a whole lap casts
+  only confirming votes, because 10 cm is inside the agree tolerance.
 - **Visits and verdicts.** Votes on a cell until it has had none for 30
   minutes are one visit; a visit's verdict is clear at 20 votes, 90 percent
   one way; a cell changes after three visits against it with none for it in
@@ -772,13 +861,12 @@ Outline only; re-planned at phase 3 exit with the measured judge in hand.
 No spin: one scan, whole map, judged candidates in a second or two,
 confirmed by the first 0.3 m of the trip or whatever drive is already
 happening. Continuous: the judge runs every tick and the search runs the
-whole time the lidar is on; a pose that contradicts the map or is beaten by
-a better one is dropped without a button. Which map: the search scores all
-maps and picks the one that survives. Accurate: nothing is `tracking`
-without a high agree share, a low through share, no better pose anywhere
-on any map, and motion the judge agreed through; AMCL is configured so it
-can actually hold 10 cm. A 55 percent match of any kind is `searching`,
-and the marker says so.
+whole time the lidar is on; a pose that contradicts the map or is twice
+beaten by a better one is dropped without a button. Which map: the search
+scores all maps and picks the one that survives. Accurate: nothing is
+`tracking` without a high agree share, a low through share, no better pose
+anywhere on any map, and motion the judge agreed through; AMCL is
+configured so it can actually hold 10 cm.
 
 ## Alternatives considered
 
@@ -787,6 +875,13 @@ Rejected:
 - **Move the bars, or weight AMCL's covariance in.** The wrong room scored
   inside the true range; no bar fixes a score that does not measure the
   right thing.
+- **AMCL's own lost signals.** The Augmented-MCL `w_fast / w_slow` ratio is
+  the textbook kidnapped-robot detector, but Nav2 computes it internally
+  and never publishes it, and this plan zeroes the alphas; particle-cloud
+  spread from `/particle_cloud` is what the floor already discredited (a
+  tight cloud in the wrong room), and with `resample_interval` 1 the
+  weights are uniform after every resample. The judge is the scan-match
+  residual monitor these stand in for.
 - **slam_toolbox localization mode.** No global search, a re-map into pose
   graphs, heavy tuning, and it would still need parts 2 and 3.
 - **Cartographer pure localization.** Has the search, but not packaged for
@@ -796,9 +891,11 @@ Rejected:
 - **Keep spinning but spin smarter.** Spinning is a workaround for a search
   tool that is not a search tool. Removing it is the point.
 - **Shares alone, no rival.** A slip along a corridor or a half turn in a
-  room is invisible to any single-scan contradiction score; a simulated
-  house gave a 180 degree flip agree 0.73 and through 0.05 after the patch
-  rule. Asking "is there a better pose anywhere" is the only honest answer.
+  room is invisible to any single-scan contradiction score. Asking "is
+  there a better pose anywhere" is the only honest answer; running it the
+  whole time is not standard practice (Cartographer samples its global
+  search, prism_loc runs it on demand, vacuums match on wake) but the Pi
+  can afford it on 40 m², and the cadence is the knob if it cannot.
 - **A rival check as a separate windowed search** (1.5 m / 30 degrees
   around the pose, once a second). Its window could not hold the metre-off
   case it was calibrated on without costing more than the whole-map search,
@@ -814,9 +911,17 @@ Rejected:
   declared itself off its own map, and it could keep a wrong pose over a
   passing true one. The patch rule in the judge handles the map change in
   every state with no state at all, and is the rule Arlen asked for.
+- **Removing the forgiven patch from the agree denominator.** It made the
+  true pose beside a removed table read 1.0, and it made a wrong corner
+  pose with one wide through arc read 1.0 too, at a quarter of the spots
+  in a simulated house. Forgiven is not credited.
+- **Comparing through between a rival and the held pose.** Both sit at zero
+  to three beams, so one speckle beam decided; committable already bounds
+  through by T.
 - **Judging "seed landed" by stamps.** AMCL's one forced `/amcl_pose` after
-  a seed carries the scan's stamp, earlier than the seed's; a stamp rule
-  would re-seed for ever.
+  a seed carries the scan's stamp, earlier than the seed's; a stamp order
+  rule would re-seed for ever. Only messages a whole revolution older than
+  the seed are rejected.
 - **Three states instead of five.** `stale` and `off_map` are two
   transitions and two captions each; they tell the person at the marker
   different things.
@@ -838,12 +943,14 @@ Rejected:
 On the shelf, one line each, built only when the named recording shows the
 simpler thing failing:
 
-- **Patch width cap**: the dropped patch may be no wider than some angle; if
-  a wrong-pose recording passes only because its through sat in one patch.
+- **Patch width cap for commits**: a candidate whose forgiven patch is
+  wider than some angle cannot commit; if a wrong pose with one wide arc
+  commits in the replay despite paying for the arc in agree.
 - **Short-blind agree**: agree over counted beams minus short ones when
   through ≤ T; if the standing-guest recording drops agree under A.
-- **Coarse through term**: two samples along each beam in a dilated wall
-  grid, subtracted; if a labelled true pose misses the sixty candidates.
+- **Score-relative candidate list**: every coarse peak within two beams of
+  the best instead of the sixty; if a labelled true pose misses the sixty
+  in the cluttered-room recordings.
 - **FFT correlation pass** for the coarse search (about 0.75 s at 512 cells,
   extrapolated from a 0.17 s test at 256); if the plain grid misses the
   two-second bar after its own knobs.
@@ -887,25 +994,26 @@ produced three fix batches).
   living room, a gamepad drive around the floor while correctly localized
   (as a sequence, for the motion gate, AMCL's drift and R's noise floor), a
   drive past the open door and the dark sofa, a true pose beside the
-  removed coffee table, a person walking past, and a person standing a
-  metre in front for 30 s at the weakest-scoring cross.
+  removed coffee table and one a metre from the sofa pulled out of the
+  room, true poses in a room with three or four unmapped things in it (a
+  laundry basket, chairs pulled out, a bag), a person walking past, and a
+  person standing a metre in front for 30 s at the weakest-scoring cross.
 - `tools/localization_replay.py` prints today's `scan_fit` and the new
   `agree` and `through` shares (with and without the patch rule, at ±2 and
   ±3 degrees) for every recording, AMCL's error at each cross, and which
   angular sectors are always short (the robot's own body, masked once).
-  That table goes into this document and A, T, the tolerance and N are read
-  off it, with margin. Pass for the judge: every true pose (the open-door,
-  rug, removed-table, walking-past and standing-guest recordings count as
-  true) passes, and the wrong room and the counter fail with the patch rule
-  applied, with daylight between. The wrong heading, the sideways drag, the
-  hallway drag and the metre-off pose are reported, not required: a pose
-  that agrees with the map in the wrong place is the search's case in phase
-  2, and if the wrong heading passes on shares that is written here, not
-  hidden. If a wrong pose passes only through the patch rule, the width cap
-  comes off the shelf; if the standing guest fails, short-blind agree; if
-  nothing separates the wrong room and the counter, this plan stops and is
-  rethought rather than tuned. The carry recordings decide the anchored
-  check; the cross recordings decide the tracker.
+  That table goes into this document and A, M, T, the tolerance and N are
+  read off it, with margin. Pass for the judge: every true pose (the
+  open-door, rug, removed-table, removed-sofa, cluttered-room, walking-past
+  and standing-guest recordings count as true) passes, and the wrong room
+  and the counter fail with the patch rule applied, with daylight between.
+  The wrong heading, the sideways drag, the hallway drag and the metre-off
+  pose are reported, not required: a pose that agrees with the map in the
+  wrong place is the search's case in phase 2, and if the wrong heading
+  passes on shares that is written here, not hidden. The shelf's first two
+  entries and the anchored check are decided by the recordings they name;
+  if nothing separates the wrong room and the counter, this plan stops and
+  is rethought rather than tuned. The cross recordings decide the tracker.
 - Map audit: the replay draws where through beams land at the known-true
   poses. Clusters on a few cells are map errors (diagonal walls with corner
   gaps included): fix those cells or re-map (doors in their usual state,
@@ -914,157 +1022,178 @@ produced three fix batches).
   Spread everywhere means the tolerance is wrong, not the map. The verdict
   on `groundfloor` goes into this document before any bar is set.
 - `robot_nav.beam_check(...)`: the ray cast at half-cell steps, the
-  seven-beam neighbour rule, the patch rule over counted beams, no-return
-  and unknown as no opinion, the no-verdict rule; pure numpy, tests on
-  synthetic maps and on the recordings, which run in the normal suite. The
-  judged pose is the single-edge latest `map -> odom` composed with
-  `odom -> laser` at the scan's middle; the turn gate reads odometry yaw.
+  seven-beam neighbour rule, the patch rule over counted beams with the
+  patch kept in the denominator, no-return and unknown set aside, the
+  no-verdict rule; pure numpy, tests on synthetic maps and on the
+  recordings, which run in the normal suite. The judged pose is the
+  single-edge latest `map -> odom` composed with `odom -> laser` at the
+  scan's middle; the turn gate reads odometry yaw.
 - The state machine in the bridge with four states, `tracking`, `checking`,
-  `searching`, `stale`, one count N, the motion gate, clean after one pass,
-  the uninformed release after 5 s, the tick judging before it releases,
-  dropping after N failures, the seed-landed arrival rule. `localized`
-  becomes "tracking or clean checking". Entering `searching` cancels a
-  running trip through the cancel path that already exists. Save place
-  needs `tracking`, with its refusal text beside the button and in the
-  voice's refusal note. The pre-trip spin and the boot spin stay in this
-  phase: `try_map` accepts a spin when `beam_check` passes the scan at
-  AMCL's pose *and* today's `scan_fit` bar holds (the second condition is
-  kept one phase longer because today's score does tell the wrong heading
-  from a true pose, 0.44 to 0.49 against 0.55 and up, and the judge may
-  not); a trip whose spins all fail ends `failed` with reason `lost`
-  (today's `not_localized`, renamed once; the model paraphrases it as it
-  does today). `scan_fit`'s `localized` bars go now; the score itself, the
-  turn-gate constant and the ring dilation go in phase 2 with the spins.
-  "Worse" in this phase means a wrong room accepted, not fewer trips
-  started.
+  `searching`, `stale`, one count N, the motion gate, clean when the latest
+  verdict scan passed, the uninformed release after 5 s, the tick judging
+  before it releases, dropping after N failures, the seed-landed arrival
+  rule with its one-revolution staleness test. `localized` becomes
+  "tracking or clean checking". Entering `searching` cancels a running trip
+  through the cancel path that already exists. Save place needs `tracking`,
+  with its refusal text beside the button and in the voice's refusal note.
+  The pre-trip spin and the boot spin stay in this phase: `try_map` accepts
+  a spin when `beam_check` passes the scan at AMCL's pose *and* today's
+  0.6 spin acceptance holds (kept one phase longer because today's score
+  does tell the wrong heading from a true pose, 0.44 to 0.49 against 0.55
+  and up, and the judge may not); a trip whose spins all fail ends `failed`
+  with reason `lost` (today's `not_localized`, renamed once for trips; the
+  model paraphrases it as it does today). The 0.4/0.6 `localized` flip with
+  its tick counts goes now; the score itself and the 0.6 spin bar go in
+  phase 2 with the spins; the ring dilation and the turn gate stay,
+  renamed. "Worse" in this phase means a wrong room accepted, not fewer
+  trips started.
 - AMCL: `update_min_d` and `update_min_a` 0.1, `sigma_hit` 0.1, seed
   covariance 0.02 and 0.01, seed transported by the bridge and stamped with
   the newest odometry time.
 - Voice: the trip tool's description loses "spins in place to find itself".
 - Dashboard: the marker (solid, soft, hollow, none) and the caption in
-  front, with the `searching` caption "lost, press Localize" until phase 3
-  ("finding my place" while a trip's spin is running); state word, shares,
-  reason text, map name behind the debug toggle.
+  front, with the `searching` caption "lost, press Localize" in this phase
+  only ("finding my place" while a trip's spin is running); state word,
+  shares, reason text, map name behind the debug toggle.
 - Exit, on the floor: the wrong room is never shown as `tracking`, and a
   spin from the wrong room is never accepted; a correct pose reaches
   `tracking` within N scans after a seed and a short drive; the counter
   drops to `searching` within N scans; a robot parked nose to a wall still
   leaves on a trip on its first verdict scan; a robot facing the open front
   door leaves within 5 s; a robot carried while asleep shows `stale`, never
-  a solid marker in the old room, and never drives off on the old pose;
-  Save place is refused with its text until `tracking`; a correctly
-  localized robot driven by gamepad through the hallway and into corners,
-  past a moved chair, an open door, over the rug, past the dark sofa, past
-  the removed coffee table and past a person standing in front, stays
-  `tracking` the whole way; a robot put to sleep beside the removed table
-  and woken there is clean `checking` on its first verdict scan; AMCL's
-  error at the crosses is written down; and the replay's verdict on the
-  wrong heading and the drags is written down for phase 2.
+  a solid marker in the old room, and never drives off on the old pose
+  (unless the old pose faces unknown, the accepted case); Save place is
+  refused with its text until `tracking`; a correctly localized robot
+  driven by gamepad through the hallway and into corners, past a moved
+  chair, an open door, over the rug, past the dark sofa, past the removed
+  coffee table, through the cluttered room and past a person standing in
+  front, stays `tracking` the whole way; a robot put to sleep beside the
+  removed table and woken there is clean `checking` on its first verdict
+  scan; AMCL's error at the crosses is written down; and the replay's
+  verdict on the wrong heading and the drags is written down for phase 2.
 
 ### Phase 2: the search (four evenings)
 
-- `robot_nav.global_search(...)`: the score grids for every PGM, the coarse
-  pass at 20 cm and 3 degrees on 60 beams capped at 4 m, sharp tiebreak,
-  non-maximum suppression, sixty candidates, sharp refinement over ±35 cm
-  and ±5 degrees on 120 beams, merge after refine, judge on the survivors,
-  the pass (A + M, two thirds counted) and clear (M lead or more through)
-  formulas, the current TF pose scored as a candidate when there is one.
-  The whole pipeline timed on the robot against the two-seconds-per-map
-  bar, and the tick and barrier publisher watched for stalls while it runs.
-  Tests on recordings: every labelled true pose at an unambiguous spot is
-  among the sixty and is the clear winner after the judge; the wrong room
-  recording produces no passing candidate at the wrong room; the counter
-  recording produces none; a map-edge pose with most beams in unknown is
-  not committed; the wrong heading, the hallway drag and the metre-off
-  recordings each produce the true pose as a rival over the recorded pose,
-  and that sets R's ceiling; the gamepad-drive sequence never produces one,
-  and sets R's floor; M comes off the wrong-room recording.
+- `robot_nav.global_search(...)`: the sharp, coarse and wall grids for
+  every PGM, the coarse pass at 20 cm and 3 degrees on 60 beams capped at
+  4 m with the through term, sharp tiebreak, vectorised non-maximum
+  suppression, sixty candidates, sharp refinement over ±35 cm and ±5
+  degrees on 120 beams, merge after refine, judge on the survivors, the
+  pass (A + M, two thirds of returned beams counted) and clear (outranks
+  every other passer by M) formulas, the held pose refined and judged as a
+  candidate when there is one, the result tagged with its scan's time. The
+  whole pipeline timed on the robot against the two-seconds-per-map bar,
+  the tick and barrier publisher watched for stalls, and the CPU and
+  temperature watched beside Nav2 and the voice while it runs. Tests on
+  recordings: every labelled true pose at an unambiguous spot, the
+  cluttered-room ones included, is among the sixty and is the clear winner
+  after the judge; the wrong room recording produces no passing candidate
+  at the wrong room; the counter recording produces none; a map-edge pose
+  with most beams in unknown is not committed; the wrong heading, the
+  hallway drag and the metre-off recordings each produce the true pose as
+  a rival over the refined recorded pose, and that sets R's ceiling; the
+  gamepad-drive sequence never produces one, and sets R's floor; the
+  window between them is written down, and if the near-symmetric flips
+  fall under R that is written down as "caught by motion".
 - The search thread runs whenever the lidar scans, one search after
-  another; the result is read as a rival in `tracking` and `checking` (a
-  standing rival fails every scan until the next result) and as a commit in
-  `searching`. Relocalize becomes "search now": the Localize button drops
-  the pose to `searching` (cancelling a running trip, as in phase 1); the
-  pre-trip spin, the boot spin, `RELOCALIZE_SPINS`, `scan_fit` and its bar
-  are deleted. A trip pending in `searching` is released when a winner is
-  committed and goes clean, or ends `lost` at 30 s, so a voice trip from a
-  lost robot works in this phase and a tie is broken by whatever motion
-  happens. The button stays in front only until phase 3 gives the lost
-  robot its voice.
+  another; the result is read as a rival in `tracking` and `checking` (two
+  consecutive results naming one before it stands; a result from before
+  the hand-over thrown away) and as a commit in `searching`. Relocalize
+  becomes "search now": the Localize button drops the pose to `searching`
+  (cancelling a running trip, as in phase 1) and moves behind the debug
+  toggle with the candidate list, since the search now runs on its own;
+  the pre-trip spin, the boot spin, `RELOCALIZE_SPINS`, `scan_fit` and its
+  bar are deleted. A trip pending in `searching` is released when a winner
+  is committed and goes clean, or ends `lost` at 30 s, so a voice trip from
+  a lost robot works in this phase and a tie is broken by whatever motion
+  happens. The `searching` caption becomes "finding my place, moving me by
+  hand helps".
 - All saved maps are searched; the winner names the map after two
   consecutive clear wins; the map load is asynchronous and the judge is
   muted until the new map arrives and the seed has landed; a held trip to a
-  place on the old map ends `place_on_other_map`. Checked once on the robot:
-  a `load_map` leaves AMCL's pose where it was.
+  place on the old map ends `place_on_other_map` once `tracking`. Checked
+  once on the robot: a `load_map` leaves AMCL's pose where it was.
 - AMCL `recovery_alpha_slow` and `recovery_alpha_fast` to zero; the search
   owns recovery now.
-- Exit, on the floor: carried to twenty spots, set down, Localize pressed:
+- Exit, on the floor: carried to twenty spots, set down, nothing pressed:
   the right candidate within 5 s where the spot is unambiguous, `tracking`
   within the first 0.3 m of a trip, never a wrong room, zero misses (one
-  miss is a bug to find in the recordings, not a statistic); at the crosses,
-  within 10 cm and 5 degrees; a search on the counter stays `searching`,
-  never committed; a robot slipped a metre along the hallway, and a robot
-  turned half round by hand in the living room, each drop to `searching`
-  within a few seconds and re-find the true pose; a tie (the two matching
-  corners of the living room, if there are any) breaks within a metre of a
-  hand nudge while a trip is pending, or of gamepad driving after which the
-  trip is asked for again; the robot is driven round the floor by gamepad
-  for ten minutes and is never dropped; with a second saved map (map one
-  other room for the test), carry the robot onto it: the map switches after
+  miss is a bug to find in the recordings, not a statistic); five of the
+  twenty spots in the cluttered room; at the crosses, within 10 cm and 5
+  degrees; a search on the counter stays `searching`, never committed; a
+  robot slipped a metre along the hallway, and a robot turned half round by
+  hand in the living room, each drop to `searching` within a few seconds
+  (two search cycles and N scans) and re-find the true pose; a tie (the two
+  matching corners of the living room, if there are any) breaks within a
+  metre of a hand nudge while a trip is pending, or of gamepad driving
+  after which the trip is asked for again; the robot is driven round the
+  floor by gamepad for ten minutes and is never dropped; with the second
+  floor saved as a map, carry the robot upstairs: the map switches after
   two clear wins and a trip to a place on it runs.
 
 ### Phase 3: held trips and the voice (three evenings, one exit blocked)
 
-- The pending goal becomes a dict with `held` and `held_seconds`; a dropped
-  pose moves the running goal into it instead of cancelling; a release is a
-  new Nav2 goal under the same serial; `navigating()` counts `held`; the
-  same-place request returns the held goal; the trip leaves on its own from
-  `tracking`, a clean `checking`, or a `checking` uninformed for 5 s. The
-  reply carries the serial, `held` and the state, or the refusal reason;
+- The pending goal becomes a dict with `state: "held"` and `held_seconds`;
+  a dropped pose moves the running goal into it instead of cancelling; a
+  release is a new Nav2 goal under the same serial; `navigating()` counts
+  `held`; a request for the goal's own place returns it; a gamepad twist
+  leaves a held goal alone; a place on another map is held unless
+  `tracking`; the trip leaves on its own from `tracking`, a clean
+  `checking`, or a `checking` uninformed for 5 s. The reply carries the
+  serial, the goal state and the localizer state, or the refusal reason;
   the give-up ends the goal `failed` with `lost`, `off_map` ends it with
   `off_map`. The voice's trip tool waits out a localizer hold inside the
-  call, returns at once for a `stale` hold, speaks the three canned lines
-  as the turn's own speech on both voice paths, cancels its serial when its
-  task is cancelled, returns the reason word and, when a line was said,
+  call, returns at once for a `stale` hold with its note, speaks the three
+  canned lines as the turn's own speech on both voice paths, cancels its
+  serial only when its task is cancelled by an explicit stop, returns the
+  reason word and, when a line was said or the person ended the trip,
   `spoken: true` and the note; remembers lines per serial; the stitching
   branch routes an explicit stop word to the stop tool; `where_am_i` gains
   the canned notes; the tool description says the call may take half a
   minute.
-- `off_map` after 20 s of two-thirds-counted searches with nothing passing;
-  a held goal ends `off_map` on that edge; barriers from sensors only in
-  `off_map`. The Localize button moves behind the debug toggle, with the
-  candidate list.
-- Dashboard: the goal row shows "held", and "cancelled (gamepad)" when a
-  push ended one; a held goal is drawn hollow on the map; a refused trip
-  from a map click shows in the goal row, not the log; the `searching`
-  caption becomes "finding my place, moving me by hand helps"; the
-  `off_map` caption points at the existing Start mapping button, no new
-  button.
+- `off_map` after 20 s of results with nothing passing A on scans two
+  thirds returned; a held goal ends `off_map` on that edge; barriers from
+  sensors only in `off_map`; any passing candidate returns to `searching`.
+- Dashboard: the goal row shows "held"; a held goal is drawn hollow on the
+  map and its Cancel button works; a refused trip from a map click shows in
+  the goal row, not the log; the `stale` caption reads "lidar starting"
+  while a goal is pending; the `off_map` caption points at the existing
+  Start mapping button, no new button.
 - The lidar starts on the wake word. This needs the lidar power plan, which
   does not exist yet (today the lidar follows the rail, which powers the
   motors); until it exists the first trip after an idle still waits for the
   lidar and says nothing, because that hold is `stale`, not `searching`.
   Written down so it is not read as a bug later: once it exists, every wake
-  word spins the lidar audibly and brings Nav2 up for about a minute.
+  word spins the lidar audibly and brings Nav2 up for about a minute, and
+  whether an ask lands in `stale` or in `checking` depends on sub-second
+  timing, so the same words can be acknowledged two ways.
 - Exit, on the floor: say "go to the kitchen" from idle: the robot
   acknowledges, leaves with no wiggle and says nothing more (no pause at all
   needs the lidar power plan). Drag the robot mid-trip two metres and turn
   it: the trip stops within N scans, the state goes `searching`, it
   re-finds itself and resumes, and the marker and caption tell the story
   without a button press. Carry it to another room: same, minus the resume.
-  Drag it while awake, then ask for a trip: "hang on" at 3 s, then it
-  leaves. Say "stop" during that hold, and once over the "hang on" line:
-  the trip is gone and nothing resumes. Ask twice during a hold: one "hang
-  on", nothing else. Put it on the counter and ask for a trip: `searching`,
-  "hang on" at 3 s, `off_map` at 20 s with the off-map sentence once, no
-  trip, no lost line. Lidar off, carry it, wake word: `stale`, `checking`,
-  a search, never the old pose shown as tracking. Park it on the rug so it
+  Drag it while awake, then ask for a trip: "hang on" after the first
+  result, then it leaves. Say "stop" during that hold, and once over the
+  "hang on" line: the trip is gone and nothing resumes. Say "okay" or ask
+  for the kitchen again during a hold: nothing changes, one "hang on",
+  nothing else. Put it on the counter while awake and ask for a trip:
+  `searching`, "hang on", `off_map` at 20 s with the off-map sentence once,
+  no trip, no lost line. Carry it asleep to the hall, ask from idle: the
+  robot acknowledges without "on my way", the lidar comes up, the search
+  runs, the trip leaves; and if the search fails, the dashboard says
+  `failed (lost)` and the voice is silent (cluster A, not a bug). A tie
+  that nothing breaks: "hang on", then 27 s of silence, then the lost line
+  (accepted). Lidar off, carry it, wake word: `stale`, `checking`, a
+  search, never the old pose shown as tracking. Park it on the rug so it
   slips: stops and resumes end inside the deadline with the dashboard
-  saying `failed (lost)`, the voice silent (dashboard-only until cluster
-  A). Remove the coffee table, awake and across a sleep: the robot stays
-  `tracking`, trips run. A drive past the dark sofa and through the hallway
-  at speed never stops a trip. A gamepad push during a hold ends the trip
-  and the goal row says so. Nothing about position is ever said twice
-  unprompted.
+  saying `failed (lost)`, the voice silent. Remove the coffee table, awake
+  and across a sleep: the robot stays `tracking`, trips run. A drive past
+  the dark sofa and through the hallway at speed never stops a trip. A
+  gamepad push during a hold leaves the trip held, and the trip leaves when
+  the pose is found. Press Cancel on the dashboard during a hold: the trip
+  is gone and the voice says at most a word. Nothing about position is ever
+  said twice unprompted.
 
 ### Phase 4: the learner (re-planned at phase 3 exit; about three evenings)
 
@@ -1080,7 +1209,7 @@ produced three fix batches).
 - Map card: "forget what you learned", with a count, shown only when there
   is something to forget; the change overlay is in the debug panel only.
 - Exit, on the floor: remove the coffee table; after three visits on
-  separate occasions it is gone from the map and the judge's dropped patch
+  separate occasions it is gone from the map and the judge's forgiven patch
   there is gone with it. Localization accuracy is unchanged across the
   phase; the map's origin, places and barriers are untouched.
 
@@ -1094,14 +1223,14 @@ One marker and one caption per state, in front of the debug toggle:
 | state | marker | caption |
 | --- | --- | --- |
 | tracking | solid | none |
-| checking | soft | "checking my position, sure once I move" |
-| searching | hollow, at TF's pose | "finding my place, moving me by hand helps" (phases 1 and 2: "lost, press Localize", or "finding my place" while a trip's spin runs) |
-| stale | soft, at the last pose, or none | "lidar off" |
-| off_map | none | "can't find my place here. Put me somewhere I know, or start mapping below." |
+| checking | soft | "checking my position, sure after a short drive" |
+| searching | hollow, at TF's pose | "finding my place, moving me by hand helps" (phase 1 only: "lost, press Localize", or "finding my place" while a trip's spin runs) |
+| stale | soft, at the last pose, or none | "lidar off", or "lidar starting" while a goal is pending |
+| off_map | none | "can't find my place here, put me somewhere I know or start mapping below" |
 
 Save place refusal beside the button: "drive me a little first". Goal row:
-"held", and "cancelled (gamepad)" when a push ended a hold; a held goal is
-drawn hollow on the map. Behind the toggle: state word, agree and through
+"held" while a goal waits; a held goal is drawn hollow on the map with its
+Cancel button live. Behind the toggle: state word, agree and through
 shares, the reason text, the candidate list, the Localize button, and the
 learner's change overlay. A robot that wakes and is never driven stays
 `checking` honestly; the motion gate is what "confident" means.
@@ -1133,37 +1262,45 @@ Arlen's, by his word:
 - No separate measuring evening; recordings come from normal floor tests.
 - Dashboard words in front are Claude's call.
 
-Claude's, as final arbiter after nine review rounds:
+Claude's, as final arbiter after ten review rounds:
 
 - AMCL stays the tracker; the refine-step tracker waits on its measured
   error at the crosses. The bridge transports the seed and the arrival of
-  `/amcl_pose` says when it landed.
+  a fresh `/amcl_pose` says when it landed.
 - One drop rule, no exceptions: N failing scans, where a standing rival
-  fails a scan. Map changes are the patch rule's job, not a state's.
+  fails a scan, and a rival stands only after two results agree. Map
+  changes are the patch rule's job, not a state's; forgiven beams stay in
+  the denominator.
 - One search, whole map, every saved map, running the whole time the lidar
   is on; its result is a rival in `tracking` and `checking` and a commit in
-  `searching`. No windowed search, no prior.
+  `searching`; the held pose is refined and scored like any candidate. No
+  windowed search, no prior.
 - The search commits at A + M, the judge drops at A: hysteresis, one number
-  reused. Sixty candidates, ties broken by the sharp score, judged by
-  shares; Olson's bound expansion is deliberately not used.
+  reused; "outranks by m" is the one comparison. The coarse pass charges
+  for wall crossings; sixty candidates, ties broken by the sharp score,
+  judged by shares; Olson's bound expansion is deliberately not used and
+  the cluttered-room replay is the safety net.
 - Held trips reuse `goal_request`; one serial per trip; `held_seconds`
-  accumulates only while the hold is the localizer's.
+  accumulates only while the hold is the localizer's; a gamepad push
+  leaves a held trip alone; another map's place is held, not refused,
+  until the robot is `tracking`.
 - The trip tool waits inside the call only for a localizer hold and speaks
-  the canned lines as the turn's own speech, on both voice paths; the model
-  always gets the reason word and never gets told a line was said when it
-  was not; after the tool has returned the dashboard is the only voice
-  until cluster A.
+  the canned lines as the turn's own speech, on both voice paths; only an
+  explicit stop cancels the held serial; the model always gets the reason
+  word and never gets told a line was said when it was not; after the tool
+  has returned the dashboard is the only voice until cluster A.
 - Barriers from TF's pose in every state but `off_map`.
-- Phase 1 keeps the spins, judged by `beam_check` and today's bar together;
-  phase 2 deletes them with the search and zeroes AMCL's recovery; `off_map`
-  and holds arrive in phase 3.
+- Phase 1 keeps the spins, judged by `beam_check` and today's spin bar
+  together; phase 2 deletes them with the search, zeroes AMCL's recovery
+  and moves the Localize button behind the toggle; `off_map` and holds
+  arrive in phase 3.
 
 ## Sources
 
 - [Olson 2009, Real-time correlative scan matching](https://april.eecs.umich.edu/pdfs/olson2009icra.pdf), [Olson 2015, M3RSM](https://april.eecs.umich.edu/pdfs/olson2015scanmatch.pdf)
-- [Hess et al. 2016, Real-Time Loop Closure in 2D LIDAR SLAM](https://research.google/pubs/pub45466); [Cartographer pose_graph.lua](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/pose_graph.lua) for the 0.55 / 0.6 bars
+- [Hess et al. 2016, Real-Time Loop Closure in 2D LIDAR SLAM](https://research.google/pubs/pub45466); [Cartographer pose_graph.lua](https://github.com/cartographer-project/cartographer/blob/master/configuration_files/pose_graph.lua) for the 0.55 / 0.6 bars and the sampled global search
 - [prism_loc, 2D MCL with branch-and-bound global relocalization and verification](https://github.com/kjungmo/prism_loc), [parameters](https://github.com/kjungmo/prism_loc/blob/main/PARAMS.md)
-- [Nav2 AMCL configuration](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/others/configuring_amcl/); Nav2 `nav2_amcl/src/amcl_node.cpp` (`handleInitialPose`, `initialPoseReceived` map range check, `laserReceived` forced publication after a seed, `publishAmclPose` stamped with the scan, transform post-dating, `handleMapMessage`), `pf/pf.c` (recovery weights) and `sensors/laser/likelihood_field_model.cpp` (cubed beam weights summed); `nav2_map_server/src/map_server/map_server.cpp` (`loadMapCallback` publishes latched)
+- [Nav2 AMCL configuration](https://docs.nav2.org/jazzy/configuration_and_development/configuration_guide/others/configuring_amcl/); Nav2 `nav2_amcl/src/amcl_node.cpp` (`handleInitialPose`, `initialPoseReceived` map range check, `laserReceived` forced publication after a seed, `publishAmclPose` stamped with the scan on a latched publisher, transform post-dating, `handleMapMessage`), `pf/pf.c` (recovery weights) and `sensors/laser/likelihood_field_model.cpp` (cubed beam weights summed); `nav2_map_server/src/map_server/map_server.cpp` (`loadMapCallback` publishes latched)
 - [Beluga AMCL](https://github.com/Ekumen-OS/beluga)
 - [slam_toolbox README](https://github.com/SteveMacenski/slam_toolbox), [JOSS paper](https://joss.theoj.org/papers/10.21105/joss.02783.pdf)
 - [Cartographer tuning](https://google-cartographer-ros.readthedocs.io/en/latest/tuning.html)
@@ -1171,3 +1308,4 @@ Claude's, as final arbiter after nine review rounds:
 - Lenser and Veloso 2000, Sensor Resetting Localization; summarised in [Sehestedt and Schneider, MCL in highly symmetric environments](https://www.scitepress.org/Papers/2006/12158/12158.pdf)
 - [Dreame multi-floor guide](https://www.dreametech.com/blogs/blog/multi-floor-mapping-robot-vacuum), [Valetudo multi-floor thread](https://community.home-assistant.io/t/multi-floor-vacuuming-using-valetudo-and-dreame-robots/933706)
 - [Walcott-Bryant et al., Dynamic Pose Graph SLAM](https://people.csail.mit.edu/kaess/pub/WalcottBryant12iros.pdf); Hornung et al. 2013, OctoMap, for clamped log-odds updates
+- RPLidar A1M8 datasheet (8000 samples/s, 5.5 Hz typical, about 1450 points per revolution)

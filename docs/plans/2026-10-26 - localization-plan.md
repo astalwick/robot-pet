@@ -225,9 +225,14 @@ saved map:
   on disk at bridge start.
 - **Coarse pass.** Poses every 20 cm over free space and every 3 degrees,
   scored on 60 beams capped at 4 m by summing the coarse grid at the beam
-  ends. The window is wide enough that the true pose's coarse cell always
-  scores at least as well as the true pose (Hess's step rule). About 9
-  million lookups per map; no ray casting here.
+  ends, **minus one for each beam whose midpoint lands on a mapped wall**.
+  The end sum alone saturates: in a simulated house a true pose whose
+  beams hit two unmapped chairs fell below hundreds of wrong poses that
+  cross walls freely, and charging for the crossing is what tells them
+  apart at this level. The window is wide enough that the true pose's
+  coarse cell always scores at least as well as the true pose on the end
+  sum (Hess's step rule). About 9 million lookups per map, plus as many
+  for the midpoints; no ray casting here.
 - **Candidates.** The sixty best distinct peaks, each refined on the sharp
   grid within ±35 cm and ±5 degrees, then run through the judge. The judge
   decides; the grid scores only choose what gets judged.
@@ -253,9 +258,15 @@ saved map:
   read from recordings: above any lead seen while driving correctly, below
   the lead the true pose shows in the metre-off and wrong-heading
   recordings.
-- **Which map.** The search runs on every saved map. A clear winner on
-  another map loads that map (asynchronously, so the tick never blocks)
-  and is seeded on it.
+- **Which map.** The search runs on every saved map, in every state:
+  floors that share outside walls can pass the judge on the wrong floor,
+  and only a rival on the other map shows it. A clear winner on another
+  map switches only on its second clear win in a row, so a mid-air scan
+  during a carry never reloads the map. The bridge then loads that map
+  (asynchronously, so the tick never blocks) and seeds it once the new map
+  has arrived. The judge is paused from the load request until AMCL has
+  taken the seed: a map load leaves AMCL's particles where they were,
+  which on the new map is simply a wrong pose.
 - **No tie-breaking tricks.** If no candidate is clear, the robot waits for
   the next scan. Any motion, a trip, a gamepad drive or a hand push, gives a
   new view that breaks the tie. There is no prior favouring the last pose:
@@ -282,6 +293,9 @@ One state, read by everyone, replaces `localized`:
 - The **motion gate** (0.3 m of wheel travel) means a robot that wakes and
   is never driven stays honestly `checking`, and a robot turned by hand in
   the air confirms nothing.
+- **Leaving `stale`.** The first scan after the lidar starts puts a held
+  pose into `checking` and no pose into `searching`; the pose is judged
+  from there like any other.
 - A **running trip** continues through `checking`. If the pose is dropped,
   the trip stops and is held, and it resumes on its own when the robot is
   clean again.
@@ -301,9 +315,23 @@ asked for while the robot is not ready, or stopped because the pose
 dropped, sits there marked `held`, under the one serial it was given. It
 leaves on its own once the robot is `tracking` or clean `checking`. It gives
 up after 30 s of holding in total, ending `failed` with reason `lost`, or at
-once with `off_map`. "Stop", the dashboard's Cancel button, the gamepad and
-the nav lock cancel a held trip exactly as a running one. The bridge's
-`navigating()` counts a held trip, so the rail and lidar stay up. A place on
+once with `off_map`. "Stop", the dashboard's Cancel button and the nav lock
+cancel a held trip exactly as a running one. The gamepad cancels a running
+trip, as today, but leaves a held one alone: the robot is not moving, and a
+push is exactly what the caption asks for. The bridge's `navigating()`
+counts a held trip, so the rail and lidar stay up.
+
+Two things today's bridge does would break a held trip, and change:
+
+- **Asking again.** Today every request replaces the goal under a new
+  serial. A request for the place the current trip already names, held or
+  running, now returns that trip under its serial; a different place
+  replaces it as today.
+- **The old attempt's result.** A resumed trip is a new Nav2 goal under the
+  same serial, so the stopped attempt's late "cancelled" result could end
+  it. The bridge tells them apart by Nav2's goal handle.
+
+A place on
 another map is held rather than refused unless the robot is `tracking`, so
 a robot carried upstairs never says the bedroom is on another map while
 standing in it.
@@ -312,7 +340,10 @@ standing in it.
 localizer, the tool says "Hang on, I'm working out where I am." through the
 existing progress speaker. It then waits inside the call, as
 `check_navigation` already does, until the trip leaves, is cancelled or
-gives up. If the turn is cancelled while it waits, it cancels the trip. Its
+gives up. Today any speech during a turn cancels the turn, not only a stop
+word, so a stray "okay" must not end the trip: the trip is cancelled only
+when the turn was cancelled by an explicit stop word, and a stop word heard
+mid-turn goes to the stop tool. Its
 result carries the reason word, and the notes give the model two fixed
 sentences:
 
@@ -376,16 +407,12 @@ symptom. Most are a few lines.
 | if a recording or test shows | try |
 | --- | --- |
 | A wrong pose passes because its through beams all sit in one wide arc (a corner seen from another room's corner) | Cap the width of the forgiven patch for commits, about a door's width. |
-| The true pose is missing from the sixty candidates in a cluttered room | In the coarse pass, subtract a penalty for beams crossing a mapped wall halfway along. If that fails, keep every peak near the best score instead of a fixed sixty. |
+| The true pose is missing from the sixty candidates in a cluttered room | Keep every peak near the best score instead of a fixed sixty. |
 | A false slip or flip is flagged while driving correctly | Refine the held pose on the sharp grid before comparing it with candidates. |
 | A drag of under a metre mid-trip drives on the wrong pose for the five to ten seconds the rival takes | Once a second, refine around the held pose within ±0.5 m and ±20 degrees; a clearly better fit that passes the judge is seeded. |
 | A search started before a re-seed flags the old pose's spot as better | Throw away results whose scan predates the latest seed. |
 | The judge fails a fresh seed because AMCL had not taken it yet | Instead of the fixed one-second pause after a seed, wait for the first new `/amcl_pose` near the seed, ignoring the latched replay. |
-| The map switches during a carry on a mid-air scan | Require two clear wins in a row before switching maps. |
 | A remembered pose facing the open front door never gets a verdict and a trip never leaves | Let a trip leave after 5 s with no verdict scans, and let the trip's own motion judge it. |
-| Stray words during a held trip cancel it | Cancel only on an explicit stop word, and route a stop word heard mid-turn to the stop tool. |
-| Asking twice repeats "hang on" or resets the trip | A request for the place the current trip already names returns that trip. |
-| A gamepad nudge to help a held trip cancels it | Leave held trips alone on gamepad input. |
 | A person standing in front drops agree below A | Leave short beams out of the agree share when through is low. |
 | The search misses two seconds per map | Fewer coarse beams, a 3 m cap, fewer candidates, fewer judge beams; then an FFT coarse pass; last, AMCL's own global init with 50 000 particles. |
 | The tick or barrier publisher stalls while the search runs | Search less often while tracking; then move the search to a subprocess. |
@@ -524,7 +551,12 @@ Arlen's:
 - On 2026-10-30: restore round ten's standing rival, which the cut-back
   broke. Every value and optional part is configurable. A nearby check every
   second (catching a half-metre drag in one second instead of five to ten)
-  is on hold, listed under fixes to try.
+  is on hold, listed under fixes to try. Restored from round ten too: the
+  coarse pass's wall-crossing charge, two clear wins and a paused judge for
+  a map switch, held trips safe from stray words, a re-ask, a gamepad push
+  and the old attempt's late result, and what leaving `stale` does.
+  Multi-floor is needed. The learner is wanted; if phase 3 is stable, it
+  may wait.
 
 Claude's:
 

@@ -239,7 +239,14 @@ saved map:
   "lost". A clear winner seeds AMCL and the state becomes `checking`.
 - **Catching a slip or a flip.** If the search finds a committable
   candidate more than 0.3 m or 10 degrees from the held pose whose agree
-  beats the held pose's by R, the held pose fails that scan. That is how a
+  beats the held pose's by R, that candidate is a **rival**. One search is
+  one scan's opinion, so a rival **stands** only when two searches in a
+  row name it (within 0.3 m and 10 degrees of each other). From then on
+  every verdict scan fails until a search names no rival, so the pose
+  drops within N scans; if the rival is a clear winner it is seeded on the
+  same tick. (Round ten had this rule; the cut-back lost the part that
+  keeps failures counting, and a lone failure every five seconds never
+  reaches N in a row.) That is how a
   metre's slip along a hallway or a half turn in a room is caught: the true
   pose also agrees with the end wall or the sofa, and wins. A plain corridor
   has no winner, and the robot rightly stays where odometry put it. R is
@@ -319,7 +326,30 @@ trip left) shows on the dashboard only. Speaking up on its own is the UX
 audit's cluster A, a separate piece of work. The trip tool's description
 loses "spins in place to find itself".
 
-### 6. Learner: the map follows the house (later)
+### 6. Settings
+
+Arlen: "I want to be able to turn features off, and tweak values."
+
+Every bar and switch in this plan lives in one file,
+`~/.config/robot-pet/localization.json`, built the way
+`src/config/drive_tuning.py` is: a frozen dataclass of defaults, a missing
+key means the default, and the dashboard's debug panel edits it. The
+bridge reads it at start, so a change applies on a bridge restart.
+
+- **Values:** the judge's tolerance, neighbour degrees and 6 m cap, A, T,
+  N, M, R, the 0.3 m motion gate, the search interval while tracking, the
+  30 s hold and the 20 s off-map wait.
+- **Switches**, each for a part that the rest still works without: the
+  forgiven patch, the neighbour rule, the rival, searching other maps,
+  held trips resuming on their own, the voice's "hang on", and later the
+  learner.
+
+The tracker, the judge and the search themselves have no switch: without
+them there is no localizer. Defaults are the values phase 1 measures, and
+the replay tool reads the same file so a tweak can be tried on recordings
+before the floor.
+
+### 7. Learner: the map follows the house (later)
 
 Arlen: "If I move a chair or close a door or remove a coffee table, the map
 gets updated and persisted. groundfloor is groundfloor."
@@ -348,7 +378,7 @@ symptom. Most are a few lines.
 | A wrong pose passes because its through beams all sit in one wide arc (a corner seen from another room's corner) | Cap the width of the forgiven patch for commits, about a door's width. |
 | The true pose is missing from the sixty candidates in a cluttered room | In the coarse pass, subtract a penalty for beams crossing a mapped wall halfway along. If that fails, keep every peak near the best score instead of a fixed sixty. |
 | A false slip or flip is flagged while driving correctly | Refine the held pose on the sharp grid before comparing it with candidates. |
-| A single search result drops a correct pose | Flag a slip only after two consecutive searches find the same better pose. |
+| A drag of under a metre mid-trip drives on the wrong pose for the five to ten seconds the rival takes | Once a second, refine around the held pose within ±0.5 m and ±20 degrees; a clearly better fit that passes the judge is seeded. |
 | A search started before a re-seed flags the old pose's spot as better | Throw away results whose scan predates the latest seed. |
 | The judge fails a fresh seed because AMCL had not taken it yet | Instead of the fixed one-second pause after a seed, wait for the first new `/amcl_pose` near the seed, ignoring the latched replay. |
 | The map switches during a carry on a mid-air scan | Require two clear wins in a row before switching maps. |
@@ -399,6 +429,8 @@ Each phase ends with something Arlen can see on the floor or in a replay.
   but a spin is accepted only if `beam_check` passes *and* today's 0.6 bar
   holds. A trip whose spins all fail ends `failed (lost)`.
 - **AMCL config** and the bridge carrying the seed forward.
+- **Settings file** with the judge's values and switches; each later phase
+  adds its own.
 - **Dashboard**: marker and caption in front; the `searching` caption reads
   "lost, press Localize" in this phase only.
 - **Exit, on the floor.** The wrong room is never shown as tracking and a
@@ -489,12 +521,17 @@ Arlen's:
 - On 2026-10-28, after ten review rounds had grown the plan fourfold: cut
   back to the skeleton, with the refinements kept as a list of fixes to
   try.
+- On 2026-10-30: restore round ten's standing rival, which the cut-back
+  broke. Every value and optional part is configurable. A nearby check every
+  second (catching a half-metre drag in one second instead of five to ten)
+  is on hold, listed under fixes to try.
 
 Claude's:
 
 - AMCL stays the tracker until the crosses say otherwise.
-- One drop rule: N failed verdict scans, where a clearly better pose
-  elsewhere also fails a scan.
+- One drop rule: N failed verdict scans, where a standing rival (two
+  searches in a row naming the same better pose) fails every scan until a
+  search names none.
 - One search for finding, map choice and slip checks; the judge decides.
 - Phase 1 keeps the spins, judged strictly; phase 2 deletes them.
 

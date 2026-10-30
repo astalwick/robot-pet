@@ -132,7 +132,8 @@ Agreed with Arlen on 2026-10-27:
 - Lidar off means the pose is stale. The lidar starts on the wake word.
 - The gamepad is never slowed or blocked. Map barriers are a bonus over the
   cliff and forward sensors: "lidar is additive to what we have".
-- The voice speaks only when a human is needed, with fixed lines.
+- The voice speaks only when a human is needed, in its own words (changed
+  2026-10-30 from fixed lines).
 - The dashboard shows a marker and one caption; detail lives behind the
   debug toggle, the Localize button too once the search runs on its own.
 
@@ -336,26 +337,32 @@ another map is held rather than refused unless the robot is `tracking`, so
 a robot carried upstairs never says the bedroom is on another map while
 standing in it.
 
-**The voice.** When the trip tool's reply says the trip is held for the
-localizer, the tool says "Hang on, I'm working out where I am." through the
-existing progress speaker. It then waits inside the call, as
-`check_navigation` already does, until the trip leaves, is cancelled or
-gives up. Today any speech during a turn cancels the turn, not only a stop
-word, so a stray "okay" must not end the trip: the trip is cancelled only
-when the turn was cancelled by an explicit stop word, and a stop word heard
-mid-turn goes to the stop tool. Its
-result carries the reason word, and the notes give the model two fixed
-sentences:
+**The voice** speaks in the model's own words. The tools hand it facts and
+a note on what helps, never a sentence to read out. `navigate_to` already
+returns at once and `check_navigation` already waits, so little changes:
 
-- `lost`: "I've lost track of where I am. Move me a little and ask again."
-- `off_map`: "I can't work out where I am from here. Put me somewhere I
-  know."
+- **A short wait first.** When a trip is held for the localizer,
+  `navigate_to` waits up to 3 s for it to leave. If it leaves, the reply is
+  the ordinary "driving" one and nothing is said about position. If not,
+  it returns `held` with a note: the robot is working out where it is and
+  the trip leaves on its own; say so briefly, then call `check_navigation`
+  to wait.
+- **Waiting.** `check_navigation` waits through a hold as it does through
+  driving. When a trip gives up, its result carries the reason, `lost` or
+  `off_map`, and a note on what helps: move the robot a little and ask
+  again, or put it somewhere it knows.
+- **What ends a trip.** Only `stop` and `cancel_navigation`, as today; a
+  turn cancelled by stray speech leaves the trip alone. But today "stop"
+  heard mid-turn only cancels the turn and runs no tool, which would leave
+  a held trip to leave on its own a moment later. So "stop" or "cancel"
+  heard while a trip is held or running also cancels the trip.
 
 A trip held only for the lidar to start returns at once with a note that it
-leaves on its own. Anything after the tool has returned (a drag after the
+leaves on its own. Anything after the tools have returned (a drag after the
 trip left) shows on the dashboard only. Speaking up on its own is the UX
 audit's cluster A, a separate piece of work. The trip tool's description
-loses "spins in place to find itself".
+loses "spins in place to find itself" and gains "may wait a few seconds
+while it works out where it is".
 
 ### 6. Settings
 
@@ -372,7 +379,7 @@ bridge reads it at start, so a change applies on a bridge restart.
   30 s hold and the 20 s off-map wait.
 - **Switches**, each for a part that the rest still works without: the
   forgiven patch, the neighbour rule, the rival, searching other maps,
-  held trips resuming on their own, the voice's "hang on", and later the
+  held trips resuming on their own, the trip tool's 3 s wait, and later the
   learner.
 
 The tracker, the judge and the search themselves have no switch: without
@@ -493,18 +500,20 @@ Each phase ends with something Arlen can see on the floor or in a replay.
 
 ### Phase 3: held trips, voice, off map (three evenings)
 
-- Held trips in the bridge, the voice tool's wait and its lines, `off_map`,
+- Held trips in the bridge, the trip tool's short wait and notes, `off_map`,
   the held goal drawn hollow on the dashboard map with Cancel live. The
-  dashboard's `nav.js` checks the string `'navigating'` in four places; each
-  learns `'held'`.
+  dashboard's `nav.js` checks the string `'navigating'` in three places;
+  each learns `'held'`.
 - The lidar on the wake word needs the lidar power plan, which is not
   written yet. Until then the first trip after an idle waits silently for
   the lidar.
 - **Exit, on the floor.** "Go to the kitchen" from idle: it leaves with no
   wiggle. Dragged mid-trip: it stops, re-finds itself and resumes, with the
   marker and caption telling the story. Dragged while awake, then asked for
-  a trip: "hang on", then it leaves. "Stop" during the hold: the trip is
-  gone. On the counter: "hang on", then the off-map line at 20 s, once.
+  a trip: it says it is working out where it is, then leaves. Found within
+  3 s: it just goes, saying nothing about position. "Stop" during the hold:
+  the trip is gone. On the counter: it says it is working it out, then at
+  20 s that it can't place itself here, once.
   Coffee table removed: trips still run.
 
 ### Phase 4: the learner (about three evenings, re-planned first)

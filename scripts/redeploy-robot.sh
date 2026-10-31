@@ -205,7 +205,7 @@ plan_service_restarts() {
       config/twist_mux.yaml)
         want_restart robot-twist-mux.service
         ;;
-      config/nav.launch.py | config/nav2.yaml | config/slam_toolbox.yaml | config/keepout-empty.*)
+      config/nav.launch.py | config/nav2.yaml | config/nav2_navigate_to_pose.xml | config/slam_toolbox.yaml | config/keepout-empty.*)
         want_restart robot-nav.service
         ;;
       config/rplidar.launch.py)

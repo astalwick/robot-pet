@@ -39,6 +39,7 @@ MAPS_DIR = "/home/pi/.config/robot-pet/maps"
 KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 NAV2_PARAMS = os.path.join(CONFIG_DIR, "nav2.yaml")
+NAV2_TRIP_TREE = os.path.join(CONFIG_DIR, "nav2_navigate_to_pose.xml")
 EMPTY_KEEPOUT = os.path.join(CONFIG_DIR, "keepout-empty.yaml")
 NAV_CMD_VEL_REMAP = [("cmd_vel", "cmd_vel_nav")]
 
@@ -159,7 +160,7 @@ def navigation_nodes() -> list:
             executable="bt_navigator",
             name="bt_navigator",
             output="screen",
-            parameters=[NAV2_PARAMS],
+            parameters=[NAV2_PARAMS, {"default_nav_to_pose_bt_xml": NAV2_TRIP_TREE}],
         ),
         Node(
             package="nav2_lifecycle_manager",

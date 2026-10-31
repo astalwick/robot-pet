@@ -136,7 +136,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
-        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/slam_toolbox.yaml") or path.startswith("config/keepout-empty."):
+        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/nav2_navigate_to_pose.xml", "config/slam_toolbox.yaml") or path.startswith("config/keepout-empty."):
             want("robot-nav.service")
         elif path == "config/rplidar.launch.py":
             want("robot-lidar.service")
@@ -294,6 +294,7 @@ class TestRedeployRobot(unittest.TestCase):
         self.assertEqual(planned_services(["src/ros_nodes/lidar_status_node.py"]), {"robot-lidar-status.service"})
         self.assertEqual(planned_services(["src/ros_nodes/nav_node.py"]), {"robot-nav-bridge.service"})
         self.assertEqual(planned_services(["config/nav.launch.py"]), {"robot-nav.service"})
+        self.assertEqual(planned_services(["config/nav2_navigate_to_pose.xml"]), {"robot-nav.service"})
         self.assertEqual(planned_services(["config/slam_toolbox.yaml"]), {"robot-nav.service"})
         self.assertEqual(planned_services(["urdf/robot.urdf"]), {"robot-state-publisher.service"})
         self.assertEqual(

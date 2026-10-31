@@ -391,11 +391,17 @@ behavior_server:
     cycle_frequency: 10.0
     enable_stamped_cmd_vel: false
     introspection_mode: "disabled"
-    behavior_plugins: ["spin", "backup", "wait"]
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
     backup:
       plugin: "nav2_behaviors::BackUp"
+      acceleration_limit: 1.0
+      deceleration_limit: -1.0
+      minimum_speed: 0.10
+    # the trip tree's first stuck move (config/nav2_navigate_to_pose.xml)
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
       acceleration_limit: 1.0
       deceleration_limit: -1.0
       minimum_speed: 0.10

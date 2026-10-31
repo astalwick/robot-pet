@@ -52,6 +52,7 @@ from voice.tools import (
     dispatch_tool,
     inspect_robot_snapshot,
     parse_tool_arguments,
+    start_navigation,
     wait_for_navigation,
     where_am_i_output,
 )
@@ -1900,6 +1901,44 @@ class AssistantStreamingTest(unittest.TestCase):
             self.assertEqual(list(history.exchanges()), [])
             last_status = [s for s in statuses if "status" in s][-1]
             self.assertEqual(last_status["status"], "listening")
+
+            stop_event.set()
+            handler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await handler_task
+
+        asyncio.run(run())
+
+    def test_committed_stop_also_cancels_the_trip(self):
+        async def run():
+            requests = []
+            scribe_events = asyncio.Queue()
+            stop_event = asyncio.Event()
+
+            def nav_caller(cmd, **params):
+                requests.append(cmd)
+                return {"ok": True, "accepted": True}
+
+            handler_task = asyncio.create_task(
+                handle_scribe_events(
+                    scribe_events,
+                    openai_client=object(),
+                    elevenlabs_api_key="test-key",
+                    voice_state=VoiceState("test-voice"),
+                    stop_event=stop_event,
+                    system_prompt="test system prompt",
+                    policy=TurnPolicy(),
+                    conversation_history=ConversationHistory(),
+                    nav_caller=nav_caller,
+                )
+            )
+
+            await scribe_events.put({"type": "commit", "text": "Stop."})
+            for _ in range(50):
+                if requests:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(requests, ["nav_cancel"])
 
             stop_event.set()
             handler_task.cancel()
@@ -5365,6 +5404,62 @@ class RobotToolDispatchTest(unittest.TestCase):
         self.assertEqual(result["pose"], {"x": 1.0, "y": 2.0})
         self.assertEqual(sleeps, [0.5, 0.5])
 
+    def test_navigate_to_waits_for_a_quick_find_and_says_nothing_about_it(self):
+        requests = []
+        replies = [
+            {"ok": True, "accepted": True, "goal": {"target": "kitchen", "state": "held", "waiting_for": "position"}, "trip_wait_s": 3.0},
+            {"ok": True, "goal": {"target": "kitchen", "state": "held", "waiting_for": "position"}},
+            {"ok": True, "goal": {"target": "kitchen", "state": "navigating", "remaining_m": 4.0}},
+        ]
+
+        def nav_caller(cmd, **params):
+            requests.append(cmd)
+            return replies.pop(0)
+
+        result = start_navigation(nav_caller, "kitchen", sleep=lambda seconds: None)
+        self.assertEqual(requests, ["navigate_to", "nav_status", "nav_status"])
+        self.assertEqual(result["goal"]["state"], "navigating")
+        self.assertNotIn("note", result)
+
+    def test_navigate_to_still_finding_its_place_gets_a_note(self):
+        reply = {"ok": True, "accepted": True, "goal": {"target": "kitchen", "state": "held", "waiting_for": "position"}, "trip_wait_s": 0.0}
+        result = start_navigation(lambda cmd, **params: reply, "kitchen", sleep=lambda seconds: None)
+        self.assertEqual(result["goal"]["state"], "held")
+        self.assertIn("check_navigation", result["note"])
+
+    def test_navigate_to_waiting_for_the_lidar_answers_at_once(self):
+        requests = []
+
+        def nav_caller(cmd, **params):
+            requests.append(cmd)
+            return {"ok": True, "accepted": True, "goal": {"target": "kitchen", "state": "held", "waiting_for": "lidar"}, "trip_wait_s": 3.0}
+
+        result = start_navigation(nav_caller, "kitchen", sleep=lambda seconds: None)
+        self.assertEqual(requests, ["navigate_to"])
+        self.assertIn("lidar", result["note"])
+
+    def test_navigate_to_off_the_map_is_refused_with_a_note(self):
+        async def run():
+            def nav_caller(cmd, **params):
+                return {"ok": True, "accepted": False, "reason": "off_map"}
+
+            context = VoiceToolContext(voice_state=VoiceState("test-voice"), nav_caller=nav_caller)
+            result = await dispatch_tool(self._call(NAVIGATE_TO_TOOL_NAME, arguments={"place": "kitchen"}), context)
+            self.assertFalse(result.ok)
+            self.assertIn("somewhere it knows", result.output["note"])
+
+        asyncio.run(run())
+
+    def test_check_navigation_waits_through_a_hold(self):
+        replies = [
+            {"ok": True, "goal": {"state": "held", "waiting_for": "position"}, "pose": None},
+            {"ok": True, "goal": {"state": "navigating", "remaining_m": 1.0}, "pose": None},
+            {"ok": True, "goal": {"state": "failed", "reason": "lost"}, "pose": None},
+        ]
+        result = wait_for_navigation(lambda cmd: replies.pop(0), 30, sleep=lambda seconds: None)
+        self.assertEqual(result["goal"]["state"], "failed")
+        self.assertIn("moving the robot", result["note"])
+
     def test_check_navigation_with_no_wait_reports_right_away(self):
         sleeps = []
         result = wait_for_navigation(
@@ -5418,6 +5513,10 @@ class RobotToolDispatchTest(unittest.TestCase):
         self.assertFalse(output["localized"])
         self.assertIsNone(output["nearest_place"])
         self.assertIn("not localized", output["note"])
+
+        nav["state"] = "off_map"
+        output = where_am_i_output({"nav": nav, "sources": {"nav": {"stale": False}}})
+        self.assertIn("somewhere it knows", output["note"])
 
     def test_where_am_i_without_a_nav_bridge(self):
         self.assertEqual(where_am_i_output({"sources": {}}), {"ok": False, "error": "nav_unavailable"})

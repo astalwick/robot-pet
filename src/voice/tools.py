@@ -49,6 +49,15 @@ MOTION_TOOL_NAMES = (EXPRESS_TOOL_NAME, MOVE_TOOL_NAME, TURN_TOOL_NAME)
 # check_navigation polls the nav bridge this often; the model asks how long to wait.
 CHECK_NAVIGATION_POLL_SECONDS = 0.5
 CHECK_NAVIGATION_MAX_WAIT_SECONDS = 60.0
+# what the model is told about a trip, by what a held trip waits for or why
+# a trip ended or was refused
+TRIP_NOTES = {
+    "position": "still working out where it is; the trip leaves by itself once it knows. Say so briefly, then call check_navigation",
+    "lidar": "the lidar is starting up; the trip leaves by itself",
+    "nav2": "the planner is starting up; the trip leaves by itself",
+    "lost": "could not work out where it is; moving the robot a little and asking again may help",
+    "off_map": "cannot find its place on any saved map; it needs putting somewhere it knows, or this area mapping",
+}
 # where_am_i calls the robot "at" a place when it is within this distance of it.
 AT_PLACE_METERS = 2.0
 
@@ -297,12 +306,12 @@ NAVIGATE_TO_TOOL = {
     "type": "function",
     "name": NAVIGATE_TO_TOOL_NAME,
     "description": (
-        "Drive to a saved place on the current map by name, planning around obstacles "
-        "(for example 'kitchen'). Returns right away while the robot is still driving; call "
-        "check_navigation to wait for it to arrive. An unknown place returns the places that "
-        "exist. A new navigate_to replaces the goal in progress. If the robot does not know "
-        "where it is yet, the trip waits up to 30 seconds for it to find itself (being moved by hand "
-        "helps), then goes, or fails as lost."
+        "Drive to a saved place by name, planning around obstacles (for example 'kitchen'). "
+        "Returns once the trip is under way, which may take a few seconds while the robot works "
+        "out where it is; call check_navigation to wait for it to arrive. A trip can be held "
+        "(waiting for the lidar, the robot's position or the planner); it leaves by itself. "
+        "An unknown place returns the places that exist. Asking again for the place already "
+        "being driven to keeps that trip; another place replaces it. Follow the note in the result."
     ),
     "parameters": {
         "type": "object",
@@ -320,9 +329,10 @@ CHECK_NAVIGATION_TOOL = {
     "type": "function",
     "name": CHECK_NAVIGATION_TOOL_NAME,
     "description": (
-        "Wait for the navigation goal in progress, up to wait_seconds, and report its state: "
-        "navigating (still driving, with the distance remaining), arrived, cancelled or failed. "
-        "Returns early the moment the goal ends. Use wait_seconds 0 for an instant check."
+        "Wait for the trip in progress, up to wait_seconds, and report its state: held "
+        "(waiting to leave, with what it waits for), navigating (driving, with the distance "
+        "remaining), arrived, cancelled or failed. Returns early the moment the trip ends. "
+        "Use wait_seconds 0 for an instant check."
     ),
     "parameters": {
         "type": "object",
@@ -669,6 +679,8 @@ def where_am_i_output(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     }
     if nav.get("mode") == "mapping":
         output["note"] = "building a new map; save it before saving places"
+    elif nav.get("state") == "off_map":
+        output["note"] = TRIP_NOTES["off_map"]
     elif not output["localized"]:
         output["note"] = "not localized yet on this map"
     pose = nav.get("pose")
@@ -682,8 +694,42 @@ def where_am_i_output(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     return output
 
 
+def with_trip_note(result: dict[str, Any]) -> dict[str, Any]:
+    """The result with a TRIP_NOTES note, when the trip is held or ended
+    (or was refused) for a reason the model should explain."""
+    goal = result.get("goal")
+    if goal is None:
+        key = result.get("reason")
+    elif goal.get("state") == "held":
+        key = goal.get("waiting_for")
+    else:
+        key = goal.get("reason")
+    if key in TRIP_NOTES:
+        return {**result, "note": TRIP_NOTES[key]}
+    return result
+
+
+def start_navigation(nav_caller: Callable[..., Any], place: Any, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
+    """Ask the nav bridge for a trip; the navigate_to tool result. A trip held
+    while the robot works out where it is gets up to the bridge's trip_wait_s
+    to leave first, so a quick find needs no explaining. One waiting for the
+    lidar to start answers at once: that is always a few seconds."""
+    result = nav_caller("navigate_to", place=place)
+    deadline = time.monotonic() + result.get("trip_wait_s", 0.0)
+    while time.monotonic() < deadline:
+        goal = result.get("goal")
+        if goal is None or goal.get("state") != "held" or goal.get("waiting_for") == "lidar":
+            break
+        sleep(CHECK_NAVIGATION_POLL_SECONDS)
+        status = nav_caller("nav_status")
+        if not status.get("ok"):
+            break
+        result = {**result, "goal": status.get("goal")}
+    return with_trip_note(result)
+
+
 def wait_for_navigation(nav_caller: Callable[..., Any], wait_seconds: float, sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
-    """Poll the nav bridge until the goal ends or wait_seconds pass; the
+    """Poll the nav bridge until the trip ends or wait_seconds pass; the
     check_navigation tool result."""
     deadline = time.monotonic() + max(0.0, min(float(wait_seconds), CHECK_NAVIGATION_MAX_WAIT_SECONDS))
     while True:
@@ -693,8 +739,8 @@ def wait_for_navigation(nav_caller: Callable[..., Any], wait_seconds: float, sle
         goal = status.get("goal")
         if goal is None:
             return {"ok": True, "goal": None, "note": "no navigation goal has been given"}
-        if goal.get("state") != "navigating" or time.monotonic() >= deadline:
-            return {"ok": True, "goal": goal, "pose": status.get("pose")}
+        if goal.get("state") not in ("held", "navigating") or time.monotonic() >= deadline:
+            return with_trip_note({"ok": True, "goal": goal, "pose": status.get("pose")})
         sleep(CHECK_NAVIGATION_POLL_SECONDS)
 
 
@@ -1092,7 +1138,7 @@ async def dispatch_tool(call: RobotToolCall, context: VoiceToolContext) -> Robot
         if context.nav_caller is None:
             return _result(call, False, {"ok": False, "error": "nav_unavailable"})
         if name == NAVIGATE_TO_TOOL_NAME:
-            result = await asyncio.to_thread(context.nav_caller, "navigate_to", place=call.arguments.get("place"))
+            result = await asyncio.to_thread(start_navigation, context.nav_caller, call.arguments.get("place"))
         elif name == CHECK_NAVIGATION_TOOL_NAME:
             wait_seconds = call.arguments.get("wait_seconds")
             if not isinstance(wait_seconds, (int, float)) or isinstance(wait_seconds, bool):

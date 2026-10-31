@@ -70,6 +70,17 @@ class LocalizationSettings:
     other_maps: bool = True
     # seconds between searches while the pose is held; back to back while searching
     search_interval_s: float = 5.0
+    # Searches that find nothing agreeing agree_min on any map for this long:
+    # off the map (on a counter, an unmapped room). Trips are refused.
+    off_map_s: float = 20.0
+    # A trip waits for the lidar, the pose and Nav2, at most hold_s in all.
+    # With resume_trips a trip the robot loses its place on waits too, and
+    # goes on by itself once it is sure again; without, that trip ends lost.
+    hold_s: float = 30.0
+    resume_trips: bool = True
+    # the voice's navigate_to waits this long for a trip waiting on the pose
+    # to leave before it answers, so a quick find needs no explaining (0: off)
+    trip_wait_s: float = 3.0
     # The self-check: a scan that fails the map but matches the last scan that
     # passed (carried by the wheels) to self_check_tolerance_m + 2% of range
     # on self_check_min of its beams does not count as failed, so a moved
@@ -113,6 +124,10 @@ class LocalizationSettings:
             rival_margin=clamp(float(values.get("rival_margin", defaults.rival_margin)), 0.0, 0.5),
             other_maps=bool(values.get("other_maps", defaults.other_maps)),
             search_interval_s=clamp(float(values.get("search_interval_s", defaults.search_interval_s)), 1.0, 60.0),
+            off_map_s=clamp(float(values.get("off_map_s", defaults.off_map_s)), 5.0, 120.0),
+            hold_s=clamp(float(values.get("hold_s", defaults.hold_s)), 5.0, 120.0),
+            resume_trips=bool(values.get("resume_trips", defaults.resume_trips)),
+            trip_wait_s=clamp(float(values.get("trip_wait_s", defaults.trip_wait_s)), 0.0, 10.0),
             self_check=bool(values.get("self_check", defaults.self_check)),
             self_check_tolerance_m=clamp(float(values.get("self_check_tolerance_m", defaults.self_check_tolerance_m)), 0.02, 0.5),
             self_check_min=clamp(float(values.get("self_check_min", defaults.self_check_min)), 0.0, 1.0),
@@ -144,6 +159,10 @@ LOCALIZATION_FIELDS = (
     {"key": "rival_margin", "label": "Slip margin", "type": "number", "help": "0 .. 0.5; how much better that place must agree", "min": 0.0, "max": 0.5, "step": 0.01},
     {"key": "other_maps", "label": "Search other maps", "type": "boolean", "help": "Also look on the other saved maps (another floor)"},
     {"key": "search_interval_s", "label": "Search every (s)", "type": "number", "help": "1 .. 60, while the robot knows where it is", "min": 1.0, "max": 60.0, "step": 1},
+    {"key": "off_map_s", "label": "Off the map after (s)", "type": "number", "help": "5 .. 120 of finding nothing on any map", "min": 5.0, "max": 120.0, "step": 1},
+    {"key": "hold_s", "label": "Trip waits at most (s)", "type": "number", "help": "5 .. 120 in all, for the lidar and the position", "min": 5.0, "max": 120.0, "step": 1},
+    {"key": "resume_trips", "label": "Resume trips", "type": "boolean", "help": "A trip the robot loses its place on waits and goes on by itself"},
+    {"key": "trip_wait_s", "label": "Voice waits for a find (s)", "type": "number", "help": "0 .. 10; a quick find is not mentioned (0: off)", "min": 0.0, "max": 10.0, "step": 0.5},
     {"key": "self_check", "label": "Self-check", "type": "boolean", "help": "Keep a pose the map disagrees with when the scan matches the last good one, carried by the wheels"},
     {"key": "self_check_tolerance_m", "label": "Self-check tolerance (m)", "type": "number", "help": "0.02 .. 0.5; a beam this close to the last good scan's matches", "min": 0.02, "max": 0.5, "step": 0.01},
     {"key": "self_check_min", "label": "Self-check match at least", "type": "number", "help": "0 .. 1; share of beams that must match", "min": 0.0, "max": 1.0, "step": 0.01},

@@ -701,17 +701,19 @@ def nav_update(
     while mapping). pose is {x, y, yaw} in the map frame. search is the last
     search's summary {seconds, best {map, agree} or None, winner, rival None /
     "named" / "stands"}, or None before the first. state is how far the pose is
-    trusted: tracking, checking, searching, or stale while the lidar is off
-    (None while mapping); localized is tracking, or checking with the latest
+    trusted: tracking, checking, searching, off_map (searching and finding
+    nothing on any map), or stale while the lidar is off (None while mapping); localized is tracking, or checking with the latest
     scan passing. check is the judge's latest verdict {agree, through,
     opinion, passes, self_check}, or None; self_check is how well a failed
     scan matched the last one that passed, or None. handled is "picked up" or
     "pushed" while the robot is in someone's hands, else None. recording is
     the label of a `record` in progress, or None. activity names what
     the bridge is busy with ("switching map", "saving"), or None. goal is the
-    current or last navigation goal {target, x, y, state, remaining_m}, state
-    one of navigating / arrived / cancelled / failed, plus a reason once it has
-    ended early (stopped, replaced, rejected, ...), or None if there was none.
+    current or last trip {target, map, x, y, yaw, state, remaining_m}, state
+    one of held (waiting, with waiting_for "lidar" / "position" / "nav2"),
+    navigating / arrived / cancelled / failed, plus a reason once it has
+    ended early (stopped, replaced, lost, off_map, ...), or None if there was
+    none.
     barriers are the virtual walls per map, {map: [{x1, y1, x2, y2}, ...]}.
     """
     return {

@@ -642,7 +642,19 @@ IMU and cliff sensors:
 | Cliff sensors on the floor | 76 to 92 mm |
 | Cliff sensors when lifted | past 110 mm within 0.1 to 0.2 s |
 
-### Phase 3: held trips, voice, off map (three evenings)
+### Phase 3: held trips, voice, off map (built 2026-10-31)
+
+As built: a trip is `held` (with `waiting_for` lidar, position or nav2) or
+`navigating`. Instead of a serial and Nav2's goal handle, each goal sent to
+Nav2 counts as an attempt, and a callback for an earlier attempt is ignored.
+A held trip that resumes is a new attempt. The trip remembers its map. The
+voice's wait (`trip_wait_s`) comes back in the `navigate_to` reply, so the
+voice reads no settings file. Besides a pose drop and a pick-up, the lidar
+going quiet mid-trip and the dashboard's Localize button also hold a trip.
+"Stop" or "cancel" in the first three words heard cancels the trip, whether
+or not a turn starts. Off the map the barriers stand down, as there is no
+pose to measure them from.
+
 
 - Held trips in the bridge, the trip tool's short wait and notes, `off_map`,
   the held goal drawn hollow on the dashboard map with Cancel live. The

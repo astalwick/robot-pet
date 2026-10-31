@@ -70,6 +70,9 @@ END_SESSION_UTTERANCES = {
     "were done",
 }
 
+# one of these in the first words heard also cancels the trip in progress
+TRIP_STOP_WORDS = frozenset({"stop", "cancel"})
+
 
 def compose_system_prompt(character_prose: str) -> str:
     return f"{character_prose.strip()}\n\n{OPERATIONAL_SYSTEM_PROMPT}\n\n{SHARED_ROBOT_GUIDANCE}"
@@ -1415,6 +1418,11 @@ class TurnOrchestrator:
 
             should_start_from_commit, commit_reason = self.policy.commit_decision(text)
             self.emit("commit_decision", accepted=should_start_from_commit, reason=commit_reason, text=text)
+            early_words = self.policy.normalized_transcript(text).split()[: self.policy.explicit_interrupt_scan_words]
+            if self.nav_caller is not None and TRIP_STOP_WORDS & set(early_words):
+                # a bare "stop" starts no turn, and one mid-turn only cancels
+                # the turn, so nothing else would stop a trip
+                await asyncio.to_thread(self.nav_caller, "nav_cancel")
 
             if self.state.active_goal is not None:
                 await self.cancel_active_goal("committed_speech")

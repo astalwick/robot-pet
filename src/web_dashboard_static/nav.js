@@ -19,7 +19,15 @@ const POSITION_TEXT = {
   tracking: ['sure', 'ok'],
   checking: ['checking my position, sure after a short drive', 'warn'],
   searching: ['finding my place, moving me by hand helps', 'err'],
+  off_map: ["can't find my place here, put me somewhere I know or start mapping below", 'err'],
   stale: ['lidar off', 'muted'],
+};
+
+// What a held trip is waiting for.
+const WAITING_TEXT = {
+  lidar: 'the lidar',
+  position: 'my position',
+  nav2: 'the planner',
 };
 
 // While someone has the robot in hand, instead of the position text.
@@ -80,6 +88,9 @@ function goalText(goal) {
   if (goal.state === 'navigating') {
     return `${target}, ${goal.remaining_m == null ? '?' : fmt(goal.remaining_m, ' m', 1)} left`;
   }
+  if (goal.state === 'held') {
+    return `${target}, waiting for ${WAITING_TEXT[goal.waiting_for] || 'a moment'}`;
+  }
   return `${goal.state} ${target}${goal.reason ? ` (${goal.reason})` : ''}`;
 }
 
@@ -94,7 +105,7 @@ function searchText(search) {
 
 function goalClass(goal) {
   if (!goal) return 'muted';
-  return { navigating: 'warn', arrived: 'ok', failed: 'err' }[goal.state] || 'muted';
+  return { held: 'warn', navigating: 'warn', arrived: 'ok', failed: 'err' }[goal.state] || 'muted';
 }
 
 function loadMap(info) {
@@ -125,15 +136,20 @@ function drawMap() {
   const nav = latestNav;
   ctx.font = '11px sans-serif';
   ctx.textBaseline = 'middle';
-  if (nav.goal && nav.goal.state === 'navigating') {
+  // the trip's goal: a cross while driving, a ring while held
+  if (nav.goal && nav.goal.map === nav.map && (nav.goal.state === 'navigating' || nav.goal.state === 'held')) {
     const [px, py] = toPixel(nav.goal.x, nav.goal.y);
     ctx.strokeStyle = '#4ade80';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(px - 5, py - 5);
-    ctx.lineTo(px + 5, py + 5);
-    ctx.moveTo(px - 5, py + 5);
-    ctx.lineTo(px + 5, py - 5);
+    if (nav.goal.state === 'held') {
+      ctx.arc(px, py, 5, 0, Math.PI * 2);
+    } else {
+      ctx.moveTo(px - 5, py - 5);
+      ctx.lineTo(px + 5, py + 5);
+      ctx.moveTo(px - 5, py + 5);
+      ctx.lineTo(px + 5, py - 5);
+    }
     ctx.stroke();
   }
   for (const barrier of barriersOnMap(nav)) {
@@ -166,7 +182,8 @@ function drawMap() {
     ctx.fill();
     ctx.fillText(name, px + 6, py);
   }
-  if (nav.pose) {
+  // off the map the pose could be anywhere, so it is not drawn
+  if (nav.pose && nav.state !== 'off_map') {
     const [px, py] = toPixel(nav.pose.x, nav.pose.y);
     const size = 6;
     ctx.save();
@@ -209,7 +226,7 @@ function updateNavControls() {
   // a place saved on an unconfirmed position could be off by a room
   setDisabled('nav-save-place-button', !(localize && nav.state === 'tracking' && nav.pose));
   setDisabled('nav-record-button', !localize || nav.recording != null);
-  setDisabled('nav-cancel-button', !(nav && nav.goal && nav.goal.state === 'navigating'));
+  setDisabled('nav-cancel-button', !(nav && nav.goal && (nav.goal.state === 'navigating' || nav.goal.state === 'held')));
 
   const select = document.getElementById('nav-map-select');
   const maps = nav ? nav.maps : [];

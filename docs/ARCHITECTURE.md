@@ -241,11 +241,19 @@ and pauses them again five seconds after the scans stop (without scans the
 cache every costmap lookup fails and logs). So Nav2 comes up per trip.
 The bridge is also the only Nav2 action client: `navigate_to` (a place name,
 or map x/y from a click on the dashboard map) returns at once, asks for the
-motor rail, and sends one `NavigateToPose` goal once the lidar and Nav2 are
-up (a goal that waits more than 30 s fails); the goal's state (`navigating` with metres remaining,
+motor rail, and opens a trip that is `held` (with `waiting_for` the lidar,
+the position or Nav2) until the lidar, a sure pose and Nav2 are up, then sends
+one `NavigateToPose` goal (`navigating`, with metres remaining). A trip whose
+pose drops, or whose robot is picked up, stops and is held again, and goes on
+by itself once the robot is sure of its place (`resume_trips`); a trip held
+more than `hold_s` in all, or with the robot off the map, fails. A place on
+another saved map is held while the robot is unsure of its place, in case
+the search finds it on that map. The trip's state (`held`, `navigating`,
 `arrived`, `cancelled`, `failed`, plus a reason) rides the hub as `nav.goal`.
-A new goal replaces the old one; `nav_cancel`, a mode switch or any gamepad
-input cancels it.
+Asking for the place already being driven to keeps the trip; another place
+replaces it. `nav_cancel` or a mode switch cancels a trip, and gamepad input
+cancels a driving one (a held trip waits for exactly that push).
+`localization.json` holds the timings.
 
 Voice intents win over Nav2 through `/nav_lock`: the motion node publishes it
 true while an intent runs and for two seconds after a stop, `twist_mux` mutes
@@ -253,9 +261,12 @@ true while an intent runs and for two seconds after a stop, `twist_mux` mutes
 `stopped`) and refuses new ones (`wheels_busy`) while the lock is held. So
 "stop" halts the wheels and the trip in the same moment, and "go to the
 kitchen" mid-route simply replaces the goal. The voice tools are
-`navigate_to`, `check_navigation` (polls the bridge up to a minute),
-`cancel_navigation`, `create_place` and `where_am_i` (map, localized, nearest
-place); `stop` also sends `nav_cancel`.
+`navigate_to` (waits up to `trip_wait_s` for a trip held on the position to
+leave, so a quick find needs no explaining), `check_navigation` (polls the
+bridge up to a minute), `cancel_navigation`, `create_place` and `where_am_i`
+(map, localized, nearest place); their results carry a note for a held,
+lost or off-the-map trip. The `stop` tool and a bare spoken "stop" or
+"cancel" (which starts no turn) also send `nav_cancel`.
 
 **Barriers** are lines drawn on the dashboard map that Nav2 treats as walls
 (the steps down to the dining room look like open floor to the lidar). They

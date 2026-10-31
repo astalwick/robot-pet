@@ -46,11 +46,12 @@ state, read by everyone, says how far the pose is trusted:
     checking   a pose not yet confirmed by a drive; trips go once its latest
                verdict passed ("clean")
     searching  no pose, or the judge dropped it after a run of failed scans
-               (the remembered pose goes and a trip in progress is cancelled)
+               (the remembered pose goes and a trip in progress is held)
+    off_map    searching, and for off_map_s nothing on any map agreed:
+               trips are refused and the barriers stand down
     stale      the lidar is off; a pose held through it is checked afresh
 
-`localized` is tracking or clean checking. A navigate_to while searching
-waits for the search, then goes.
+`localized` is tracking or clean checking. A trip goes only while localized.
 
 A scan the map disagrees with gets a second opinion, the self-check
 (robot_nav.scan_check): it is compared with the last scan that passed,
@@ -74,11 +75,16 @@ NavigateToPose action. nav.launch.py starts the navigation servers in both
 modes but does not activate them: their costmaps need the map frame, and the
 lidar that makes it follows the motor rail, so this node brings them up once
 the robot is scanning and has a map pose, and pauses them again a few seconds
-after the scans stop (see manage_nav2). A goal asks for the rail (through
-motor_power_requested) and is sent once the lidar, the pose and Nav2 are up. One goal
-at a time; a new one replaces it. The goal is cancelled when robot-motion
-raises /nav_lock (a voice intent or a stop), when the gamepad moves, or on a
-mode switch. The hub message carries the goal and its state.
+after the scans stop (see manage_nav2). One trip at a time. A trip asks for
+the rail (through motor_power_requested) and is `held` until the lidar, the
+pose and Nav2 are up, then sent (`navigating`). A trip whose pose drops, or
+whose robot is picked up, stops and is held again, and goes on by itself
+once the robot is sure of its place; it fails after hold_s of holding in
+all, or at once off the map. Asking for the place the trip already names
+keeps the trip; another place replaces it. A trip is cancelled when
+robot-motion raises /nav_lock (a voice intent or a stop) or on a mode
+switch, and a driving one when the gamepad moves (a held one is waiting for
+exactly that push). The hub message carries the trip and its state.
 """
 
 import argparse
@@ -131,8 +137,8 @@ log = setup_logging("robot-nav-bridge")
 # slam_toolbox and map_server both latch /map (transient local, reliable).
 MAP_QOS = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
 MAP_PNG_MIN_INTERVAL = 2.0
-# a navigate_to waits this long for the lidar and Nav2 before it fails
-GOAL_START_SECONDS = 30.0
+# why a trip held too long fails, by what it was waiting for
+HOLD_FAILURES = {"lidar": "lidar_unavailable", "position": "lost", "nav2": "nav2_unavailable"}
 # how often at most to ask the lifecycle manager to bring Nav2 up or pause it
 NAV2_MANAGE_RETRY_SECONDS = 15.0
 # pause Nav2 this long after the last scan: without scans the map -> odom
@@ -210,6 +216,8 @@ class NavNode(Node):
         self.named: dict | None = None
         self.rival_stands = False
         self.search_summary: dict | None = None
+        # since when the searches have found nothing agreeing on any map (off_map)
+        self.unplaced_since: float | None = None
         # best known pose in the map frame: TF when it resolves, else remembered
         self.pose: dict[str, float] | None = None
         self.remembered_pose_written: dict | None = None
@@ -262,13 +270,15 @@ class NavNode(Node):
         self.started = time.monotonic()
         # one map switch or save at a time
         self.busy = threading.Lock()
-        # the current or last navigation goal (see nav_update); the serial
-        # tells a late Nav2 callback for an old goal from the current one
+        # The current or last trip (see nav_update). While held: since when,
+        # and the seconds held before that. Each goal sent to Nav2 is an
+        # attempt; a late Nav2 callback for an earlier attempt (a replaced
+        # trip, or this one before it was held) is ignored.
         self.goal: dict | None = None
-        self.goal_serial = 0
+        self.held_since = 0.0
+        self.held_before_s = 0.0
+        self.goal_attempt = 0
         self.goal_handle = None
-        # a goal waiting for the lidar, the pose and Nav2: (serial, map, x, y, yaw, asked_at)
-        self.goal_request: tuple | None = None
         # a trip Nav2 was still driving when the last bridge went away
         self.orphan_trip_checked = False
         self.nav_lock = False
@@ -334,7 +344,8 @@ class NavNode(Node):
             self.cancel_goal("stopped")
 
     def on_teleop(self, twist: Twist) -> None:
-        if twist.linear.x != 0.0 or twist.angular.z != 0.0:
+        # a held trip is not moving, and a push is what it waits for
+        if (twist.linear.x != 0.0 or twist.angular.z != 0.0) and self.goal is not None and self.goal["state"] == "navigating":
             self.cancel_goal("gamepad")
 
     def on_cmd_vel(self, twist: Twist) -> None:
@@ -483,16 +494,16 @@ class NavNode(Node):
     def start_handling(self, reason: str, detail: str) -> None:
         """The robot is in someone's hands: the pose stops counting (checking,
         not clean, no self-check), nothing the search found before counts, no
-        verdict or search runs until it is put down, and a trip stops."""
+        verdict or search runs until it is put down, and a trip is held."""
         log.info("%s (%s): the pose waits until the robot is put down", reason, detail)
         self.handled = reason
         self.handled_at = time.monotonic()
         with self.pose_lock:
             self.named = None
+            self.unplaced_since = None
             if self.mode == "localize" and self.pose_state != "searching":
                 self.start_checking()
-        if self.goal_request is None:
-            self.cancel_goal(reason)
+        self.hold_goal(reason)
 
     def judge_scan(self) -> None:
         """Judge the latest scan (robot_nav.beam_check) from the lidar's map
@@ -565,11 +576,10 @@ class NavNode(Node):
             self.pose_state = "searching"
             self.search_now.set()
             # a restart must not trust the old pose, and a trip on it would go
-            # wrong. A goal still waiting to start waits for the search instead.
+            # wrong: it waits for the search instead
             Path(self.args.nav_pose).unlink(missing_ok=True)
             self.remembered_pose_written = None
-            if self.goal_request is None:
-                self.cancel_goal("lost")
+            self.hold_goal("lost")
 
     def start_checking(self) -> None:
         """A new pose (or one held through the lidar being off): checking,
@@ -581,11 +591,16 @@ class NavNode(Node):
         self.passed_scans = self.failed_scans = 0
         self.travelled_m = 0.0
         self.seeded_at = time.monotonic()
+        self.unplaced_since = None
 
     def state(self) -> str | None:
         if self.mode != "localize":
             return None
-        return self.pose_state if self.scanning() else "stale"
+        if not self.scanning():
+            return "stale"
+        if self.pose_state == "searching" and self.unplaced_since is not None and time.monotonic() - self.unplaced_since >= self.settings.off_map_s:
+            return "off_map"
+        return self.pose_state
 
     def localized(self) -> bool:
         return self.state() == "tracking" or (self.state() == "checking" and self.clean)
@@ -801,6 +816,12 @@ class NavNode(Node):
             if self.pose_state == "searching":
                 rival = None
                 self.rival_stands = False
+                if candidates and candidates[0]["agree"] >= self.settings.agree_min:
+                    self.unplaced_since = None
+                elif self.unplaced_since is None:
+                    self.unplaced_since = began
+                elif began - self.unplaced_since < self.settings.off_map_s <= time.monotonic() - self.unplaced_since:
+                    log.info("off the map: %.0f s of searches found nothing agreeing on any map", time.monotonic() - self.unplaced_since)
                 if winner is not None and named is not None and robot_nav.same_place(named, winner):
                     seed = winner
                 now_named = winner
@@ -911,8 +932,10 @@ class NavNode(Node):
             with self.pose_lock:
                 self.pose_state = "searching"
                 self.clean = False
+                self.unplaced_since = None
                 Path(self.args.nav_pose).unlink(missing_ok=True)
                 self.remembered_pose_written = None
+            self.hold_goal("localize")
             self.search_now.set()
             return {"ok": True, "accepted": True}
         if cmd == "create_place":
@@ -952,6 +975,7 @@ class NavNode(Node):
         self.mode, self.map_name = mode, map_name
         self.pose_state = "searching"
         self.clean = False
+        self.unplaced_since = None
         self.amcl_pose = None
         self.cancel_goal("mode_change")
         if mode == "localize":
@@ -1053,8 +1077,9 @@ class NavNode(Node):
         while there is a map pose. Nothing is sent in mapping mode or before
         AMCL has a pose, and the safety gate lets a stale value lapse. A pose
         that is not trusted (localized no) still counts: a wrong stop near a
-        line beats driving over one while the flag is making its mind up."""
-        if self.mode != "localize":
+        line beats driving over one while the flag is making its mind up.
+        Off the map the pose is anywhere, so nothing is sent then either."""
+        if self.mode != "localize" or self.state() == "off_map":
             return
         self.update_pose()
         if self.pose is None:
@@ -1131,7 +1156,8 @@ class NavNode(Node):
     # --- navigation goals ----------------------------------------------------
 
     def navigating(self) -> bool:
-        return self.goal is not None and self.goal["state"] == "navigating"
+        """A trip is open: held or driving. It keeps the motor rail on."""
+        return self.goal is not None and self.goal["state"] in ("held", "navigating")
 
     def cancel_orphan_trip(self) -> None:
         """A bridge that died or restarted mid-trip left Nav2 driving with
@@ -1158,7 +1184,7 @@ class NavNode(Node):
             return
         if self.nav2_state == "active":
             if self.scan_age() > NAV2_PAUSE_SECONDS:
-                self.cancel_goal("lidar_unavailable")
+                self.hold_goal("lidar_unavailable")
                 self.send_nav2_command("pausing", ManageLifecycleNodes.Request.PAUSE)
         elif self.nav2_state == "unconfigured" and self.scanning() and self.pose is not None:
             self.send_nav2_command("bringing up", ManageLifecycleNodes.Request.STARTUP)
@@ -1177,106 +1203,142 @@ class NavNode(Node):
             log.warning("the Nav2 lifecycle manager refused (see robot-nav); retrying in %.0fs", NAV2_MANAGE_RETRY_SECONDS)
 
     def navigate_to(self, request: dict) -> dict:
-        """Send a NavigateToPose goal for a saved place or a map x, y."""
+        """Open a trip to a saved place or a map x, y. It starts held."""
         place_name = request.get("place")
         if place_name is not None:
             place = self.places.get(place_name)
             if place is None:
                 return {"ok": False, "error": "unknown_place", "places": robot_nav.places_on_map(self.places, self.map_name)}
-            if place["map"] != self.map_name:
+            # unsure of its place, the robot may yet turn out to be on the place's map
+            if place["map"] != self.map_name and (self.mode != "localize" or self.state() == "tracking"):
                 return {"ok": False, "error": "place_on_other_map", "map": place["map"]}
-            x, y, yaw = place["x"], place["y"], place["yaw"]
+            map_name, x, y, yaw = place["map"], place["x"], place["y"], place["yaw"]
         else:
-            x, y, yaw = request.get("x"), request.get("y"), request.get("yaw")
+            map_name, x, y, yaw = self.map_name, request.get("x"), request.get("y"), request.get("yaw")
             if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
                 return {"ok": False, "error": "bad_goal"}
             if yaw is None:
                 # no heading asked for: arrive facing the way we came
                 yaw = robot_nav.yaw_toward(self.pose["x"], self.pose["y"], x, y) if self.pose else 0.0
+        if self.state() == "off_map":
+            return {"ok": True, "accepted": False, "reason": "off_map"}
         if self.busy.locked():
             return {"ok": True, "accepted": False, "reason": self.activity or "busy"}
         if self.nav_lock:
             return {"ok": True, "accepted": False, "reason": "wheels_busy"}
+        if place_name is not None and self.navigating() and self.goal["target"] == place_name:
+            # asked again for where it is already going: the trip goes on
+            return {"ok": True, "accepted": True, "goal": self.goal, "trip_wait_s": self.settings.trip_wait_s}
 
         self.cancel_goal("replaced")
-        self.goal_serial += 1
-        self.goal = {"target": place_name, "x": float(x), "y": float(y), "state": "navigating", "remaining_m": None}
         # navigating() asks for the motor rail; the lidar follows the rail and
-        # Nav2 follows the lidar, so tick() sends the goal once both are up
-        # and the search has found the robot if it did not know where it was
-        self.goal_request = (self.goal_serial, self.map_name, float(x), float(y), yaw, time.monotonic())
-        log.info("navigating to %s (%.2f, %.2f)", place_name or "a point", x, y)
-        return {"ok": True, "accepted": True, "goal": self.goal}
+        # Nav2 follows the lidar, so tick() sends the trip once both are up
+        # and the robot is sure of its place
+        self.goal = {"target": place_name, "map": map_name, "x": float(x), "y": float(y), "yaw": float(yaw), "state": "held", "remaining_m": None}
+        self.held_since, self.held_before_s = time.monotonic(), 0.0
+        log.info("navigating to %s (%.2f, %.2f) on %s", place_name or "a point", x, y, map_name)
+        # trip_wait_s: how long the voice waits for a held trip to leave before it answers
+        return {"ok": True, "accepted": True, "goal": self.goal, "trip_wait_s": self.settings.trip_wait_s}
 
     def send_pending_goal(self) -> None:
-        if self.goal_request is None:
+        """Send a held trip to Nav2 once the lidar, the pose and Nav2 are up.
+        Off the map, sure of its place on another map, or after hold_s of
+        holding in all, the trip fails instead."""
+        if self.goal is None or self.goal["state"] != "held":
             return
-        serial, map_name, x, y, yaw, asked_at = self.goal_request
+        now = time.monotonic()
         if self.activity is not None:
-            # a map switch (or save) is running; the start clock runs from its end
-            self.goal_request = (serial, map_name, x, y, yaw, time.monotonic())
+            # a map switch (or save) is running; its time is not held time
+            self.held_since = now
             return
-        if map_name != self.map_name:
-            # the search found us on another map; the goal's x, y mean nothing here
-            self.goal_request = None
-            self.end_goal(serial, "failed", "place_on_other_map")
+        if self.state() == "off_map":
+            self.end_goal("failed", "off_map")
             return
-        # searching, stale or not yet clean: wait for the search, the lidar and a passing verdict
-        waiting_for_pose = self.mode == "localize" and not self.localized()
-        if time.monotonic() - asked_at > GOAL_START_SECONDS:
-            self.goal_request = None
-            if not self.scanning():
-                self.end_goal(serial, "failed", "lidar_unavailable")
-            elif waiting_for_pose:
-                self.end_goal(serial, "failed", "lost")
-            else:
-                self.end_goal(serial, "failed", "nav2_unavailable")
+        if self.goal["map"] != self.map_name and self.localized():
+            # sure of its place on another map: the trip's x, y mean nothing here
+            self.end_goal("failed", "place_on_other_map")
             return
-        if not self.scanning() or waiting_for_pose or self.nav2_state != "active" or not self.nav_client.server_is_ready():
+        if not self.scanning():
+            waiting_for = "lidar"
+        elif self.mode == "localize" and (self.goal["map"] != self.map_name or not self.localized()):
+            # searching, stale, in someone's hands or not yet clean
+            waiting_for = "position"
+        elif self.nav2_state != "active" or not self.nav_client.server_is_ready():
+            waiting_for = "nav2"
+        else:
+            waiting_for = None
+        if waiting_for is not None:
+            self.goal["waiting_for"] = waiting_for
+            if self.held_before_s + now - self.held_since > self.settings.hold_s:
+                self.end_goal("failed", HOLD_FAILURES[waiting_for])
             return
-        self.goal_request = None
 
+        self.held_before_s += now - self.held_since
+        self.goal["state"] = "navigating"
+        self.goal.pop("waiting_for", None)
+        self.goal_attempt += 1
+        attempt = self.goal_attempt
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = "map"
         goal.pose.header.stamp = self.get_clock().now().to_msg()
-        goal.pose.pose.position.x = float(x)
-        goal.pose.pose.position.y = float(y)
-        goal.pose.pose.orientation.z = math.sin(yaw / 2)
-        goal.pose.pose.orientation.w = math.cos(yaw / 2)
-        future = self.nav_client.send_goal_async(goal, feedback_callback=lambda message: self.on_goal_feedback(serial, message))
-        future.add_done_callback(lambda done: self.on_goal_response(serial, done))
+        goal.pose.pose.position.x = self.goal["x"]
+        goal.pose.pose.position.y = self.goal["y"]
+        goal.pose.pose.orientation.z = math.sin(self.goal["yaw"] / 2)
+        goal.pose.pose.orientation.w = math.cos(self.goal["yaw"] / 2)
+        future = self.nav_client.send_goal_async(goal, feedback_callback=lambda message: self.on_goal_feedback(attempt, message))
+        future.add_done_callback(lambda done: self.on_goal_response(attempt, done))
 
-    def on_goal_response(self, serial: int, future) -> None:
+    def hold_goal(self, reason: str) -> None:
+        """Stop a driving trip and hold it until the robot is sure of its
+        place again (send_pending_goal), or end it if trips don't resume."""
+        if self.goal is None or self.goal["state"] != "navigating":
+            return
+        if not self.settings.resume_trips:
+            self.cancel_goal(reason)
+            return
+        if self.goal_handle is not None:
+            self.goal_handle.cancel_goal_async()
+            self.goal_handle = None
+        self.goal["state"] = "held"
+        self.goal["remaining_m"] = None
+        self.held_since = time.monotonic()
+        log.info("navigation held: %s", reason)
+
+    def on_goal_response(self, attempt: int, future) -> None:
         handle = future.result()
-        if serial != self.goal_serial or not self.navigating():
-            # cancelled or replaced before Nav2 even answered; don't let it run
+        if attempt != self.goal_attempt or self.goal["state"] != "navigating":
+            # cancelled, replaced or held before Nav2 even answered; don't let it run
             if handle.accepted:
                 handle.cancel_goal_async()
             return
         if not handle.accepted:
-            self.end_goal(serial, "failed", "rejected")
+            self.end_goal("failed", "rejected")
             return
         self.goal_handle = handle
-        handle.get_result_async().add_done_callback(lambda done: self.on_goal_result(serial, done))
+        handle.get_result_async().add_done_callback(lambda done: self.on_goal_result(attempt, done))
 
-    def on_goal_feedback(self, serial: int, message) -> None:
-        if serial == self.goal_serial and self.navigating():
+    def on_goal_feedback(self, attempt: int, message) -> None:
+        if attempt == self.goal_attempt and self.goal["state"] == "navigating":
             self.goal["remaining_m"] = round(message.feedback.distance_remaining, 2)
 
-    def on_goal_result(self, serial: int, future) -> None:
+    def on_goal_result(self, attempt: int, future) -> None:
+        # a held trip's cancelled attempt ends nothing; the trip goes on
+        if attempt != self.goal_attempt or self.goal["state"] != "navigating":
+            return
         result = future.result()
         if result.status == GoalStatus.STATUS_SUCCEEDED:
-            self.end_goal(serial, "arrived")
+            self.end_goal("arrived")
         elif result.status == GoalStatus.STATUS_CANCELED:
-            self.end_goal(serial, "cancelled")
+            self.end_goal("cancelled")
         else:
-            self.end_goal(serial, "failed", result.result.error_msg or f"status {result.status}")
+            self.end_goal("failed", result.result.error_msg or f"status {result.status}")
 
-    def end_goal(self, serial: int, state: str, reason: str | None = None) -> None:
-        """Mark the goal over, unless it was already (a cancel beat Nav2's result)."""
-        if serial != self.goal_serial or not self.navigating():
+    def end_goal(self, state: str, reason: str | None = None) -> None:
+        """Mark the trip over, unless it already is (a cancel beat Nav2's result)."""
+        if not self.navigating():
             return
         self.goal["state"] = state
+        self.goal.pop("waiting_for", None)
         if reason:
             self.goal["reason"] = reason
         self.goal_handle = None
@@ -1285,11 +1347,9 @@ class NavNode(Node):
     def cancel_goal(self, reason: str) -> None:
         if not self.navigating():
             return
-        self.goal_request = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
-        self.end_goal(self.goal_serial, "cancelled", reason)
-
+        self.end_goal("cancelled", reason)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Robot nav bridge ROS node.")

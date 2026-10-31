@@ -87,14 +87,16 @@ costmap_filter_info_server:
 # 0.8 rad/s. The footprint is the chassis from robot_model.py: 0.060 m ahead
 # of the axle, 0.284 m behind it, 0.166 m to each side (tests check the text).
 #
-# Both halves of Nav2 see the robot as its real rectangle, so they agree on
-# what fits. The planner (Smac Lattice) plans poses, not points: it checks the
-# footprint at every step and can drive forward to find room before turning.
-# The controller (MPPI) tries about a thousand short moves each tick, forward,
-# back a little, curving or turning, scores them against the footprint, the
-# path and the goal, and drives the best. NavFn (a point) with Regulated Pure
-# Pursuit (turn in place first) gave up by an open door and with a table leg
-# by the tail, with open floor ahead both times.
+# Both halves of Nav2 see the robot as its real rectangle, exactly (no
+# padding), so they agree on what fits. The planner (Smac Lattice) plans
+# poses, not points: it checks the footprint at every step and can drive
+# forward to find room before turning, or back out of a corner where the
+# tail can't swing. The controller (MPPI) tries about a thousand short moves
+# each tick, forward, back a little, curving or turning, scores them against
+# the footprint, the path and the goal, and drives the best. It follows the
+# path's own direction, so there is no prefer-forward critic. NavFn (a
+# point) with Regulated Pure Pursuit (turn in place first) gave up by an open
+# door and with a table leg by the tail, with open floor ahead both times.
 #
 # Inflation is a preference, not a limit. With the axle 25 cm
 # from a wall (8 cm of side clearance) a cell costs about 3.5x open floor,
@@ -209,7 +211,6 @@ controller_server:
           "PathAlignCritic",
           "PathFollowCritic",
           "PathAngleCritic",
-          "PreferForwardCritic",
         ]
       ConstraintCritic:
         enabled: true
@@ -224,11 +225,6 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 3.0
-        threshold_to_consider: 0.5
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true
@@ -248,7 +244,7 @@ controller_server:
         trajectory_point_step: 4
         threshold_to_consider: 0.5
         offset_from_furthest: 20
-        use_path_orientations: false
+        use_path_orientations: true
       PathFollowCritic:
         enabled: true
         cost_power: 1
@@ -262,7 +258,7 @@ controller_server:
         offset_from_furthest: 4
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
-        mode: 0
+        mode: 2 # follow the path's direction, reverse included
 
 local_costmap:
   local_costmap:
@@ -276,6 +272,7 @@ local_costmap:
       height: 3
       resolution: 0.05
       footprint: "[[0.06, 0.166], [0.06, -0.166], [-0.284, -0.166], [-0.284, 0.166]]"
+      footprint_padding: 0.0
       plugins: ["obstacle_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
@@ -313,6 +310,7 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       footprint: "[[0.06, 0.166], [0.06, -0.166], [-0.284, -0.166], [-0.284, 0.166]]"
+      footprint_padding: 0.0
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
@@ -372,7 +370,7 @@ planner_server:
       retrospective_penalty: 0.015
       lookup_table_size: 20.0
       cache_obstacle_heuristic: false
-      allow_reverse_expansion: false
+      allow_reverse_expansion: true
       coarse_search_resolution: 1
       smooth_path: true
       smoother:

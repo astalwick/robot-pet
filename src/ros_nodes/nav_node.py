@@ -454,7 +454,7 @@ class NavNode(Node):
         tipped = math.hypot(tilts[-1][1] - self.rest_tilt[0], tilts[-1][2] - self.rest_tilt[1]) if tilts and self.rest_tilt else 0.0
         if driving and any(no_floor):
             self.cliff_edge = True
-        elif not any(no_floor):
+        elif no_floor and not any(no_floor):
             self.cliff_edge = False
 
         reason = detail = None

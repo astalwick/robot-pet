@@ -142,7 +142,7 @@ plan_service_restarts() {
         want_restart gamepad-teleop.service
         want_restart robot-pi-battery.service
         ;;
-      src/robot_voice.py | src/voice/*)
+      src/robot_voice.py | src/voice/* | config/*_system_prompt.md | config/shared_robot_guidance.md | config/personality/*)
         want_restart robot-voice.service
         ;;
       src/robot_web_dashboard.py | src/web_dashboard_static/*)

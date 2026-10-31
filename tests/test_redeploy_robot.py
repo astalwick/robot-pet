@@ -83,7 +83,11 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-motion.service")
             want("gamepad-teleop.service")
             want("robot-pi-battery.service")
-        elif path == "src/robot_voice.py" or path.startswith("src/voice/"):
+        elif (
+            path in ("src/robot_voice.py", "config/shared_robot_guidance.md")
+            or path.startswith(("src/voice/", "config/personality/"))
+            or (path.startswith("config/") and path.endswith("_system_prompt.md"))
+        ):
             want("robot-voice.service")
         elif path == "src/robot_web_dashboard.py" or path.startswith("src/web_dashboard_static/"):
             want("robot-web-dashboard.service")
@@ -199,6 +203,12 @@ class TestRedeployRobot(unittest.TestCase):
     def test_voice_paths_restart_voice_only(self):
         services = planned_services(["src/voice/assistant.py"])
         self.assertEqual(services, {"robot-voice.service"})
+
+    def test_prompt_files_restart_voice(self):
+        # The voice reads its prompts and personality cards once, at startup.
+        for path in ("config/operational_system_prompt.md", "config/agent_system_prompt.md",
+                     "config/shared_robot_guidance.md", "config/personality/toki.md"):
+            self.assertEqual(planned_services([path]), {"robot-voice.service"})
 
     def test_control_paths_restart_voice_for_calibration_constants(self):
         services = planned_services(["src/control/motion_intent.py"])

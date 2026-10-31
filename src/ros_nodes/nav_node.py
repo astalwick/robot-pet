@@ -159,8 +159,8 @@ MAX_TURN_RADIANS = 0.2
 # while searching, the pause between one search and the next
 SEARCH_PAUSE_SECONDS = 0.2
 # The robot counts as driving this long after the last moving /cmd_vel (the
-# gamepad, Nav2), so the rock of a stop is not taken for a push. A voice
-# drive raises /nav_lock instead, which robot-motion holds 2 s past the stop.
+# gamepad, Nav2) or /nav_lock (a voice drive), and rocking counts only from
+# then on: on the floor a gamepad stop wobbled the robot for up to 1 s.
 DRIVE_HOLD_SECONDS = 1.5
 # a cliff sensor or the IMU silent this long takes no part in noticing handling
 SENSOR_STALE_SECONDS = 1.0
@@ -432,14 +432,17 @@ class NavNode(Node):
         sensors and nothing has rocked for set_down_s. A sensor that is
         missing or silent takes no part."""
         now = time.monotonic()
-        driving = self.nav_lock or now - self.drive_time < DRIVE_HOLD_SECONDS
+        if self.nav_lock:
+            self.drive_time = now
+        driving = now - self.drive_time < DRIVE_HOLD_SECONDS
         no_floor = [far for far, at in self.cliffs.values() if now - at < SENSOR_STALE_SECONDS]
         tilts = self.tilts if self.tilts and now - self.tilts[-1][0] < SENSOR_STALE_SECONDS else []
-        rolls, pitches = [roll for _, roll, _ in tilts], [pitch for _, _, pitch in tilts]
-        rocked = max(max(rolls) - min(rolls), max(pitches) - min(pitches)) if tilts else 0.0
+        settled = [(roll, pitch) for at, roll, pitch in tilts if at > self.drive_time + DRIVE_HOLD_SECONDS]
+        rolls, pitches = [roll for roll, _ in settled], [pitch for _, pitch in settled]
+        rocked = max(max(rolls) - min(rolls), max(pitches) - min(pitches)) if settled else 0.0
         if tilts and not driving:
-            self.rest_tilt = (rolls[-1], pitches[-1])
-        tipped = math.hypot(rolls[-1] - self.rest_tilt[0], pitches[-1] - self.rest_tilt[1]) if tilts and self.rest_tilt else 0.0
+            self.rest_tilt = tilts[-1][1:]
+        tipped = math.hypot(tilts[-1][1] - self.rest_tilt[0], tilts[-1][2] - self.rest_tilt[1]) if tilts and self.rest_tilt else 0.0
         if driving and any(no_floor):
             self.cliff_edge = True
         elif not any(no_floor):

@@ -677,6 +677,18 @@ pose to measure them from.
 Exit: remove the coffee table; after three visits on separate occasions it
 is gone from the map. Places, barriers and accuracy are unchanged.
 
+### Later: driving out of tight spots
+
+Found 2026-10-31: with a table leg by its tail and open floor ahead, a trip
+whose target was behind it gave up. The controller (Regulated Pure Pursuit)
+turns in place first and the planner (NavFn) plans for a point, and the stuck
+moves are only spin, back up and wait: none pulls forward. The fix to try is
+the MPPI controller, which scores many short moves against the real footprint
+each tick, maybe with the Smac Lattice planner. The cost is CPU on the Pi 5
+(already near half busy at idle, and the controller fell behind during this
+trip) plus a session or two of tuning. If the Pi can't keep up, add a short
+drive forward as the first stuck move instead.
+
 ## Alternatives rejected
 
 - **Moving the bars, or reading AMCL's covariance.** The wrong room scored

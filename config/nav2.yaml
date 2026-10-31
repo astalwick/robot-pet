@@ -65,7 +65,8 @@ map_server:
 # The barriers drawn on the dashboard reach Nav2 as a keepout mask: a second
 # map_server serves the mask image the nav bridge renders (yaml_filename from
 # nav.launch.py), costmap_filter_info_server announces it, and the
-# keepout_filter in both costmaps below paints the black cells lethal.
+# keepout_filter in both costmaps below paints its cells in: a thin lethal
+# wall along each line, a nearly lethal band around it (robot_nav.py).
 filter_mask_server:
   ros__parameters:
     topic_name: "/keepout_mask"

@@ -362,11 +362,13 @@ class RenderKeepoutMaskTest(unittest.TestCase):
                 yaml_text = file_obj.read()
             return np.asarray(Image.open(f"{stem}.pgm")), yaml_text
 
-    def test_a_barrier_is_a_black_band_on_a_white_grid_the_barriers_size(self):
-        # A 1 m line along x at y = 0: the band reaches 0.3 m to each side, the
-        # grid 0.35 m beyond the line's ends (a cell of white around the band).
+    def test_a_barrier_is_a_thin_wall_in_an_expensive_band_on_a_grid_the_barriers_size(self):
+        # A 1 m line along x at y = 0: the wall reaches 0.05 m to each side, the
+        # band 0.3 m, the grid 0.35 m beyond the line's ends (a free cell around
+        # the band). Raw mode: 100 lethal, 99 nearly lethal, 0 free.
         pixels, yaml_text = self.read_mask([{"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 0.0}])
         self.assertIn("image: main.pgm\n", yaml_text)
+        self.assertIn("mode: raw\n", yaml_text)
         self.assertIn("resolution: 0.05\n", yaml_text)
         self.assertIn("origin: [-0.350, -0.350, 0]\n", yaml_text)
         self.assertEqual(pixels.shape, (14, 34))  # 0.7 m tall, 1.7 m wide
@@ -376,16 +378,18 @@ class RenderKeepoutMaskTest(unittest.TestCase):
             row = pixels.shape[0] - 1 - int((y + 0.35) / 0.05)
             return pixels[row, column]
 
-        self.assertEqual(pixel_at(0.5, 0.0), 0)  # on the line
-        self.assertEqual(pixel_at(0.5, 0.27), 0)  # inside the band
-        self.assertEqual(pixel_at(0.5, 0.33), 255)  # outside it
-        self.assertEqual(pixel_at(1.27, 0.0), 0)  # the band runs past the end
-        self.assertEqual(pixel_at(1.33, 0.0), 255)
-        self.assertEqual(pixels[0, 0], 255)  # corners are free
+        self.assertEqual(pixel_at(0.5, 0.0), 100)  # on the line
+        self.assertEqual(pixel_at(0.5, 0.03), 100)  # inside the wall
+        self.assertEqual(pixel_at(0.5, 0.08), 99)  # past it, in the band
+        self.assertEqual(pixel_at(0.5, 0.27), 99)
+        self.assertEqual(pixel_at(0.5, 0.33), 0)  # outside the band
+        self.assertEqual(pixel_at(1.27, 0.0), 99)  # the band runs past the end
+        self.assertEqual(pixel_at(1.33, 0.0), 0)
+        self.assertEqual(pixels[0, 0], 0)  # corners are free
 
     def test_no_barriers_is_a_small_free_grid(self):
         pixels, yaml_text = self.read_mask([])
-        self.assertTrue((pixels == 255).all())
+        self.assertTrue((pixels == 0).all())
         self.assertIn("origin: [-0.350, -0.350, 0]\n", yaml_text)
 
     def test_distance_to_segment(self):

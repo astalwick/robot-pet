@@ -45,9 +45,14 @@ DEFAULT_BARRIERS_PATH = "/home/pi/.config/robot-pet/barriers.json"
 DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 DEFAULT_RECORDINGS_DIR = "/home/pi/.config/robot-pet/recordings"
 
-# A barrier line is forbidden this far to each side. Keepout cells are not
-# inflated, and the tail sweeps 0.31 m from the axle when the robot turns.
+# Nav2 keeps the robot this far to each side of a barrier line. Keepout cells
+# are not inflated, and the tail sweeps 0.31 m from the axle when the robot
+# turns. Only a thin wall along the line itself is forbidden: the rest of the
+# band is just very expensive, so a robot that ends up with a corner in it can
+# still drive back out instead of freezing. robot-motion's barrier gate is the
+# hard stop.
 BARRIER_HALF_WIDTH_METERS = 0.3
+BARRIER_WALL_HALF_WIDTH_METERS = 0.05
 KEEPOUT_RESOLUTION_METERS = 0.05
 
 # the judge (beam_check) gives no verdict on a scan with fewer returned beams
@@ -534,9 +539,11 @@ def render_map_png(width: int, height: int, data, path: str) -> None:
 
 def render_keepout_mask(barriers: list[dict[str, float]], stem: str) -> None:
     """Write <stem>.pgm + <stem>.yaml, the Nav2 keepout mask for one map: a
-    white grid at 5 cm, just big enough for the barriers, with each one drawn
-    as a black band. Nav2 reads the mask in the map frame through the yaml's
-    origin and resolution, so it needs no relation to the map's own grid."""
+    grid at 5 cm, just big enough for the barriers, with each one drawn as a
+    wide expensive band around a thin forbidden wall. In raw mode each pixel
+    is the cost out of 100: 0 free, 99 nearly lethal, 100 lethal. Nav2 reads
+    the mask in the map frame through the yaml's origin and resolution, so it
+    needs no relation to the map's own grid."""
     margin = BARRIER_HALF_WIDTH_METERS + KEEPOUT_RESOLUTION_METERS
     xs = [barrier[key] for barrier in barriers for key in ("x1", "x2")] or [0.0]
     ys = [barrier[key] for barrier in barriers for key in ("y1", "y2")] or [0.0]
@@ -548,14 +555,14 @@ def render_keepout_mask(barriers: list[dict[str, float]], stem: str) -> None:
         origin_x + (np.arange(width) + 0.5) * KEEPOUT_RESOLUTION_METERS,
         origin_y + (np.arange(height) + 0.5) * KEEPOUT_RESOLUTION_METERS,
     )
-    blocked = np.zeros((height, width), dtype=bool)
+    nearest = np.full((height, width), np.inf)
     for barrier in barriers:
-        blocked |= distance_to_segment(cell_x, cell_y, barrier) <= BARRIER_HALF_WIDTH_METERS
-    pixels = np.where(blocked, 0, 255).astype(np.uint8)
+        nearest = np.minimum(nearest, distance_to_segment(cell_x, cell_y, barrier))
+    pixels = np.select([nearest <= BARRIER_WALL_HALF_WIDTH_METERS, nearest <= BARRIER_HALF_WIDTH_METERS], [100, 99], 0).astype(np.uint8)
     Path(stem).parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.flipud(pixels), "L").save(f"{stem}.pgm")
     Path(f"{stem}.yaml").write_text(
-        f"image: {Path(stem).name}.pgm\nmode: trinary\nresolution: {KEEPOUT_RESOLUTION_METERS}\n"
+        f"image: {Path(stem).name}.pgm\nmode: raw\nresolution: {KEEPOUT_RESOLUTION_METERS}\n"
         f"origin: [{origin_x:.3f}, {origin_y:.3f}, 0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
     )
 

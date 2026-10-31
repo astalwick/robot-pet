@@ -305,8 +305,9 @@ One state, read by everyone, replaces `localized`:
   stopping. In `off_map` only the cliff and forward sensors guard.
 - **Save place** is refused outside `tracking` with "drive me a little
   first", on the dashboard and through the voice tool.
-- **Dashboard.** The marker is solid in `tracking`, soft in `checking` and
-  `stale`, hollow in `searching`, and absent in `off_map`. State word,
+- **Dashboard.** The marker is solid in `tracking`, soft in `checking`, grey
+  in `stale` (soft blue read as sure on the floor), hollow in `searching`,
+  and absent in `off_map`. State word,
   shares, candidates and the Localize button live behind the debug toggle.
 
 ### 5. Trips and the voice
@@ -523,8 +524,10 @@ Twenty recordings, replayed at the pose the robot believed. Agree is the
 - **Fixes to try:** none of the rows these recordings can answer is needed
   (a person standing in front, AMCL at the crosses, a carry with the lidar
   on, a wrong pose passing through one wide arc).
-- **Still to check on the floor:** a robot carried while asleep shows
-  `stale`, and a spin in the wrong room is never accepted.
+- **Floor checks, same evening.** Lidar off, then carried from the living
+  room to the kitchen: `stale`, but the soft blue marker read as sure, so
+  `stale` is now grey. Lidar back on: `searching` within seconds. Localize
+  there found the kitchen.
 
 ### Phase 2: the search (four evenings)
 

@@ -162,11 +162,14 @@ function drawMap() {
     ctx.lineTo(-size, size * 0.7);
     ctx.lineTo(-size, -size * 0.7);
     ctx.closePath();
-    // solid when sure, soft while checking or with the lidar off, hollow when lost
+    // solid when sure, soft while checking, grey with the lidar off, hollow when lost
     if (nav.state === 'searching') {
       ctx.strokeStyle = '#f87171';
       ctx.lineWidth = 2;
       ctx.stroke();
+    } else if (nav.state === 'stale') {
+      ctx.fillStyle = '#8a8a8a';
+      ctx.fill();
     } else {
       ctx.fillStyle = nav.state === 'tracking' || nav.mode === 'mapping' ? '#00d4ff' : 'rgba(0, 212, 255, 0.45)';
       ctx.fill();

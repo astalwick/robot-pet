@@ -5,8 +5,9 @@ change applies on a bridge restart. A missing key means the default. The
 replay tool (scripts/localization-replay.py) reads the same file, so a tweak can
 be tried on recordings before the floor.
 
-The bars (agree_min, through_max, the tolerance) are first guesses until the
-floor recordings measure them; see docs/plans/2026-10-26 - localization-plan.md.
+The bars (agree_min, through_max, the tolerance) were read off the ground
+floor recordings of 2026-10-30; the table is in
+docs/plans/2026-10-26 - localization-plan.md.
 """
 
 from __future__ import annotations
@@ -45,8 +46,11 @@ class LocalizationSettings:
     forgiven_patch: bool = True
     # A pose passes a scan when agree >= agree_min and through <= through_max,
     # and is dropped after fail_scans failed scans in a row.
+    # Every true pose recorded agreed 0.55 or more, every wrong one 0.43 or
+    # less. The living room's chair and table legs let up to 16% of beams
+    # through at the true pose.
     agree_min: float = 0.55
-    through_max: float = 0.1
+    through_max: float = 0.2
     fail_scans: int = 4
     # wheel travel since the pose was found before it counts as confirmed
     motion_gate_m: float = 0.3

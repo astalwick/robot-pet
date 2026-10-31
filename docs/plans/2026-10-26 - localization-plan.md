@@ -476,6 +476,56 @@ Each phase ends with something Arlen can see on the floor or in a replay.
   audit, AMCL's error at the crosses, and the verdict on the fixes-to-try
   rows these recordings can answer are written into this document.
 
+#### Results, 2026-10-30 (ground floor)
+
+Twenty recordings, replayed at the pose the robot believed. Agree is the
+5th percentile over the recording, through the 95th.
+
+| recording | robot really was | agree | through |
+| --- | --- | --- | --- |
+| crosses 1 to 3 | right | 0.93 to 0.98 | 0.00 to 0.01 |
+| cross 4, by the piano | right | 0.79 | 0.06 |
+| rug by the sofa | right | 0.79 | 0.06 |
+| door open, facing it | right | 0.71 | 0.09 |
+| dark sofa | right | 0.66 | 0.09 |
+| table and chairs moved a metre | right | 0.56 | 0.04 |
+| cluttered room | right | 0.55 | 0.16 |
+| person walking past | right | 0.65 | 0.12 |
+| person standing in front | right | 0.66 | 0.03 |
+| gamepad drive, 2 minutes | right | 0.68 | 0.07 |
+| on the counter | wrong | 0.42 | 0.04 |
+| a metre off (cross 2 to cross 1) | wrong | 0.35 | 0.00 |
+| wrong room (cross 4 to cross 1) | wrong | 0.22 | 0.02 |
+| quarter turn, lifted | wrong | 0.30 | 0.00 |
+
+- **A stays 0.55; T goes from 0.10 to 0.20.** Every right pose agreed 0.55
+  or more and every wrong one 0.43 or less. At 0.10 the living room failed
+  at the right pose: chair and table legs the map remembers let 8 to 16% of
+  beams through, in many small patches, so the forgiven patch does not
+  cover them, and the cluttered room and the person walking past were
+  dropped. At 0.20 no right recording fails for more than half a second
+  and no wrong one passes a single scan.
+- **Through did not catch any wrong pose here; agree caught them all.** The
+  case T was built for, a wrong room that a spin found and that fits well,
+  was not recorded (a spin cannot be made to land wrong on demand). Phase
+  2's search tests on the recordings are where it shows up.
+- **Moves the robot is not told about are caught in about 6 s**: lifted a
+  metre along the passage, and carried to another room with the lidar on.
+- **Crosses.** The lidar's distance to every taped wall matches the tape to
+  1 to 2 cm. The map draws each wall 4 to 10 cm inside its real surface
+  (walls are two or three cells thick), so AMCL at the crosses is as good as
+  the map can show, about 5 cm.
+- **Map audit.** The kitchen is clean. Through beams cluster on the living
+  room's table and chair legs and along the piano wall. Re-mapping would
+  not help: chairs move every day; this is the learner's job.
+- **Body beams:** none. **Scan time:** 0.133 s; `--stamp-offset` not
+  needed while the right poses agree this well.
+- **Fixes to try:** none of the rows these recordings can answer is needed
+  (a person standing in front, AMCL at the crosses, a carry with the lidar
+  on, a wrong pose passing through one wide arc).
+- **Still to check on the floor:** a robot carried while asleep shows
+  `stale`, and a spin in the wrong room is never accepted.
+
 ### Phase 2: the search (four evenings)
 
 - `robot_nav.global_search(...)`: grids, coarse pass, sixty candidates,

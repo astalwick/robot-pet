@@ -68,7 +68,7 @@ def carried(scans, index, offset):
     return {"x": pose["x"] + share * (other["x"] - pose["x"]), "y": pose["y"] + share * (other["y"] - pose["y"]), "yaw": pose["yaw"] + share * turned}
 
 
-def degree_ranges(degrees):
+def degree_runs(degrees):
     """[1, 2, 3, 7] -> '1-3, 7'"""
     runs = []
     for degree in degrees:
@@ -128,7 +128,7 @@ def main():
         for index, scan in enumerate(scans):
             ranges = [math.inf if value is None else value for value in scan["ranges"]]
             scan_args = (ranges, scan["angle_min"], scan["angle_increment"], scan["range_min"], scan["range_max"])
-            measured = np.asarray(ranges)[np.round((np.radians(np.arange(360)) - scan["angle_min"]) / scan["angle_increment"]).astype(int) % len(ranges)]
+            measured = robot_nav.degree_ranges(*scan_args)
             body_hits += measured < BODY_RANGE_M
             body_scans += 1
             scan_time = scan["scan_time"]
@@ -170,7 +170,7 @@ def main():
         # how long one turn takes: a --stamp-offset of half this (either sign) judges mid-scan
         print(f"scan time: {scan_time:.3f} s")
     if body_scans:
-        print(f"beams shorter than {BODY_RANGE_M} m in {BODY_SHARE:.0%} of {body_scans} scans (the body): {degree_ranges(np.flatnonzero(body_hits / body_scans >= BODY_SHARE).tolist())}")
+        print(f"beams shorter than {BODY_RANGE_M} m in {BODY_SHARE:.0%} of {body_scans} scans (the body): {degree_runs(np.flatnonzero(body_hits / body_scans >= BODY_SHARE).tolist())}")
     for name, ends in through_ends.items():
         squares = {}
         for x, y in ends:

@@ -166,6 +166,10 @@ DRIVE_HOLD_SECONDS = 1.5
 SENSOR_STALE_SECONDS = 1.0
 # a push is the robot rocking this long or less
 NUDGE_WINDOW_SECONDS = 1.0
+# Handling ends after this long even if a cliff sensor still sees no floor,
+# so one stuck sensor cannot hold the pose forever. A robot still in the air
+# is noticed as picked up again on the next tick.
+HANDLED_MAX_SECONDS = 10.0
 # a `record` without seconds records this long, and none longer than the max
 RECORD_SECONDS = 10.0
 RECORD_MAX_SECONDS = 120.0
@@ -232,7 +236,7 @@ class NavNode(Node):
         # the IMU's (when, roll, pitch) over the last second, how it sat before
         # it drove, and whether a cliff met while driving (a stair edge) is
         # still under a sensor. handled is why the pose stopped counting
-        # ("picked up", "pushed") until the robot is put down.
+        # ("picked up", "pushed") until the robot is put down, since handled_at.
         self.drive_time = -math.inf
         self.cliff_trips: dict[str, float] = {}
         try:
@@ -245,6 +249,7 @@ class NavNode(Node):
         self.rest_tilt: tuple[float, float] | None = None
         self.cliff_edge = False
         self.handled: str | None = None
+        self.handled_at = -math.inf
         self.quiet_since = 0.0
         # AMCL's best guess, for the recordings
         self.amcl_pose: dict[str, float] | None = None
@@ -313,6 +318,8 @@ class NavNode(Node):
         self.amcl_pose = {"x": position.x, "y": position.y, "yaw": robot_nav.yaw_from_quaternion(rotation.x, rotation.y, rotation.z, rotation.w)}
 
     def on_scan(self, scan: LaserScan) -> None:
+        if not scan.ranges:
+            return
         self.latest_scan = scan
         self.last_scan_time = time.monotonic()
         if self.recording is not None:
@@ -429,8 +436,8 @@ class NavNode(Node):
         says picked up and rocking says pushed. A cliff met while driving
         stays a cliff, not a pick-up, until the floor is back under both.
         The pose waits (start_handling) until the floor is under both cliff
-        sensors and nothing has rocked for set_down_s. A sensor that is
-        missing or silent takes no part."""
+        sensors and nothing has rocked for set_down_s, or HANDLED_MAX_SECONDS
+        have passed. A sensor that is missing or silent takes no part."""
         now = time.monotonic()
         if self.nav_lock:
             self.drive_time = now
@@ -460,8 +467,11 @@ class NavNode(Node):
             self.quiet_since = now
         if reason is not None and self.handled is None:
             self.start_handling(reason, detail)
-        elif self.handled is not None and now - self.quiet_since >= self.settings.set_down_s:
-            log.info("put down: checking the pose")
+        elif self.handled is not None and (now - self.quiet_since >= self.settings.set_down_s or now - self.handled_at >= HANDLED_MAX_SECONDS):
+            if now - self.quiet_since >= self.settings.set_down_s:
+                log.info("put down: checking the pose")
+            else:
+                log.warning("still %s after %.0f s (a cliff sensor stuck?): checking the pose", self.handled, HANDLED_MAX_SECONDS)
             self.handled = None
             with self.pose_lock:
                 if self.mode == "localize" and self.pose_state != "searching":
@@ -474,6 +484,7 @@ class NavNode(Node):
         verdict or search runs until it is put down, and a trip stops."""
         log.info("%s (%s): the pose waits until the robot is put down", reason, detail)
         self.handled = reason
+        self.handled_at = time.monotonic()
         with self.pose_lock:
             self.named = None
             if self.mode == "localize" and self.pose_state != "searching":
@@ -739,7 +750,11 @@ class NavNode(Node):
         search_interval_s while the pose is held, and at once when woken
         (Localize, a dropped pose, AMCL coming up without one)."""
         while True:
-            soon = self.search()
+            try:
+                soon = self.search()
+            except Exception:
+                log.exception("search failed; trying again")
+                soon = False
             self.search_now.wait(SEARCH_PAUSE_SECONDS if soon else self.settings.search_interval_s)
             self.search_now.clear()
 
@@ -753,6 +768,7 @@ class NavNode(Node):
         searching, after a scan taken mid-turn, and after a rival's first
         naming, so the next search says whether it stands."""
         scan = self.latest_scan
+        began, map_name = time.monotonic(), self.map_name
         if self.mode != "localize" or self.activity is not None or self.handled is not None or not self.scanning():
             return self.pose_state == "searching"
         stamp = Time.from_msg(scan.header.stamp)
@@ -760,7 +776,6 @@ class NavNode(Node):
         before = self.lookup_pose("odom", scan.header.frame_id, stamp - Duration(seconds=0.5))
         if odom_laser is None or before is None or abs(normalize_angle(odom_laser["yaw"] - before["yaw"])) > MAX_TURN_RADIANS:
             return True
-        started = time.monotonic()
         maps = robot_nav.saved_maps(self.args.maps_dir) if self.settings.other_maps else [self.map_name]
         candidates = []
         for name in maps:
@@ -778,8 +793,8 @@ class NavNode(Node):
 
         seed = None
         with self.pose_lock:
-            if self.handled is not None:
-                # picked up while this search ran: its scan may be from mid-air
+            if self.handled_at > began or self.mode != "localize" or self.map_name != map_name:
+                # picked up, or switched map or mode, while this search ran
                 return False
             if self.pose_state == "searching":
                 rival = None
@@ -797,7 +812,7 @@ class NavNode(Node):
                 now_named = rival
             self.named = None if now_named is None or seed is not None else {"pose": now_named, "odom_laser": odom_laser}
             self.search_summary = {
-                "seconds": round(time.monotonic() - started, 2),
+                "seconds": round(time.monotonic() - began, 2),
                 "best": None if not candidates else {"map": candidates[0]["map"], "agree": round(candidates[0]["agree"], 2)},
                 "winner": winner is not None,
                 "rival": None if rival is None else ("stands" if self.rival_stands else "named"),

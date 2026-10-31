@@ -301,7 +301,8 @@ NAVIGATE_TO_TOOL = {
         "(for example 'kitchen'). Returns right away while the robot is still driving; call "
         "check_navigation to wait for it to arrive. An unknown place returns the places that "
         "exist. A new navigate_to replaces the goal in progress. If the robot does not know "
-        "where it is yet, it first spins in place to find itself, then goes."
+        "where it is yet, the trip waits up to 30 seconds for it to find itself (being moved by hand "
+        "helps), then goes, or fails as lost."
     ),
     "parameters": {
         "type": "object",

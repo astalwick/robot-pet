@@ -201,24 +201,30 @@ poses on a named map, saved only while localized, so they survive reboots.
 `robot-nav-bridge.service` (`ros_nodes/nav_node.py`, logic in `robot_nav.py`)
 is the only writer of those files and the only thing that restarts `robot-nav`
 to switch modes. Whenever AMCL comes up it either sends the pose it remembered
-in `/run/robot-pet/nav-pose.json` (same map, not rebooted) or **relocalizes**:
-it asks for the motor rail, and for each saved map loads it, scatters AMCL's
-particles and spins the robot with a `turn` intent, twice if one spin is not
-enough; the first map whose pose covariance gets tight wins. That is how a robot carried to another floor
-works out which map it is on. `/run` is tmpfs, so a reboot always relocalizes.
-When no map converges the bridge keeps reading `/amcl_pose`: AMCL goes on
-estimating (with recovery on, it also re-scatters particles when the scans stop
-matching), so a short drive with the gamepad usually finishes the job.
+in `/run/robot-pet/nav-pose.json` (same map, not rebooted) or **searches**:
+`robot_nav.global_search` scores the latest scan at every pose on every saved
+map, and a clear winner named by two searches in a row is handed to AMCL as
+its initial pose, loading that map first if it is another floor. That is how
+a robot carried to another floor works out which map it is on. `/run` is
+tmpfs, so a reboot always searches. The search runs on its own thread, back
+to back while the robot does not know where it is and every few seconds while
+it does, to catch a slip. The robot never moves itself to search.
 
-A tight covariance is not proof the pose is right: AMCL only grades its
+AMCL's own confidence (its pose covariance) is not used: AMCL only grades its
 particles against each other, so a robot carried to another room keeps a
-confident wrong pose. Every tick the bridge therefore scores the latest scan
-against the map from the lidar's TF pose (`robot_nav.scan_fit`: the share of
-beams ending within 15 cm of a known wall; shown on the dashboard) and sets
-`localized` from both (`robot_nav.localized_change`): a run of bad fits, or a
-spread-out covariance, means lost; the remembered pose is dropped and a trip in
-progress is cancelled. A `navigate_to` while not localized relocalizes first,
-then goes. The bridge never spins on its own just because it looks lost.
+confident wrong pose. Every tick the bridge judges the latest scan against the
+map from the lidar's pose (`robot_nav.beam_check`: beams that agree with a
+wall, and beams that went through one), and one state says how far the pose
+is trusted: tracking, checking, searching, or stale while the lidar is off. A
+run of failed scans drops the pose (the remembered pose goes and a trip in
+progress is cancelled), unless the scan matches the last one that passed,
+carried by the wheels (`robot_nav.scan_check`, the self-check: the room
+changed there). The bridge also notices the robot picked up (the cliff
+sensors) or pushed (the IMU) and checks the pose afresh once it is put down.
+A `navigate_to` while the robot does not know where it is waits for the
+search, then goes. The bars and switches are in `localization.json`; the
+design and the floor measurements behind them are in
+`docs/plans/2026-10-26 - localization-plan.md`.
 
 Both modes also run the Nav2 navigation servers (planner, controller,
 behaviors, bt_navigator) from `config/nav2.yaml`, with the robot's footprint

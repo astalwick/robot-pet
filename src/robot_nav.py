@@ -208,16 +208,13 @@ def beam_check(
     width, height = map_info["width"], map_info["height"]
     grid = np.asarray(data, dtype=np.int16).reshape(height, width)
 
-    # one measured beam per degree, the scan beam nearest it
-    ranges = np.asarray(ranges, dtype=np.float64)
-    degrees = np.radians(np.arange(360))
-    measured = ranges[np.round((degrees - angle_min) / angle_increment).astype(int) % len(ranges)]
-    returned = np.isfinite(measured) & (measured >= range_min) & (measured <= range_max)
+    measured = degree_ranges(ranges, angle_min, angle_increment, range_min, range_max)
+    returned = np.isfinite(measured)
     if returned.sum() < CHECK_MIN_BEAMS:
         return None
 
     # ray-cast in half-cell steps to the first wall or unknown cell (off the map is unknown)
-    angles = laser_pose["yaw"] + degrees
+    angles = laser_pose["yaw"] + np.radians(np.arange(360))
     distances = np.arange(1, int(range_max / (resolution / 2)) + 1) * (resolution / 2)
     columns = np.floor((laser_pose["x"] + np.cos(angles)[:, None] * distances - map_info["origin_x"]) / resolution).astype(int)
     rows = np.floor((laser_pose["y"] + np.sin(angles)[:, None] * distances - map_info["origin_y"]) / resolution).astype(int)

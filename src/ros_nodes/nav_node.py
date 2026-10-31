@@ -247,7 +247,9 @@ class NavNode(Node):
         self.cliffs: dict[str, tuple[bool, float]] = {}
         self.tilts: deque = deque()
         self.rest_tilt: tuple[float, float] | None = None
-        self.cliff_edge = False
+        # a bridge (re)started with the robot parked at a stair edge never saw
+        # it drive there, so no floor at start counts as an edge too
+        self.cliff_edge = True
         self.handled: str | None = None
         self.handled_at = -math.inf
         self.quiet_since = 0.0

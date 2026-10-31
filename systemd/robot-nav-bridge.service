@@ -1,5 +1,5 @@
 [Unit]
-Description=Robot Nav Bridge - maps, places, relocalization and the nav hub source
+Description=Robot Nav Bridge - maps, places, finding its place and the nav hub source
 After=robot-telemetry.service robot-nav.service
 Wants=robot-telemetry.service
 

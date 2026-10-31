@@ -119,6 +119,9 @@ def planned_services(paths: list[str]) -> set[str]:
             want("gamepad-teleop.service")
             want("robot-motion.service")
             want("robot-web-dashboard.service")
+        elif path == "src/config/localization.py":
+            want("robot-nav-bridge.service")
+            want("robot-web-dashboard.service")
         elif path.startswith("src/config/"):
             want("gamepad-teleop.service")
             want("robot-vision.service")
@@ -221,6 +224,11 @@ class TestRedeployRobot(unittest.TestCase):
             services,
             {"gamepad-teleop.service", "robot-motion.service", "robot-web-dashboard.service"},
         )
+
+    def test_localization_config_restarts_the_nav_bridge(self):
+        # the nav bridge reads its bars at startup; the dashboard serves the form
+        services = planned_services(["src/config/localization.py"])
+        self.assertEqual(services, {"robot-nav-bridge.service", "robot-web-dashboard.service"})
 
     def test_pyproject_restarts_all_services(self):
         self.assertEqual(planned_services(["pyproject.toml"]), ALL_SERVICES)

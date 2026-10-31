@@ -188,6 +188,10 @@ plan_service_restarts() {
         want_restart robot-motion.service
         want_restart robot-web-dashboard.service
         ;;
+      src/config/localization.py)
+        want_restart robot-nav-bridge.service
+        want_restart robot-web-dashboard.service
+        ;;
       src/config/*)
         want_restart gamepad-teleop.service
         want_restart robot-vision.service

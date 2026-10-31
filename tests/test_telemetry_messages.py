@@ -100,7 +100,7 @@ class TelemetryMessagesTest(unittest.TestCase):
     def test_nav_update_carries_mode_map_and_pose(self):
         places = {"kitchen": {"map": "main", "x": 1.0, "y": 2.0, "yaw": 0.0}}
         goal = {"target": "kitchen", "x": 1.0, "y": 2.0, "state": "navigating", "remaining_m": 3.2}
-        message = nav_update("localize", "main", ["main", "upstairs"], True, "localizing", {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, places, True, goal, now=12.0)
+        message = nav_update("localize", "main", ["main", "upstairs"], True, "switching map", {"x": 1.0, "y": 2.0, "yaw": 0.5}, None, places, True, goal, now=12.0)
 
         self.assertEqual(message["type"], "source_update")
         self.assertEqual(message["source"], "nav")
@@ -109,18 +109,19 @@ class TelemetryMessagesTest(unittest.TestCase):
         self.assertEqual(message["map"], "main")
         self.assertEqual(message["maps"], ["main", "upstairs"])
         self.assertTrue(message["localized"])
-        self.assertEqual(message["activity"], "localizing")
+        self.assertEqual(message["activity"], "switching map")
         self.assertEqual(message["places"], places)
         self.assertTrue(message["motor_power_requested"])
         self.assertEqual(message["goal"], goal)
         self.assertEqual(message["barriers"], {})
-        self.assertIsNone(message["scan_fit"])
+        self.assertIsNone(message["search"])
 
         barriers = {"main": [{"x1": 0.0, "y1": 1.0, "x2": 2.0, "y2": 1.0}]}
         check = {"agree": 0.8, "through": 0.02, "opinion": 0.9, "passes": True}
-        message = nav_update("localize", "main", ["main"], True, None, None, None, {}, False, barriers=barriers, scan_fit=0.72, state="checking", check=check, recording="by the couch")
+        search = {"seconds": 0.4, "best": {"map": "main", "agree": 0.9}, "winner": True, "rival": None}
+        message = nav_update("localize", "main", ["main"], True, None, None, None, {}, False, barriers=barriers, search=search, state="checking", check=check, recording="by the couch")
         self.assertEqual(message["barriers"], barriers)
-        self.assertEqual(message["scan_fit"], 0.72)
+        self.assertEqual(message["search"], search)
         self.assertEqual(message["state"], "checking")
         self.assertEqual(message["check"], check)
         self.assertEqual(message["recording"], "by the couch")

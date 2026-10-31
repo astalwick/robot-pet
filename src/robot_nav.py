@@ -1,4 +1,5 @@
-"""Nav bridge logic: saved maps, places, nav.json, the map PNG and the nav socket.
+"""Nav bridge logic: saved maps, places, nav.json, the map PNG and the nav socket,
+plus the judge (beam_check) and the search for the robot's place (global_search).
 
 ros_nodes/nav_node.py wires this to ROS (the /map grid, TF, AMCL). Everything
 here is plain Python so it runs in the tests without rclpy.
@@ -10,7 +11,7 @@ Files, all under ~/.config/robot-pet:
     barriers.json {"<map>": [{"x1": .., "y1": .., "x2": .., "y2": ..}, ...]}
     maps/<name>.yaml + .pgm, written by nav2's map_saver_cli
     keepout/<name>.yaml + .pgm, the barriers drawn as a Nav2 keepout mask
-    localization.json, the judge's bars and switches (config/localization.py)
+    localization.json, the judge's and the search's bars and switches (config/localization.py)
     recordings/<time>-<label>.jsonl, scans saved for scripts/localization-replay.py
 
 config/nav.launch.py reads nav.json at robot-nav.service start; the bridge
@@ -48,20 +49,37 @@ DEFAULT_RECORDINGS_DIR = "/home/pi/.config/robot-pet/recordings"
 BARRIER_HALF_WIDTH_METERS = 0.3
 KEEPOUT_RESOLUTION_METERS = 0.05
 
-# Is the robot where it thinks it is? scan_fit is the share of lidar beams
-# whose end points land within SCAN_FIT_CELLS of a wall the map knows about.
-# A robot at its true pose scores high; one carried somewhere else scores
-# like random. AMCL's covariance cannot tell: it grades its particles on a
-# curve, so a cloud that matches nothing still has a confident best guess.
-SCAN_FIT_CELLS = 3
-SCAN_FIT_MIN_BEAMS = 30
+# the judge (beam_check) gives no verdict on a scan with fewer returned beams
+CHECK_MIN_BEAMS = 30
 # map_server marks walls 100, free 0 and unknown -1
 OCCUPIED_THRESHOLD = 50
-# Floor numbers (ground floor, 2026-10-26): 55-90% at the true pose, 44-49% at
-# the right spot facing the wrong way, 23% on the kitchen counter. Until the
-# search replaces the relocalize spin, a spin is accepted only at
-# SCAN_FIT_FOUND or better and when beam_check passes too.
-SCAN_FIT_FOUND = 0.6
+
+# The search (global_search): poses this far apart and this many degrees,
+# scored on this many beams no longer than SEARCH_BEAM_MAX_M.
+SEARCH_STEP_M = 0.2
+SEARCH_STEP_DEGREES = 3
+SEARCH_BEAMS = 60
+SEARCH_MIN_BEAMS = 20
+SEARCH_BEAM_MAX_M = 4.0
+# The sharp grid falls from 1 at a wall to 0 this far away. The coarse grid
+# is its max over a window wide enough that a pose up to half a step off, with
+# its beams up to half a step turned, still scores at least as well there as
+# the true pose does on the sharp grid.
+SEARCH_FALLOFF_M = 0.3
+SEARCH_WINDOW_M = 0.65
+# The best peaks this far apart, each climbed to the top of its hill on the
+# sharp grid in big steps, then cell by cell and degree by degree.
+SEARCH_CANDIDATES = 60
+PEAK_APART_M = 0.3
+PEAK_APART_DEGREES = 10
+CLIMB_BIG_M = 0.1
+CLIMB_BIG_DEGREES = 3
+CLIMB_MOVES = 10
+# a step either way in x, y and heading; the pose itself (no step) first
+CLIMB_NEIGHBOURS = np.array(sorted(np.ndindex(3, 3, 3), key=lambda step: step != (1, 1, 1))) - 1
+# two poses this close are one place (a clear winner, a rival, two wins in a row)
+SAME_PLACE_M = 0.3
+SAME_PLACE_DEGREES = 10
 
 # Map names become file names; place names are spoken, so they may have spaces.
 MAP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -127,45 +145,31 @@ def map_yaml_path(name: str, maps_dir: str = DEFAULT_MAPS_DIR) -> str:
     return os.path.join(maps_dir, f"{name}.yaml")
 
 
+def load_map_file(name: str, maps_dir: str = DEFAULT_MAPS_DIR) -> tuple[np.ndarray, dict[str, Any]]:
+    """A saved map as map_server serves it: OccupancyGrid data (row 0 at the
+    bottom; 100 occupied, 0 free, -1 unknown) and its map_info. The yaml is
+    map_saver's flat key: value file, read by hand (no PyYAML on the Mac)."""
+    meta = {}
+    for line in Path(map_yaml_path(name, maps_dir)).read_text().splitlines():
+        key, _, value = line.partition(":")
+        meta[key.strip()] = value.strip()
+    origin = [float(value) for value in meta["origin"].strip("[]").split(",")]
+    pixels = np.asarray(Image.open(Path(maps_dir) / meta["image"]).convert("L"), dtype=np.float64)
+    occupancy = (255 - pixels) / 255 if meta.get("negate", "0") == "0" else pixels / 255
+    grid = np.full(pixels.shape, -1, dtype=np.int16)
+    grid[occupancy > float(meta.get("occupied_thresh", 0.65))] = 100
+    grid[occupancy < float(meta.get("free_thresh", 0.25))] = 0
+    grid = np.flipud(grid)
+    map_info = {"width": grid.shape[1], "height": grid.shape[0], "resolution": float(meta["resolution"]), "origin_x": origin[0], "origin_y": origin[1]}
+    return grid.ravel(), map_info
+
+
 def resolve_mode(nav: dict[str, Any], maps_dir: str = DEFAULT_MAPS_DIR) -> tuple[str, str | None]:
     """What nav.launch.py will actually run for this nav.json: localize needs
     a map that still exists on disk, anything else is mapping."""
     if nav["mode"] == "localize" and nav["map"] and os.path.exists(map_yaml_path(nav["map"], maps_dir)):
         return "localize", nav["map"]
     return "mapping", None
-
-
-def maps_to_try(maps: list[str], last_used: str | None) -> list[str]:
-    """Relocalization order: the map we were on last, then the rest."""
-    if last_used in maps:
-        return [last_used] + [name for name in maps if name != last_used]
-    return list(maps)
-
-
-def scan_fit(
-    data, map_info: dict[str, Any], laser_pose: dict[str, float], ranges, angle_min: float, angle_increment: float, range_min: float, range_max: float
-) -> float | None:
-    """The share (0..1) of a lidar scan's beams that end within SCAN_FIT_CELLS
-    of an occupied map cell, given the lidar's pose in the map frame. None when
-    too few beams are valid to say anything. Beams that end off the map miss."""
-    ranges = np.asarray(ranges, dtype=np.float64)
-    valid = np.isfinite(ranges) & (ranges >= range_min) & (ranges <= range_max)
-    if valid.sum() < SCAN_FIT_MIN_BEAMS:
-        return None
-    angles = laser_pose["yaw"] + angle_min + angle_increment * np.flatnonzero(valid)
-    ranges = ranges[valid]
-    columns = np.floor((laser_pose["x"] + ranges * np.cos(angles) - map_info["origin_x"]) / map_info["resolution"]).astype(int)
-    rows = np.floor((laser_pose["y"] + ranges * np.sin(angles) - map_info["origin_y"]) / map_info["resolution"]).astype(int)
-    width, height = map_info["width"], map_info["height"]
-    grid = np.asarray(data, dtype=np.int16).reshape(height, width)
-    # near_wall: occupied cells grown by SCAN_FIT_CELLS in every direction
-    occupied = np.pad(grid >= OCCUPIED_THRESHOLD, SCAN_FIT_CELLS)
-    near_wall = np.zeros((height, width), dtype=bool)
-    for shift_y in range(2 * SCAN_FIT_CELLS + 1):
-        for shift_x in range(2 * SCAN_FIT_CELLS + 1):
-            near_wall |= occupied[shift_y : shift_y + height, shift_x : shift_x + width]
-    on_map = (columns >= 0) & (columns < width) & (rows >= 0) & (rows < height)
-    return float(near_wall[rows[on_map], columns[on_map]].sum() / len(ranges))
 
 
 def beam_check(
@@ -204,7 +208,7 @@ def beam_check(
     degrees = np.radians(np.arange(360))
     measured = ranges[np.round((degrees - angle_min) / angle_increment).astype(int) % len(ranges)]
     returned = np.isfinite(measured) & (measured >= range_min) & (measured <= range_max)
-    if returned.sum() < SCAN_FIT_MIN_BEAMS:
+    if returned.sum() < CHECK_MIN_BEAMS:
         return None
 
     # ray-cast in half-cell steps to the first wall or unknown cell (off the map is unknown)
@@ -264,6 +268,174 @@ def beam_check(
         "passes": agree_share >= settings.agree_min and through_share <= settings.through_max,
         "classes": classes,
     }
+
+
+def search_grids(data, map_info: dict[str, Any]) -> dict[str, Any]:
+    """What global_search needs from one saved map, built once per map: the
+    sharp score grid (1 at a wall, falling to 0 at SEARCH_FALLOFF_M), the
+    coarse one (the sharp one's max over SEARCH_WINDOW_M), the walls, and the
+    free cells it tries poses on. The grids are padded by a beam and a refine
+    step so no beam end leaves them."""
+    resolution = map_info["resolution"]
+    grid = np.asarray(data, dtype=np.int16).reshape(map_info["height"], map_info["width"])
+    # a climb walks at most CLIMB_MOVES big steps and as many cells
+    pad = math.ceil(SEARCH_BEAM_MAX_M / resolution + CLIMB_MOVES * (CLIMB_BIG_M / resolution + 1)) + 1
+    walls = np.pad(grid >= OCCUPIED_THRESHOLD, pad)
+    # distance in cells to the nearest wall, out to the falloff, by shifting
+    # the walls (the padding is wider than the reach, so nothing wraps round)
+    reach = math.ceil(SEARCH_FALLOFF_M / resolution)
+    distance = np.full(walls.shape, np.inf)
+    for shift_y in range(-reach, reach + 1):
+        for shift_x in range(-reach, reach + 1):
+            moved = np.roll(walls, (shift_y, shift_x), axis=(0, 1))
+            distance[moved] = np.minimum(distance[moved], math.hypot(shift_x, shift_y))
+    sharp = np.clip(1 - distance * resolution / SEARCH_FALLOFF_M, 0, 1)
+    half_window = round(SEARCH_WINDOW_M / resolution / 2)
+    coarse = sharp.copy()
+    for axis in (0, 1):
+        spread = coarse.copy()
+        for shift in range(-half_window, half_window + 1):
+            np.maximum(spread, np.roll(coarse, shift, axis=axis), out=spread)
+        coarse = spread
+    step = round(SEARCH_STEP_M / resolution)
+    rows, columns = np.nonzero(grid[::step, ::step] == 0)
+    return {
+        "data": data,
+        "map_info": map_info,
+        "sharp": sharp,
+        "coarse": coarse,
+        "walls": walls,
+        "pad": pad,
+        # the free poses tried, in grid cells (fractional: the cell centres)
+        "free_columns": columns * step + 0.5,
+        "free_rows": rows * step + 0.5,
+    }
+
+
+def global_search(grids: dict[str, Any], ranges, angle_min: float, angle_increment: float, range_min: float, range_max: float, settings: LocalizationSettings) -> list[dict[str, Any]]:
+    """Where on this map could the lidar be? One scan is scored at every free
+    pose (SEARCH_STEP_M apart, every SEARCH_STEP_DEGREES) on SEARCH_BEAMS of
+    its beams: the coarse grid summed at the beam ends, minus one for each beam
+    whose midpoint lands on a wall (the end sum alone lets a wrong pose cross
+    walls freely). The SEARCH_CANDIDATES best distinct peaks are refined on the
+    sharp grid and judged (beam_check): the grids only choose what gets judged.
+
+    Returns the candidates, best agree first: lidar poses in the map frame with
+    the judge's agree, through and opinion, and committable when they are good
+    enough to seed (agree_min + commit_margin, through_max, and two thirds of
+    the returned beams with an opinion). Empty when the scan has too few beams."""
+    map_info = grids["map_info"]
+    resolution, pad = map_info["resolution"], grids["pad"]
+    ranges = np.asarray(ranges, dtype=np.float64)
+    usable = np.flatnonzero(np.isfinite(ranges) & (ranges >= range_min) & (ranges <= min(range_max, SEARCH_BEAM_MAX_M)))
+    if len(usable) < SEARCH_MIN_BEAMS:
+        return []
+    beams = usable[np.linspace(0, len(usable) - 1, min(SEARCH_BEAMS, len(usable))).round().astype(int)]
+    beam_angles = angle_min + angle_increment * beams
+    beam_cells = ranges[beams] / resolution
+
+    # coarse pass: every free pose at every heading, one heading at a time
+    origin_columns = grids["free_columns"] + pad
+    origin_rows = grids["free_rows"] + pad
+    headings = np.radians(np.arange(0, 360, SEARCH_STEP_DEGREES))
+    scores = np.empty((len(headings), len(origin_columns)))
+    for index, heading in enumerate(headings):
+        scores[index] = pose_scores(grids["coarse"], grids["walls"], origin_columns, origin_rows, heading + beam_angles, beam_cells)
+
+    # the best distinct peaks, best first
+    peaks: list[tuple[float, float, float]] = []
+    best = np.argsort(scores, axis=None)[::-1][: SEARCH_CANDIDATES * 100]
+    for flat in best:
+        heading_index, pose_index = divmod(int(flat), len(origin_columns))
+        peak = (origin_columns[pose_index], origin_rows[pose_index], headings[heading_index])
+        if all(not same_cell_pose(peak, other, PEAK_APART_M / resolution, PEAK_APART_DEGREES) for other in peaks):
+            peaks.append(peak)
+            if len(peaks) == SEARCH_CANDIDATES:
+                break
+
+    # climb each peak to the top of its hill on the sharp grid; peaks that
+    # meet at the same top are one candidate. Then judge each.
+    tops: list[tuple[float, float, float]] = []
+    for peak in peaks:
+        top = climb(grids, peak, beam_angles, beam_cells)
+        if all(not same_cell_pose(top, other, PEAK_APART_M / resolution, PEAK_APART_DEGREES) for other in tops):
+            tops.append(top)
+    candidates = []
+    for column, row, heading in tops:
+        laser_pose = {
+            "x": map_info["origin_x"] + (column - pad) * resolution,
+            "y": map_info["origin_y"] + (row - pad) * resolution,
+            "yaw": math.atan2(math.sin(heading), math.cos(heading)),
+        }
+        check = beam_check(grids["data"], map_info, laser_pose, ranges, angle_min, angle_increment, range_min, range_max, settings)
+        if check is None:
+            continue
+        committable = check["agree"] >= settings.agree_min + settings.commit_margin and check["through"] <= settings.through_max and check["opinion"] >= 2 / 3
+        candidates.append({**laser_pose, "agree": check["agree"], "through": check["through"], "opinion": check["opinion"], "committable": committable})
+    return sorted(candidates, key=lambda candidate: candidate["agree"], reverse=True)
+
+
+def climb(grids: dict[str, Any], pose: tuple[float, float, float], beam_angles, beam_cells) -> tuple[float, float, float]:
+    """Walk a pose (padded grid cells and radians) uphill on the sharp grid:
+    to the best of its neighbours, a step in x, y and heading either way,
+    until none is better. Big steps first, then small ones."""
+    for step_cells, step_turn in ((CLIMB_BIG_M / grids["map_info"]["resolution"], math.radians(CLIMB_BIG_DEGREES)), (1.0, math.radians(1))):
+        for _ in range(CLIMB_MOVES):
+            # the pose itself first, so on a tie it stays put
+            neighbours = np.array(pose) + CLIMB_NEIGHBOURS * (step_cells, step_cells, step_turn)
+            scores = pose_scores(grids["sharp"], grids["walls"], neighbours[:, 0], neighbours[:, 1], neighbours[:, 2, None] + beam_angles, beam_cells)
+            best = int(np.argmax(scores))
+            if best == 0:
+                break
+            pose = tuple(neighbours[best])
+    return pose
+
+
+def pose_scores(score_grid, walls, columns, rows, beam_angles, beam_cells):
+    """For poses at (columns, rows) in padded grid cells, with their beams'
+    angles (one row per pose, or one row for all): score_grid summed at the
+    beam ends, minus the beams whose midpoint lands on a wall."""
+    end_columns, end_rows = np.cos(beam_angles) * beam_cells, np.sin(beam_angles) * beam_cells
+    ends = score_grid[(rows[:, None] + end_rows).astype(int), (columns[:, None] + end_columns).astype(int)].sum(axis=1)
+    crossed = walls[(rows[:, None] + end_rows / 2).astype(int), (columns[:, None] + end_columns / 2).astype(int)].sum(axis=1)
+    return ends - crossed
+
+
+def same_cell_pose(first, second, apart_cells: float, apart_degrees: float) -> bool:
+    turned = abs(math.degrees(math.atan2(math.sin(first[2] - second[2]), math.cos(first[2] - second[2]))))
+    return math.hypot(first[0] - second[0], first[1] - second[1]) <= apart_cells and turned <= apart_degrees
+
+
+def same_place(first: dict[str, Any], second: dict[str, Any]) -> bool:
+    """Two map poses (with their map's name) that are one place: same map,
+    within SAME_PLACE_M and SAME_PLACE_DEGREES."""
+    turned = abs(math.degrees(math.atan2(math.sin(first["yaw"] - second["yaw"]), math.cos(first["yaw"] - second["yaw"]))))
+    return first.get("map") == second.get("map") and math.hypot(first["x"] - second["x"], first["y"] - second["y"]) <= SAME_PLACE_M and turned <= SAME_PLACE_DEGREES
+
+
+def clear_winner(candidates: list[dict[str, Any]], settings: LocalizationSettings) -> dict[str, Any] | None:
+    """The committable candidate whose agree beats every other committable
+    one by commit_margin (not counting candidates in the same place, which
+    are the same answer twice), or None: then wait for the next scan."""
+    committable = [candidate for candidate in candidates if candidate["committable"]]
+    if not committable:
+        return None
+    best = max(committable, key=lambda candidate: candidate["agree"])
+    for other in committable:
+        if not same_place(best, other) and other["agree"] > best["agree"] - settings.commit_margin:
+            return None
+    return best
+
+
+def find_rival(candidates: list[dict[str, Any]], held: dict[str, Any], held_agree: float, settings: LocalizationSettings) -> dict[str, Any] | None:
+    """The best committable candidate somewhere other than the held pose that
+    agrees better than it by rival_margin, or None. One search is one scan's
+    opinion; the bridge lets a rival stand only when two searches in a row
+    name it."""
+    for candidate in candidates:
+        if candidate["committable"] and not same_place(candidate, held) and candidate["agree"] >= held_agree + settings.rival_margin:
+            return candidate
+    return None
 
 
 def compose_poses(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:

@@ -688,7 +688,7 @@ def nav_update(
     motor_power_requested: bool,
     goal: dict[str, Any] | None = None,
     barriers: dict[str, list[dict[str, float]]] | None = None,
-    scan_fit: float | None = None,
+    search: dict[str, Any] | None = None,
     state: str | None = None,
     check: dict[str, Any] | None = None,
     recording: str | None = None,
@@ -697,15 +697,15 @@ def nav_update(
     """The nav bridge's hub message.
 
     mode is "mapping" or "localize"; map_name is the saved map in use (None
-    while mapping). pose is {x, y, yaw} in the map frame. scan_fit is how well
-    the latest lidar scan matches the map from that pose, 0..1, or None when
-    there is no fresh scan or no map pose. state is how far the pose is
+    while mapping). pose is {x, y, yaw} in the map frame. search is the last
+    search's summary {seconds, best {map, agree} or None, winner, rival None /
+    "named" / "stands"}, or None before the first. state is how far the pose is
     trusted: tracking, checking, searching, or stale while the lidar is off
     (None while mapping); localized is tracking, or checking with the latest
     scan passing. check is the judge's latest verdict {agree, through,
     opinion, passes}, or None. recording is the label of a `record` in
     progress, or None. activity names what
-    the bridge is busy with ("localizing", "saving"), or None. goal is the
+    the bridge is busy with ("switching map", "saving"), or None. goal is the
     current or last navigation goal {target, x, y, state, remaining_m}, state
     one of navigating / arrived / cancelled / failed, plus a reason once it has
     ended early (stopped, replaced, rejected, ...), or None if there was none.
@@ -722,7 +722,7 @@ def nav_update(
         "activity": activity,
         "pose": pose,
         "map_info": map_info,
-        "scan_fit": scan_fit,
+        "search": search,
         "state": state,
         "check": check,
         "recording": recording,

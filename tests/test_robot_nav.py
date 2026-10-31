@@ -75,10 +75,16 @@ class NavConfigTest(unittest.TestCase):
         self.assertEqual(robot_nav.resolve_mode(nav, self.maps_dir), ("localize", "main"))
         self.assertEqual(robot_nav.resolve_mode({"mode": "mapping", "map": None}, self.maps_dir), ("mapping", None))
 
-    def test_maps_to_try_puts_the_last_used_map_first(self):
-        self.assertEqual(robot_nav.maps_to_try(["main", "upstairs"], "upstairs"), ["upstairs", "main"])
-        self.assertEqual(robot_nav.maps_to_try(["main", "upstairs"], None), ["main", "upstairs"])
-        self.assertEqual(robot_nav.maps_to_try(["main", "upstairs"], "deleted"), ["main", "upstairs"])
+    def test_load_map_file_reads_what_map_saver_writes(self):
+        os.makedirs(self.maps_dir)
+        # 3 wide, 2 tall; the grid's row 0 is the image's bottom row. map_saver
+        # writes walls 0, free 254 and unknown 205 with these thresholds.
+        Image.fromarray(np.array([[0, 254, 205], [254, 254, 0]], dtype=np.uint8)).save(os.path.join(self.maps_dir, "main.pgm"))
+        with open(robot_nav.map_yaml_path("main", self.maps_dir), "w") as file_obj:
+            file_obj.write("image: main.pgm\nmode: trinary\nresolution: 0.05\norigin: [-1.5, 2.0, 0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n")
+        data, map_info = robot_nav.load_map_file("main", self.maps_dir)
+        self.assertEqual(map_info, {"width": 3, "height": 2, "resolution": 0.05, "origin_x": -1.5, "origin_y": 2.0})
+        self.assertEqual(data.tolist(), [0, 0, 100, 100, 0, -1])
 
 
 class NavMathTest(unittest.TestCase):
@@ -118,7 +124,7 @@ class NavMathTest(unittest.TestCase):
         self.assertFalse(robot_nav.valid_place_name("kitchen!"))
 
 
-class ScanFitTest(unittest.TestCase):
+class BeamCheckTest(unittest.TestCase):
     # A 5 m square room at 5 cm: the outer ring of cells is wall, the rest free.
     ROOM = {"width": 100, "height": 100, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}
 
@@ -144,27 +150,6 @@ class ScanFitTest(unittest.TestCase):
                 hits.append((0.05 - y) / math.sin(angle))
             ranges.append(min(hits))
         return ranges
-
-    def fit(self, ranges, laser_pose):
-        return robot_nav.scan_fit(self.room(), self.ROOM, laser_pose, ranges, 0.0, math.radians(1), 0.15, 12.0)
-
-    def test_the_scan_fits_from_the_true_pose(self):
-        ranges = self.ray_cast(2.0, 1.5, 0.3)
-        self.assertGreater(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": 0.3}), 0.95)
-
-    def test_the_scan_does_not_fit_from_the_wrong_pose(self):
-        ranges = self.ray_cast(2.0, 1.5, 0.0)
-        # believed to face 45 degrees off: the room's outline lands across the floor and off the map
-        self.assertLess(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": math.radians(45)}), 0.4)
-        # a metre off: only the beams along the walls still match
-        self.assertLess(self.fit(ranges, {"x": 3.0, "y": 1.5, "yaw": 0.0}), 0.6)
-
-    def test_invalid_beams_do_not_count_and_too_few_is_no_opinion(self):
-        ranges = self.ray_cast(2.5, 2.5, 0.0)
-        ranges[:180] = [math.inf] * 90 + [0.1] * 90  # out of range and under range_min
-        self.assertGreater(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}), 0.95)
-        ranges[180:340] = [math.nan] * 160
-        self.assertIsNone(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}))
 
     def check(self, ranges, laser_pose, **settings):
         return robot_nav.beam_check(
@@ -244,6 +229,77 @@ class ScanFitTest(unittest.TestCase):
         back = robot_nav.relative_pose(map_odom, laser)
         for key in ("x", "y", "yaw"):
             self.assertAlmostEqual(back[key], odom_laser[key])
+
+
+class SearchTest(unittest.TestCase):
+    # A 5 m square room at 5 cm with a box in it, so only one pose sees what
+    # the lidar sees. Without the box, four poses a quarter turn apart do.
+    ROOM = {"width": 100, "height": 100, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}
+
+    def room(self, box=True):
+        grid = np.zeros((100, 100), dtype=np.int16)
+        grid[0, :] = grid[-1, :] = grid[:, 0] = grid[:, -1] = 100
+        if box:
+            grid[55:70, 65:85] = 100
+        return grid
+
+    def ray_cast(self, grid, x, y, yaw):
+        """Ranges a lidar at (x, y, yaw) sees, one beam a degree, stepping a
+        centimetre at a time to the first wall cell."""
+        ranges = []
+        for beam in range(360):
+            angle = yaw + math.radians(beam)
+            distance = 0.0
+            while grid[int((y + distance * math.sin(angle)) / 0.05), int((x + distance * math.cos(angle)) / 0.05)] < 50:
+                distance += 0.01
+            ranges.append(distance)
+        return ranges
+
+    def search(self, grid, ranges):
+        grids = robot_nav.search_grids(grid.ravel(), self.ROOM)
+        return robot_nav.global_search(grids, ranges, 0.0, math.radians(1), 0.15, 12.0, LocalizationSettings())
+
+    def test_the_search_finds_the_true_pose(self):
+        grid = self.room()
+        truth = {"x": 1.5, "y": 2.0, "yaw": 0.4}
+        winner = robot_nav.clear_winner(self.search(grid, self.ray_cast(grid, **truth)), LocalizationSettings())
+        self.assertTrue(robot_nav.same_place(winner, truth))
+        self.assertLess(math.hypot(winner["x"] - truth["x"], winner["y"] - truth["y"]), 0.1)
+
+    def test_a_room_that_looks_the_same_from_four_places_has_no_clear_winner(self):
+        grid = self.room(box=False)
+        candidates = self.search(grid, self.ray_cast(grid, 1.5, 2.0, 0.4))
+        self.assertGreaterEqual(sum(candidate["committable"] for candidate in candidates), 4)
+        self.assertIsNone(robot_nav.clear_winner(candidates, LocalizationSettings()))
+
+    def test_too_few_beams_is_no_search(self):
+        grid = self.room()
+        ranges = self.ray_cast(grid, 1.5, 2.0, 0.4)
+        ranges[10:] = [math.inf] * 350
+        self.assertEqual(self.search(grid, ranges), [])
+
+    def candidate(self, x, agree, map_name="main", committable=True):
+        return {"x": x, "y": 0.0, "yaw": 0.0, "agree": agree, "committable": committable, "map": map_name}
+
+    def test_a_clear_winner_beats_every_other_place_by_the_margin(self):
+        settings = LocalizationSettings(commit_margin=0.1)
+        best = self.candidate(0.0, 0.9)
+        # the same place twice is one answer; an uncommittable one does not count
+        self.assertIs(robot_nav.clear_winner([best, self.candidate(0.1, 0.88), self.candidate(3.0, 0.95, committable=False)], settings), best)
+        self.assertIsNone(robot_nav.clear_winner([best, self.candidate(3.0, 0.85)], settings))
+        # the same spot on another floor is another place
+        self.assertIsNone(robot_nav.clear_winner([best, self.candidate(0.0, 0.85, "upstairs")], settings))
+        self.assertIsNone(robot_nav.clear_winner([self.candidate(0.0, 0.9, committable=False)], settings))
+
+    def test_a_rival_is_a_better_place_somewhere_else(self):
+        settings = LocalizationSettings(rival_margin=0.3)
+        held = {"x": 0.0, "y": 0.0, "yaw": 0.0, "map": "main"}
+        rival = self.candidate(1.0, 0.9)
+        self.assertIs(robot_nav.find_rival([self.candidate(0.1, 0.95), rival], held, 0.6, settings), rival)
+        self.assertIsNone(robot_nav.find_rival([rival], held, 0.65, settings))
+        self.assertIsNone(robot_nav.find_rival([self.candidate(1.0, 0.9, committable=False)], held, 0.5, settings))
+        turned = {"x": 0.0, "y": 0.0, "yaw": math.pi, "agree": 0.9, "committable": True, "map": "main"}
+        self.assertIs(robot_nav.find_rival([turned], held, 0.5, settings), turned)
 
 
 class RenderMapPngTest(unittest.TestCase):

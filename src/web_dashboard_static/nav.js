@@ -18,7 +18,7 @@ const DEBUG = new URLSearchParams(location.search).has('debug');
 const POSITION_TEXT = {
   tracking: ['sure', 'ok'],
   checking: ['checking my position, sure after a short drive', 'warn'],
-  searching: ['lost, press Localize', 'err'],
+  searching: ['finding my place, moving me by hand helps', 'err'],
   stale: ['lidar off', 'muted'],
 };
 
@@ -46,7 +46,6 @@ export function renderNav(snapshot, sources) {
     row('mode', '', nav.mode, nav.mode === 'localize' ? 'ok' : ''),
     row('map', '', nav.map || (nav.mode === 'mapping' ? 'new map' : '--')),
     row('position', '', ...(POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
-    row('scan fit', '', nav.scan_fit == null ? '--' : `${Math.round(nav.scan_fit * 100)}%`, nav.scan_fit == null ? 'muted' : ''),
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),
@@ -57,6 +56,7 @@ export function renderNav(snapshot, sources) {
     rows.push(
       row('state', '', `${nav.state || '--'}${nav.localized ? ', localized' : ''}`),
       row('judge', '', check ? `agree ${check.agree}, through ${check.through}, opinion ${check.opinion}` : '--', check ? (check.passes ? 'ok' : 'err') : 'muted'),
+      row('search', '', searchText(nav.search), nav.search && nav.search.rival === 'stands' ? 'err' : 'muted'),
       row('recording', '', nav.recording || 'no', nav.recording ? 'warn' : 'muted'),
     );
   }
@@ -75,6 +75,15 @@ function goalText(goal) {
     return `${target}, ${goal.remaining_m == null ? '?' : fmt(goal.remaining_m, ' m', 1)} left`;
   }
   return `${goal.state} ${target}${goal.reason ? ` (${goal.reason})` : ''}`;
+}
+
+// the last search: how long it took, its best place, and a winner or rival
+function searchText(search) {
+  if (!search) return '--';
+  const best = search.best ? `best ${search.best.agree} on ${search.best.map}` : 'nothing';
+  const found = search.winner ? ', clear winner' : '';
+  const rival = search.rival ? `, better place ${search.rival}` : '';
+  return `${search.seconds} s, ${best}${found}${rival}`;
 }
 
 function goalClass(goal) {

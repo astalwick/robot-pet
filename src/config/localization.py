@@ -54,6 +54,21 @@ class LocalizationSettings:
     fail_scans: int = 4
     # wheel travel since the pose was found before it counts as confirmed
     motion_gate_m: float = 0.3
+    # The search commits to a pose that agrees at least agree_min +
+    # commit_margin and beats every other place by commit_margin; the gap to
+    # agree_min stops the robot flapping between found and lost.
+    commit_margin: float = 0.1
+    # A place that agrees better than the held pose by rival_margin, named by
+    # two searches in a row, drops the held pose (a slip or a half turn).
+    # On the floor the true place led a slipped pose by 0.62 or more; while
+    # driving correctly nothing led by more than 0.34 (AMCL's heading lagging
+    # 10-15 degrees for a few seconds).
+    rival: bool = True
+    rival_margin: float = 0.4
+    # search every saved map, not only the one in use (another floor)
+    other_maps: bool = True
+    # seconds between searches while the pose is held; back to back while searching
+    search_interval_s: float = 5.0
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
@@ -69,6 +84,11 @@ class LocalizationSettings:
             through_max=clamp(float(values.get("through_max", defaults.through_max)), 0.0, 1.0),
             fail_scans=int(clamp(float(values.get("fail_scans", defaults.fail_scans)), 1, 20)),
             motion_gate_m=clamp(float(values.get("motion_gate_m", defaults.motion_gate_m)), 0.0, 3.0),
+            commit_margin=clamp(float(values.get("commit_margin", defaults.commit_margin)), 0.0, 0.5),
+            rival=bool(values.get("rival", defaults.rival)),
+            rival_margin=clamp(float(values.get("rival_margin", defaults.rival_margin)), 0.0, 0.5),
+            other_maps=bool(values.get("other_maps", defaults.other_maps)),
+            search_interval_s=clamp(float(values.get("search_interval_s", defaults.search_interval_s)), 1.0, 60.0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,6 +106,11 @@ LOCALIZATION_FIELDS = (
     {"key": "through_max", "label": "Through at most", "type": "number", "help": "0 .. 1; share of beams allowed through walls", "min": 0.0, "max": 1.0, "step": 0.01},
     {"key": "fail_scans", "label": "Failed scans to drop", "type": "number", "help": "1 .. 20 in a row, two a second", "min": 1, "max": 20, "step": 1},
     {"key": "motion_gate_m", "label": "Drive to confirm (m)", "type": "number", "help": "0 .. 3; wheel travel before a found pose counts as sure", "min": 0.0, "max": 3.0, "step": 0.05},
+    {"key": "commit_margin", "label": "Search margin", "type": "number", "help": "0 .. 0.5; a found place must agree this much above the bar and above every other place", "min": 0.0, "max": 0.5, "step": 0.01},
+    {"key": "rival", "label": "Catch slips", "type": "boolean", "help": "Drop the pose when the search twice finds a clearly better place"},
+    {"key": "rival_margin", "label": "Slip margin", "type": "number", "help": "0 .. 0.5; how much better that place must agree", "min": 0.0, "max": 0.5, "step": 0.01},
+    {"key": "other_maps", "label": "Search other maps", "type": "boolean", "help": "Also look on the other saved maps (another floor)"},
+    {"key": "search_interval_s", "label": "Search every (s)", "type": "number", "help": "1 .. 60, while the robot knows where it is", "min": 1.0, "max": 60.0, "step": 1},
 )
 
 

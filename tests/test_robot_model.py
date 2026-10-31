@@ -44,9 +44,9 @@ class RobotModelTest(unittest.TestCase):
         self.assertEqual(nav2.count('"/keepout_mask"'), 2)
         # Our motion node speaks plain Twist; both cmd_vel publishers must agree.
         self.assertEqual(nav2.count("enable_stamped_cmd_vel: false"), 2)
-        # AMCL recovers from a wrong pose on its own while driving (0.0 turns that off)
-        self.assertIn("recovery_alpha_fast: 0.1", nav2)
-        self.assertIn("recovery_alpha_slow: 0.001", nav2)
+        # AMCL's own recovery is off; the nav bridge's search finds a carried robot
+        self.assertIn("recovery_alpha_fast: 0.0", nav2)
+        self.assertIn("recovery_alpha_slow: 0.0", nav2)
         # AMCL corrects every 10 cm or 6 degrees with a sharp beam weight on our 5 cm map
         self.assertIn("update_min_d: 0.1", nav2)
         self.assertIn("update_min_a: 0.1", nav2)

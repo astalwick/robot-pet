@@ -25,18 +25,18 @@ amcl:
     laser_min_range: -1.0
     laser_model_type: "likelihood_field"
     max_beams: 60
-    # relocalize starts from a uniform spread over the whole map: 2000 particles
+    # a fresh start spreads over the whole map: 2000 particles
     # (the default) was too thin for 40 m2 of floor at every heading
     max_particles: 5000
     min_particles: 1000
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    # Recovery: when the scans stop matching the map for a while (the robot
-    # was carried), sprinkle random particles over the free space so a drive
-    # finds the real spot again. The textbook values; 0.0 would turn it off.
-    recovery_alpha_fast: 0.1
-    recovery_alpha_slow: 0.001
+    # Recovery off: AMCL sprinkling random particles over the map when the
+    # scans stop matching makes it jump to look-alike spots on its own. The
+    # nav bridge's search finds a carried robot instead, and hands AMCL the pose.
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
     random_seed: -1
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"

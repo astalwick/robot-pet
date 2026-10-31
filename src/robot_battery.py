@@ -226,7 +226,7 @@ class BatteryRunner:
         return isinstance(drive_status, dict) and drive_status.get("motion_power_requested") is True
 
     def _nav_power_requested(self, snapshot: dict[str, Any]) -> bool:
-        # the nav bridge wants the rail (and so the lidar) while it relocalizes
+        # the nav bridge wants the rail (and so the lidar) for a trip
         source = (snapshot.get("sources") or {}).get("nav") or {}
         if source.get("stale") is not False:
             return False

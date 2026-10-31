@@ -234,8 +234,11 @@ saved map:
   coarse cell always scores at least as well as the true pose on the end
   sum (Hess's step rule). About 9 million lookups per map, plus as many
   for the midpoints; no ray casting here.
-- **Candidates.** The sixty best distinct peaks, each refined on the sharp
-  grid within ±35 cm and ±5 degrees, then run through the judge. The judge
+- **Candidates.** The sixty best distinct peaks (0.3 m or 10 degrees
+  apart), each climbed on the sharp grid (a step of 5 cm or 1 degree at a
+  time, while the score improves) and the tops that meet deduplicated,
+  then run through the judge. (Built first as a fixed ±35 cm, ±5 degree
+  window; the climb finds the same tops in fewer lookups.) The judge
   decides; the grid scores only choose what gets judged.
 - **Commit.** A candidate is good enough to commit when agree ≥ A + M,
   through ≤ T, and two thirds of its returned beams have an opinion. It is
@@ -550,6 +553,32 @@ Twenty recordings, replayed at the pose the robot believed. Agree is the
   re-found within a few seconds. Ten minutes of gamepad driving: never
   dropped. Carried upstairs with the second floor saved: the map switches
   and a trip there runs.
+
+#### Recordings, 2026-10-30 (ground floor)
+
+The phase 1 recordings replayed through the search every fourth scan
+(`scripts/localization-replay.py --search`), scans taken mid-turn skipped.
+
+- **Never a wrong room.** At the crosses, the rug, the open door and the
+  dark sofa the clear winner was the true pose on 18 to 20 scans of 20.
+  One wrong winner in the whole set: cross 4, 20 degrees off, where the
+  piano wall blurs the heading. The counter produced no committable
+  candidate at all.
+- **Moves are found.** Lifted a metre along the passage, and carried to
+  another room: a clear winner away from AMCL's pose on 36 of 38 and 45 of
+  57 scans. The gamepad drive: 83 winners of 98 scans, all at AMCL's pose.
+- **Clutter is where it waits.** With the table and chairs moved a metre
+  the true pose won 1 scan of 19; in the cluttered room 2 of 20; with a
+  person standing in front 10 of 19. There the robot waits for the next
+  view, as designed: a short drive or a push breaks it. These are the
+  spots to watch on the floor.
+- **R is 0.4.** While driving correctly a rival led the held pose by 0.34
+  at most: AMCL's heading lagging 10 to 15 degrees for a few seconds after
+  a turn. A slipped or carried pose was led by 0.62 or more (lifted a
+  metre, median 0.71; turned and lifted, 0.67 at least; carried from
+  cross 2, 0.62). Carried to another room was led by only 0.36 at the
+  median, but the judge drops that pose by itself.
+- **Time:** 0.24 s per search on the Mac at the median, 1.21 s at most.
 
 ### Phase 3: held trips, voice, off map (three evenings)
 

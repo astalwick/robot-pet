@@ -4,9 +4,11 @@ Replay the nav bridge's recordings through the judge, offline.
 
 Each recording (the bridge's `record` command, or Record on the dashboard
 with ?debug) is 10 s of lidar scans with the poses the bridge had. This prints,
-per recording, today's scan fit beside the judge's agree and through shares,
-and with --truth (a taped cross: where the robot really stood) the judge at
-the true pose and AMCL's error there. Then the beams that always hit the
+per recording, the judge's agree and through shares, and with --truth (a
+taped cross: where the robot really stood) the judge at the true pose and
+AMCL's error there. With --search it also runs the search on every 4th scan
+and prints how often it found a clear winner and, with a truth, how often
+that winner was right. Then the beams that always hit the
 robot's own body, and where through beams land at true poses: a cluster is a
 map error to fix or re-map, spread everywhere means the tolerance is wrong.
 
@@ -19,6 +21,7 @@ Usage, on the Pi:
     python scripts/localization-replay.py
     python scripts/localization-replay.py --truth "cross 1=2.10,3.40,90" --audit ~/audit
     python scripts/localization-replay.py --stamp-offset 0.07 --settings /tmp/try.json
+    python scripts/localization-replay.py --search --truth "cross 1=2.10,3.40,90"
 """
 
 import argparse
@@ -41,25 +44,8 @@ BODY_RANGE_M = 0.3
 BODY_SHARE = 0.9
 # through-beam endpoints are counted in squares this big for the audit
 AUDIT_CELL_M = 0.25
-
-
-def load_map(name, maps_dir):
-    """A saved map as the bridge sees it: OccupancyGrid data (row 0 at the
-    bottom; 100 occupied, 0 free, -1 unknown) and its map_info. The yaml is
-    map_saver's flat key: value file, read by hand (no PyYAML on the Mac)."""
-    meta = {}
-    for line in Path(robot_nav.map_yaml_path(name, maps_dir)).read_text().splitlines():
-        key, _, value = line.partition(":")
-        meta[key.strip()] = value.strip()
-    origin = [float(value) for value in meta["origin"].strip("[]").split(",")]
-    pixels = np.asarray(Image.open(Path(maps_dir) / meta["image"]).convert("L"), dtype=np.float64)
-    occupancy = (255 - pixels) / 255 if meta.get("negate", "0") == "0" else pixels / 255
-    grid = np.full(pixels.shape, -1, dtype=np.int16)
-    grid[occupancy > float(meta.get("occupied_thresh", 0.65))] = 100
-    grid[occupancy < float(meta.get("free_thresh", 0.25))] = 0
-    grid = np.flipud(grid)
-    map_info = {"width": grid.shape[1], "height": grid.shape[0], "resolution": float(meta["resolution"]), "origin_x": origin[0], "origin_y": origin[1]}
-    return grid.ravel(), map_info
+# --search runs on every this-many scans (about one a second, like the bridge while searching)
+SEARCH_EVERY = 4
 
 
 def parse_truth(text):
@@ -105,6 +91,7 @@ def main():
     parser.add_argument("--truth", action="append", default=[], help='"label=x,y,yaw_degrees": where the robot really stood (base_link, map frame)')
     parser.add_argument("--stamp-offset", type=float, default=0.0, help="judge the laser pose this many seconds after the scan's stamp")
     parser.add_argument("--audit", help="a folder to draw <map>-through.png into: through beams at true poses")
+    parser.add_argument("--search", action="store_true", help="also run the search on the recording's map")
     args = parser.parse_args()
 
     settings = load_localization_settings(args.settings)
@@ -119,7 +106,7 @@ def main():
     through_ends = {}
 
     print(f"settings: {json.dumps(settings.to_dict())}")
-    print(f"{'recording':40} {'scans':>5} {'fit':>5} {'agree':>5} {'thru':>5} {'pass':>5}  states       {'true agree':>10} {'thru':>5} {'AMCL off':>13}")
+    print(f"{'recording':40} {'scans':>5} {'agree':>5} {'thru':>5} {'pass':>5}  states       {'true agree':>10} {'thru':>5} {'AMCL off':>13} {'found':>5} {'right':>5}")
     for path in paths:
         lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         if not lines:
@@ -128,13 +115,15 @@ def main():
         name = header["map"]
         if name not in maps:
             try:
-                maps[name] = load_map(name, args.maps_dir)
+                data, map_info = robot_nav.load_map_file(name, args.maps_dir)
             except (OSError, KeyError, ValueError) as exc:
                 print(f"{header['label'][:40]:40} map {name} unreadable: {exc}")
                 continue
-        data, map_info = maps[name]
+            maps[name] = data, map_info, robot_nav.search_grids(data, map_info) if args.search else None
+        data, map_info, grids = maps[name]
         truth = truths.get(header["label"])
-        fits, agrees, throughs, passes, true_agrees, true_throughs, amcl_off_m, amcl_off_degrees = [], [], [], [], [], [], [], []
+        searched, found, right = 0, 0, 0
+        agrees, throughs, passes, true_agrees, true_throughs, amcl_off_m, amcl_off_degrees = [], [], [], [], [], [], []
         states = sorted({scan["state"] for scan in scans if scan["state"]})
         for index, scan in enumerate(scans):
             ranges = [math.inf if value is None else value for value in scan["ranges"]]
@@ -146,10 +135,12 @@ def main():
             if scan["map_odom"] is None or scan["odom_laser"] is None:
                 continue
             laser_pose = robot_nav.compose_poses(scan["map_odom"], carried(scans, index, args.stamp_offset))
-            fit = robot_nav.scan_fit(data, map_info, laser_pose, *scan_args)
             check = robot_nav.beam_check(data, map_info, laser_pose, *scan_args, settings)
-            if fit is not None:
-                fits.append(fit)
+            winner = None
+            if grids is not None and index % SEARCH_EVERY == 0:
+                searched += 1
+                winner = robot_nav.clear_winner(robot_nav.global_search(grids, *scan_args, settings), settings)
+                found += winner is not None
             if check is not None:
                 agrees.append(check["agree"])
                 throughs.append(check["through"])
@@ -157,6 +148,7 @@ def main():
             if truth is None or scan["odom_base"] is None:
                 continue
             true_laser = robot_nav.compose_poses(truth, robot_nav.relative_pose(scan["odom_base"], scan["odom_laser"]))
+            right += winner is not None and robot_nav.same_place(winner, true_laser)
             true_check = robot_nav.beam_check(data, map_info, true_laser, *scan_args, settings)
             if true_check is not None:
                 true_agrees.append(true_check["agree"])
@@ -169,7 +161,9 @@ def main():
                 amcl_off_degrees.append(abs(math.degrees(math.atan2(math.sin(scan["amcl"]["yaw"] - truth["yaw"]), math.cos(scan["amcl"]["yaw"] - truth["yaw"])))))
         pass_share = f"{sum(passes) / len(passes):.2f}" if passes else "--"
         amcl_off = f"{np.median(amcl_off_m) * 100:.0f} cm {np.median(amcl_off_degrees):.0f} deg" if amcl_off_m else "--"
-        print(f"{header['label'][:40]:40} {len(scans):5} {median(fits):>5} {median(agrees):>5} {median(throughs):>5} {pass_share:>5}  {','.join(states)[:12]:12} {median(true_agrees):>10} {median(true_throughs):>5} {amcl_off:>13}")
+        found_share = f"{found / searched:.2f}" if searched else "--"
+        right_share = f"{right / found:.2f}" if found and truth else "--"
+        print(f"{header['label'][:40]:40} {len(scans):5} {median(agrees):>5} {median(throughs):>5} {pass_share:>5}  {','.join(states)[:12]:12} {median(true_agrees):>10} {median(true_throughs):>5} {amcl_off:>13} {found_share:>5} {right_share:>5}")
 
     print()
     if scan_time is not None:
@@ -185,7 +179,7 @@ def main():
         busiest = sorted(squares.items(), key=lambda item: -item[1])[:10]
         print(f"through beams at true poses on {name}: {len(ends)}; busiest {AUDIT_CELL_M} m squares: " + ", ".join(f"({x:.2f}, {y:.2f}) x{count}" for (x, y), count in busiest))
         if args.audit:
-            data, map_info = maps[name]
+            data, map_info, _ = maps[name]
             audit = Path(args.audit).expanduser() / f"{name}-through.png"
             audit.parent.mkdir(parents=True, exist_ok=True)
             robot_nav.render_map_png(map_info["width"], map_info["height"], data, str(audit))

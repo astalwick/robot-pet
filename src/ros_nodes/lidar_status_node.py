@@ -13,6 +13,11 @@ activated, and a few seconds after it stops answering the lidar is
 deactivated. The lidar is USB powered, so following the rail flag alone would
 spin it up with the wall switch off. Only the edges matter, so the dashboard's
 manual on/off holds until the board next changes.
+
+The A1's motor spins from the moment the driver opens its serial port (on
+configure), and only a deactivate stops it. So a driver that starts with the
+board off (a redeploy, a reboot, the lidar plugged back in) is turned on and
+straight back off, once.
 """
 
 import argparse
@@ -66,12 +71,16 @@ class LidarStatusNode(Node):
         self.diagnostics: list[dict] = []
         self.diagnostics_time: float | None = None
         self.lidar_active = False
+        # the driver's lifecycle state ("unconfigured", "inactive", "active"), or None
+        self.driver_state: str | None = None
         # written by the hub thread, read by the timer
         self.board_on = False
         # the board state the timer last acted on; None until the first tick
         self.board_seen_on: bool | None = None
         self.board_off_since: float | None = None
         self.driver_ready = False
+        # a just-started driver is being turned on only to be turned off
+        self.spinning_down = False
         self.state_client = self.create_client(GetState, "/rplidar_node/get_state")
         self.change_state_client = self.create_client(ChangeState, "/rplidar_node/change_state")
         self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
@@ -105,10 +114,12 @@ class LidarStatusNode(Node):
         self.diagnostics_time = time.monotonic()
 
     def on_driver_state(self, future) -> None:
-        self.lidar_active = future.result().current_state.label == "active"
+        self.driver_state = future.result().current_state.label
+        self.lidar_active = self.driver_state == "active"
 
     def follow_board(self) -> None:
-        if not self.state_client.service_is_ready():
+        # a driver still configuring cannot be turned on yet
+        if not self.state_client.service_is_ready() or self.driver_state not in ("inactive", "active"):
             self.driver_ready = False
             return
         # A driver that just (re)started comes up inactive, so apply the board state once.
@@ -118,8 +129,16 @@ class LidarStatusNode(Node):
         now = time.monotonic()
         if board_on:
             self.board_off_since = None
+            self.spinning_down = False
             if driver_appeared or self.board_seen_on is not True:
                 self.set_lidar(True)
+        elif driver_appeared:
+            log.info("lidar driver started with the motor board off: turning it on and off to stop the motor")
+            self.spinning_down = True
+            self.set_lidar(True)
+        elif self.spinning_down and self.lidar_active:
+            self.spinning_down = False
+            self.set_lidar(False)
         elif self.board_seen_on is True:
             self.board_off_since = now
         elif self.board_off_since is not None and now - self.board_off_since >= BOARD_OFF_DEBOUNCE_SECONDS:
@@ -145,6 +164,7 @@ class LidarStatusNode(Node):
         if self.state_client.service_is_ready():
             self.state_client.call_async(GetState.Request()).add_done_callback(self.on_driver_state)
         else:
+            self.driver_state = None
             self.lidar_active = False
         now = time.monotonic()
         scan_hz = None

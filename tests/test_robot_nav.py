@@ -170,19 +170,19 @@ class BeamCheckTest(unittest.TestCase):
 
     def test_beams_through_a_wall_count_unless_they_are_the_one_forgiven_patch(self):
         ranges = self.ray_cast(2.5, 2.5, 0.0)
-        # a wide open doorway: 81 beams see 2 m past the wall the map has there
-        ranges[60:141] = [r + 2.0 for r in ranges[60:141]]
+        # a wide open doorway: 101 beams see 2 m past the wall the map has there
+        ranges[60:161] = [r + 2.0 for r in ranges[60:161]]
         check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
         self.assertEqual(check["through"], 0.0)
-        self.assertEqual(list(check["classes"]).count("forgiven"), 81)
+        self.assertEqual(list(check["classes"]).count("forgiven"), 101)
         # it stays in the agree share as beams that fit nothing
-        self.assertAlmostEqual(check["agree"], 279 / 360)
+        self.assertAlmostEqual(check["agree"], 259 / 360)
         self.assertTrue(check["passes"])
         self.assertFalse(self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}, forgiven_patch=False)["passes"])
         # a second patch elsewhere is not forgiven
-        ranges[220:301] = [r + 2.0 for r in ranges[220:301]]
+        ranges[220:321] = [r + 2.0 for r in ranges[220:321]]
         check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
-        self.assertAlmostEqual(check["through"], 81 / 360)
+        self.assertAlmostEqual(check["through"], 101 / 360)
         self.assertFalse(check["passes"])
 
     def test_a_missing_return_never_counts_as_through_and_does_not_split_the_patch(self):

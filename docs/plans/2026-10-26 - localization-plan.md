@@ -519,6 +519,11 @@ Twenty recordings, replayed at the pose the robot believed. Agree is the
   case T was built for, a wrong room that a spin found and that fits well,
   was not recorded (a spin cannot be made to land wrong on demand). Phase
   2's search tests on the recordings are where it shows up.
+- **T goes to 0.25 in phase 2.** Driven back into the middle of the
+  living room by the table, the true pose let 24 to 26% of beams through
+  the chairs the map remembers, so at 0.20 it dropped on every visit. At
+  0.25 one scan in six fails there, never two in a row. At 0.30 every
+  recording replays exactly as at 0.20: no wrong winner is gained.
 - **Moves the robot is not told about are caught in about 6 s**: lifted a
   metre along the passage, and carried to another room with the lidar on.
 - **Crosses.** The lidar's distance to every taped wall matches the tape to

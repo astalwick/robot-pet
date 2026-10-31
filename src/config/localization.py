@@ -81,10 +81,11 @@ class LocalizationSettings:
     self_check_min: float = 0.75
     # Picked up while not driving: both cliff sensors see no floor (past
     # their cliff trip in sensors.json). While driving they stay cliff
-    # sensors, and a robot tipped lift_tip_degrees from how it sat counts as
-    # picked up instead (driving tipped it 2.7 at most, a pick-up 11).
+    # sensors, and with lift_tip on a robot tipped lift_tip_degrees from how
+    # it sat counts as picked up instead. Off by default: a pick-up tipped it
+    # 11, gentle driving 2.7, but a quick gamepad stop read past 6.
     lift_cliffs: bool = True
-    lift_tip: bool = True
+    lift_tip: bool = False
     lift_tip_degrees: float = 6.0
     # Pushed while not driving: the robot rocked nudge_degrees within a
     # second (still on the floor 0.17 at most, pushed 1 to 2).

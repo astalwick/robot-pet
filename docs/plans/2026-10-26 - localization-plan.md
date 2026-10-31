@@ -607,8 +607,9 @@ own switch in localization.json.
   cliff sensors past their cliff trip means picked up; rocking more than
   0.5 degrees within a second means pushed. While driving (a non-zero
   `/cmd_vel`, `/nav_lock`, or 1.5 s after either), the cliff sensors stay
-  cliff sensors and a tip of 6 degrees from how the robot sat means picked
-  up. A cliff met while driving is not a pick-up until the floor is back
+  cliff sensors and, with `lift_tip` on, a tip of 6 degrees from how the
+  robot sat means picked up. `lift_tip` is off by default: a quick gamepad
+  stop read past 6 degrees on the floor, and a pick-up while driving is rare. A cliff met while driving is not a pick-up until the floor is back
   under both. Handled, the pose drops to checking and the judge and the
   search wait; put down (floor under both, no rocking for 1 s) the pose is
   checked afresh and a search runs at once. Put back where it was, the
@@ -636,6 +637,7 @@ IMU and cliff sensors:
 | Still on the floor | rocking 0.17 degrees at most |
 | Pushed by hand | rocking 1 to 2 degrees |
 | Driving, rug edge, sill | tip 3.1 degrees, rocking 3.8 at most |
+| Quick gamepad stop | tip past 6 degrees |
 | Picked up | tip 11 degrees |
 | Cliff sensors on the floor | 76 to 92 mm |
 | Cliff sensors when lifted | past 110 mm within 0.1 to 0.2 s |

@@ -8,7 +8,7 @@ ROS nodes; the rest (dashboard, camera, voice, vision) are plain Python
 services that talk over a local telemetry hub. There is no colcon workspace:
 nodes are plain Python files in `src/ros_nodes/` run by `scripts/ros-node.sh`,
 which sources `/opt/ros/lyrical/setup.bash`, loads
-`~/.config/robot-pet/ros.env` (`ROS_DOMAIN_ID`, CycloneDDS, localhost-only
+`~/.config/robot-pet/ros.env` (`ROS_DOMAIN_ID`, CycloneDDS pinned to loopback, localhost-only
 discovery) and execs the repo venv's python.
 
 The migration plan and its phase-by-phase record live in

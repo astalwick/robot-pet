@@ -339,12 +339,16 @@ sudo apt install -y ros-lyrical-ros-base ros-lyrical-rmw-cyclonedds-cpp \
     ros-lyrical-twist-mux ros-lyrical-demo-nodes-py \
     ros-lyrical-slam-toolbox ros-lyrical-nav2-bringup ros-lyrical-rplidar-driver
 # Every ROS unit runs through scripts/ros-node.sh, which sources this. DDS
-# stays off the Wi-Fi: localhost discovery and a fixed domain.
+# stays off the Wi-Fi: localhost discovery, a fixed domain, and CycloneDDS
+# pinned to loopback. Without the pin it sends even local traffic to the
+# Wi-Fi address, and the router's nightly Wi-Fi drop leaves nodes deaf to
+# each other. Foxglove's websocket still listens on every address.
 mkdir -p "$HOME/.config/robot-pet"
 cat >"$HOME/.config/robot-pet/ros.env" <<'ENV'
 ROS_DOMAIN_ID=17
 ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo"/></Interfaces></General></Domain></CycloneDDS>'
 ENV
 chmod +x "$REPO_DIR/scripts/ros-node.sh"
 

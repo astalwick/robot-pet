@@ -245,7 +245,13 @@ saved map:
   the **clear winner** when its agree beats every other committable
   candidate's by M. The gap between A (where the judge drops) and A + M
   (where the search commits) stops the robot flapping between "found" and
-  "lost". A clear winner seeds AMCL and the state becomes `checking`.
+  "lost". A clear winner seeds AMCL on its second clear win in a row
+  (carried forward by the odometry between the two), and the state becomes
+  `checking`. One win was enough at first; on the floor a scan taken while
+  the robot was being carried won once at a wrong place by the piano, which
+  then passed the judge at 0.58 and led the true place's 0.82 by too little
+  for a rival. A carried robot moves between two searches while its wheels
+  say it did not, so the two wins never agree.
 - **Catching a slip or a flip.** If the search finds a committable
   candidate more than 0.3 m or 10 degrees from the held pose whose agree
   beats the held pose's by R, that candidate is a **rival**. One search is

@@ -25,12 +25,12 @@ active (boot, mode switch, a redeploy of robot-nav) the bridge either sends
 the pose it remembered in /run/robot-pet/nav-pose.json (same map, robot has
 not been moved since) or searches. The search (robot_nav.global_search) runs
 on its own thread on the latest scan: it scores the scan at every pose on
-every saved map, and a clear winner is handed to AMCL as the initial pose.
+every saved map, and a clear winner named by two searches in a row is handed
+to AMCL as the initial pose (loading its map first if it is another floor).
 It runs back to back while the robot does not know where it is, and every
 search_interval_s while it does, to catch a slip: a clearly better place
 named by two searches in a row (a rival) fails every verdict until a search
-names none, so the pose drops. A clear winner on another map (another
-floor) loads that map, on its second clear win in a row. The robot never
+names none, so the pose drops. The robot never
 moves itself to search. Saving a map goes straight to localize mode on that
 map with slam's last pose.
 
@@ -592,9 +592,9 @@ class NavNode(Node):
 
     def search(self) -> bool:
         """Search every saved map for the latest scan (robot_nav.global_search)
-        and act on it. While searching, a clear winner on this map is seeded,
-        and one on another map loads that map on its second clear win in a
-        row. While the pose is held, a rival (a clearly better place) named by
+        and act on it. While searching, a clear winner is seeded on its second
+        clear win in a row (a scan taken while the robot is carried never
+        repeats), loading its map first if it is on another one. While the pose is held, a rival (a clearly better place) named by
         two searches in a row stands, and is seeded at once if it is also the
         clear winner. Returns True to search again straight away: while
         searching, after a scan taken mid-turn, and after a rival's first
@@ -628,7 +628,7 @@ class NavNode(Node):
             if self.pose_state == "searching":
                 rival = None
                 self.rival_stands = False
-                if winner is not None and (winner["map"] == self.map_name or (named is not None and robot_nav.same_place(named, winner))):
+                if winner is not None and named is not None and robot_nav.same_place(named, winner):
                     seed = winner
                 now_named = winner
             else:

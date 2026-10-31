@@ -22,6 +22,12 @@ const POSITION_TEXT = {
   stale: ['lidar off', 'muted'],
 };
 
+// While someone has the robot in hand, instead of the position text.
+const HANDLED_TEXT = {
+  'picked up': ["picked up, I'll check my place once I'm put down", 'warn'],
+  pushed: ["pushed, I'll check my place once I'm still", 'warn'],
+};
+
 let mapImage = null;
 let mapSerial = null;
 let mapInfo = null;
@@ -45,7 +51,7 @@ export function renderNav(snapshot, sources) {
   const rows = [
     row('mode', '', nav.mode, nav.mode === 'localize' ? 'ok' : ''),
     row('map', '', nav.map || (nav.mode === 'mapping' ? 'new map' : '--')),
-    row('position', '', ...(nav.handled ? [`${nav.handled}, I'll check my place once I'm put down`, 'warn'] : POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
+    row('position', '', ...(HANDLED_TEXT[nav.handled] || POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),

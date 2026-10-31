@@ -3,6 +3,7 @@ import sys
 import logging
 import tempfile
 import unittest
+from unittest import mock
 from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -770,6 +771,18 @@ class RobotMotionTest(unittest.TestCase):
         # the rail flag is on but the wall switch is off: say so, and back off
         self.assertEqual(runner.drive_state, "roboclaw_silent")
         self.assertEqual(sleeps, [1.0, 1.0])
+
+    def test_battery_recheck_counts_as_rail_on(self):
+        # The battery service powers the rail to re-read a cut-off pack. If motion
+        # let the board go then, no voltage would ever come back and a fresh
+        # battery would never be noticed.
+        snapshot = {"sources": {"motor_rail": {"stale": False}}, "motor_rail": {"state": "recovering"}}
+        runner = MotionRunner(MotionConfig(), telemetry_publisher=lambda *_args: True)
+
+        with mock.patch("robot_motion.subscribe", return_value=[snapshot]):
+            runner._telemetry_subscribe_loop()
+
+        self.assertTrue(runner._rail_on)
 
     def test_idle_motor_loop_stays_open_while_the_rail_is_on(self):
         motor = FakeMotor()

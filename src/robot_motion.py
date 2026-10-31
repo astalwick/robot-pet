@@ -295,7 +295,9 @@ class MotionRunner:
             yaw_time = sensors.get("time") if yaw is not None else None
             rail_source = sources.get("motor_rail") or {}
             motor_rail = snapshot.get("motor_rail") or {}
-            self._rail_on = rail_source.get("stale") is False and motor_rail.get("state") in ("on", "warning")
+            # "recovering" is the battery service powering the rail to re-read the pack:
+            # the board must stay open and read so a fresh (or swapped) battery is seen.
+            self._rail_on = rail_source.get("stale") is False and motor_rail.get("state") in ("on", "warning", "recovering")
             with self._sensors_lock:
                 self._sensor_readings = readings
                 self._sensors_live = sensors_live

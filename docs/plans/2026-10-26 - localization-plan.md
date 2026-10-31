@@ -677,17 +677,21 @@ pose to measure them from.
 Exit: remove the coffee table; after three visits on separate occasions it
 is gone from the map. Places, barriers and accuracy are unchanged.
 
-### Later: driving out of tight spots
+### Driving out of tight spots (switched 2026-10-31)
 
 Found 2026-10-31: with a table leg by its tail and open floor ahead, a trip
 whose target was behind it gave up. The controller (Regulated Pure Pursuit)
 turns in place first and the planner (NavFn) plans for a point, and the stuck
-moves are only spin, back up and wait: none pulls forward. The fix to try is
-the MPPI controller, which scores many short moves against the real footprint
-each tick, maybe with the Smac Lattice planner. The cost is CPU on the Pi 5
-(already near half busy at idle, and the controller fell behind during this
-trip) plus a session or two of tuning. If the Pi can't keep up, add a short
-drive forward as the first stuck move instead.
+moves are only spin, back up and wait: none pulls forward. The same day an
+open door stopped a trip: the planner kept routing the point past it and the
+controller kept refusing every route as a collision.
+
+So both were swapped the same day: the Smac Lattice planner, which plans the
+real footprint, and the MPPI controller, which scores about a thousand short
+moves against it each tick. The cost is CPU on the Pi 5 (already near half
+busy at idle), so MPPI runs trimmed: 1000 tries of 3 s at 10 Hz. If the Pi
+can't keep up, trim further, or go back and add a short drive forward as the
+first stuck move instead.
 
 ## Alternatives rejected
 

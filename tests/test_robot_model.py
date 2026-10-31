@@ -36,8 +36,9 @@ class RobotModelTest(unittest.TestCase):
         front, rear, half = FOOTPRINT_FRONT_X_METERS, FOOTPRINT_REAR_X_METERS, FOOTPRINT_HALF_WIDTH_METERS
         footprint = f'footprint: "[[{front}, {half}], [{front}, -{half}], [{rear}, -{half}], [{rear}, {half}]]"'
         nav2 = (CONFIG_DIR / "nav2.yaml").read_text()
-        self.assertEqual(nav2.count(footprint), 1, footprint)  # the local costmap, for the controller
-        self.assertIn(f"robot_radius: {FOOTPRINT_HALF_WIDTH_METERS}", nav2)  # the global costmap, for the planner
+        # both costmaps: the planner and the controller agree on what fits
+        self.assertEqual(nav2.count(footprint), 2, footprint)
+        self.assertNotIn("robot_radius", nav2)
         # Both costmaps take the barriers from the one costmap_filter_info_server.
         self.assertEqual(nav2.count('filters: ["keepout_filter"]'), 2)
         self.assertEqual(nav2.count('filter_info_topic: "/costmap_filter_info"'), 3)

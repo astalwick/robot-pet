@@ -86,17 +86,16 @@ costmap_filter_info_server:
 # 0.8 rad/s. The footprint is the chassis from robot_model.py: 0.060 m ahead
 # of the axle, 0.284 m behind it, 0.166 m to each side (tests check the text).
 #
-# The two costmaps describe the robot differently on purpose. The controller
-# checks the real rectangle against the local costmap, so that one gets the
-# footprint. The planner (NavFn) plans for a point and only keeps the path's
-# centre outside the costmap's inscribed radius, which Nav2 takes as the
-# distance from base_link to the nearest footprint edge: the front edge, 0.060 m
-# ahead of the axle. That let it route the axle 7 cm from a door frame, a path
-# the controller then refused as a collision. So the global costmap gets a
-# robot_radius of the half width instead: paths stay a robot's half width
-# from walls, which is exactly what driving straight needs.
+# Both halves of Nav2 see the robot as its real rectangle, so they agree on
+# what fits. The planner (Smac Lattice) plans poses, not points: it checks the
+# footprint at every step and can drive forward to find room before turning.
+# The controller (MPPI) tries about a thousand short moves each tick, forward,
+# back a little, curving or turning, scores them against the footprint, the
+# path and the goal, and drives the best. NavFn (a point) with Regulated Pure
+# Pursuit (turn in place first) gave up by an open door and with a table leg
+# by the tail, with open floor ahead both times.
 #
-# Inflation beyond that is a preference, not a limit. With the axle 25 cm
+# Inflation is a preference, not a limit. With the axle 25 cm
 # from a wall (8 cm of side clearance) a cell costs about 3.5x open floor,
 # at 35 cm about 3x, and from 45 cm nothing. Narrow doorways are allowed;
 # the planner just takes the middle of them.
@@ -170,30 +169,99 @@ controller_server:
       minimum_rotation_angle: 0.785
       reject_unit_path: false
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      max_linear_vel: 0.25
-      # Nav2 1.5 still asks for the old name once a minute and warns when it is missing
-      desired_linear_vel: 0.25
-      lookahead_dist: 0.4
-      min_lookahead_dist: 0.25
-      max_lookahead_dist: 0.6
-      lookahead_time: 1.5
-      use_velocity_scaled_lookahead_dist: false
-      min_approach_linear_velocity: 0.05
-      approach_velocity_scaling_dist: 0.4
-      use_collision_detection: true
-      max_allowed_time_to_collision_up_to_carrot: 1.0
-      use_regulated_linear_velocity_scaling: true
-      use_cost_regulated_linear_velocity_scaling: false
-      regulated_linear_scaling_min_radius: 0.6
-      regulated_linear_scaling_min_speed: 0.15
-      use_fixed_curvature_lookahead: false
-      use_rotate_to_heading: true
-      rotate_to_heading_min_angle: 0.6
-      rotate_to_heading_angular_vel: 0.8
-      max_angular_accel: 1.5
-      allow_reversing: false
-      use_cancel_deceleration: false
+      # The stock MPPI settings, slowed to our speeds and trimmed for the Pi 5:
+      # 1000 tries (not 2000) of 3 s each, at the 10 Hz controller rate.
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 30
+      model_dt: 0.1
+      batch_size: 1000
+      open_loop: false
+      vx_max: 0.25
+      # backing up a little is how it gets out of a tight spot
+      vx_min: -0.1
+      wz_max: 0.8
+      ax_max: 1.0
+      ax_min: -1.0
+      az_max: 1.5
+      vx_std: 0.2
+      wz_std: 0.4
+      iteration_count: 1
+      temperature: 0.3
+      gamma: 0.015
+      visualize: false
+      publish_optimal_trajectory: false
+      regenerate_noises: true
+      motion_model: "diff_drive"
+      diff_drive:
+        plugin: "mppi::DiffDriveMotionModel"
+      TrajectoryValidator:
+        plugin: "mppi::DefaultOptimalTrajectoryValidator"
+        collision_lookahead_time: 2.0
+        # the axle is near the front, so a circle would hide the tail
+        consider_footprint: true
+      critics:
+        [
+          "ConstraintCritic",
+          "CostCritic",
+          "GoalCritic",
+          "GoalAngleCritic",
+          "PathAlignCritic",
+          "PathFollowCritic",
+          "PathAngleCritic",
+          "PreferForwardCritic",
+        ]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        consider_footprint: true
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
 
 local_costmap:
   local_costmap:
@@ -243,7 +311,7 @@ global_costmap:
       robot_base_frame: base_link
       resolution: 0.05
       track_unknown_space: true
-      robot_radius: 0.166
+      footprint: "[[0.06, 0.166], [0.06, -0.166], [-0.284, -0.166], [-0.284, 0.166]]"
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
@@ -282,11 +350,37 @@ planner_server:
     introspection_mode: "disabled"
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
-      tolerance: 0.5
-      use_astar: false
+      # The stock Smac Lattice settings with the differential-drive moves
+      # (straight, 0.5 m arcs and turns on the spot) instead of its default car moves.
+      plugin: "nav2_smac_planner::SmacPlannerLattice"
+      lattice_filepath: "/opt/ros/lyrical/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json"
       allow_unknown: true
-      max_cycles_factor: 4
+      tolerance: 0.5
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      analytic_expansion_max_cost: 200.0
+      analytic_expansion_max_cost_override: false
+      reverse_penalty: 2.0
+      change_penalty: 0.05
+      non_straight_penalty: 1.05
+      cost_penalty: 2.0
+      rotation_penalty: 5.0
+      retrospective_penalty: 0.015
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      allow_reverse_expansion: false
+      coarse_search_resolution: 1
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
 
 behavior_server:
   ros__parameters:

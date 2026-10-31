@@ -1,4 +1,5 @@
-"""Localization settings: every bar and switch the nav bridge's judge uses.
+"""Localization settings: every bar and switch the nav bridge's judge, search
+and handling checks use.
 
 The nav bridge reads ~/.config/robot-pet/localization.json at start, so a
 change applies on a bridge restart. A missing key means the default. The
@@ -69,6 +70,28 @@ class LocalizationSettings:
     other_maps: bool = True
     # seconds between searches while the pose is held; back to back while searching
     search_interval_s: float = 5.0
+    # The self-check: a scan that fails the map but matches the last scan that
+    # passed (carried by the wheels) to self_check_tolerance_m + 2% of range
+    # on self_check_min of its beams does not count as failed, so a moved
+    # table does not drop a pose the wheels vouch for. A reverse into such a
+    # spot matched 0.88 or more; a hidden 20 cm slide or 10 degree turn 0.74
+    # or less, and a carry about 0.1.
+    self_check: bool = True
+    self_check_tolerance_m: float = 0.08
+    self_check_min: float = 0.75
+    # Picked up while not driving: both cliff sensors see no floor (past
+    # their cliff trip in sensors.json). While driving they stay cliff
+    # sensors, and a robot tipped lift_tip_degrees from how it sat counts as
+    # picked up instead (driving tipped it 2.7 at most, a pick-up 11).
+    lift_cliffs: bool = True
+    lift_tip: bool = True
+    lift_tip_degrees: float = 6.0
+    # Pushed while not driving: the robot rocked nudge_degrees within a
+    # second (still on the floor 0.17 at most, pushed 1 to 2).
+    nudge: bool = True
+    nudge_degrees: float = 0.5
+    # put down: the floor under both cliff sensors and no rocking for this long
+    set_down_s: float = 1.0
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
@@ -89,6 +112,15 @@ class LocalizationSettings:
             rival_margin=clamp(float(values.get("rival_margin", defaults.rival_margin)), 0.0, 0.5),
             other_maps=bool(values.get("other_maps", defaults.other_maps)),
             search_interval_s=clamp(float(values.get("search_interval_s", defaults.search_interval_s)), 1.0, 60.0),
+            self_check=bool(values.get("self_check", defaults.self_check)),
+            self_check_tolerance_m=clamp(float(values.get("self_check_tolerance_m", defaults.self_check_tolerance_m)), 0.02, 0.5),
+            self_check_min=clamp(float(values.get("self_check_min", defaults.self_check_min)), 0.0, 1.0),
+            lift_cliffs=bool(values.get("lift_cliffs", defaults.lift_cliffs)),
+            lift_tip=bool(values.get("lift_tip", defaults.lift_tip)),
+            lift_tip_degrees=clamp(float(values.get("lift_tip_degrees", defaults.lift_tip_degrees)), 1.0, 45.0),
+            nudge=bool(values.get("nudge", defaults.nudge)),
+            nudge_degrees=clamp(float(values.get("nudge_degrees", defaults.nudge_degrees)), 0.1, 10.0),
+            set_down_s=clamp(float(values.get("set_down_s", defaults.set_down_s)), 0.5, 10.0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,6 +143,15 @@ LOCALIZATION_FIELDS = (
     {"key": "rival_margin", "label": "Slip margin", "type": "number", "help": "0 .. 0.5; how much better that place must agree", "min": 0.0, "max": 0.5, "step": 0.01},
     {"key": "other_maps", "label": "Search other maps", "type": "boolean", "help": "Also look on the other saved maps (another floor)"},
     {"key": "search_interval_s", "label": "Search every (s)", "type": "number", "help": "1 .. 60, while the robot knows where it is", "min": 1.0, "max": 60.0, "step": 1},
+    {"key": "self_check", "label": "Self-check", "type": "boolean", "help": "Keep a pose the map disagrees with when the scan matches the last good one, carried by the wheels"},
+    {"key": "self_check_tolerance_m", "label": "Self-check tolerance (m)", "type": "number", "help": "0.02 .. 0.5; a beam this close to the last good scan's matches", "min": 0.02, "max": 0.5, "step": 0.01},
+    {"key": "self_check_min", "label": "Self-check match at least", "type": "number", "help": "0 .. 1; share of beams that must match", "min": 0.0, "max": 1.0, "step": 0.01},
+    {"key": "lift_cliffs", "label": "Notice pick-ups (cliff sensors)", "type": "boolean", "help": "While not driving, both cliff sensors seeing no floor means picked up"},
+    {"key": "lift_tip", "label": "Notice pick-ups while driving", "type": "boolean", "help": "While driving, a tip from how the robot sat means picked up"},
+    {"key": "lift_tip_degrees", "label": "Pick-up tip (degrees)", "type": "number", "help": "1 .. 45", "min": 1.0, "max": 45.0, "step": 0.5},
+    {"key": "nudge", "label": "Notice pushes", "type": "boolean", "help": "While not driving, the robot rocking means pushed"},
+    {"key": "nudge_degrees", "label": "Push rocking (degrees)", "type": "number", "help": "0.1 .. 10 within a second", "min": 0.1, "max": 10.0, "step": 0.1},
+    {"key": "set_down_s", "label": "Put down after (s)", "type": "number", "help": "0.5 .. 10 of floor under both cliff sensors and no rocking", "min": 0.5, "max": 10.0, "step": 0.5},
 )
 
 

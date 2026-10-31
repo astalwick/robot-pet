@@ -45,7 +45,7 @@ export function renderNav(snapshot, sources) {
   const rows = [
     row('mode', '', nav.mode, nav.mode === 'localize' ? 'ok' : ''),
     row('map', '', nav.map || (nav.mode === 'mapping' ? 'new map' : '--')),
-    row('position', '', ...(POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
+    row('position', '', ...(nav.handled ? [`${nav.handled}, I'll check my place once I'm put down`, 'warn'] : POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),
@@ -55,7 +55,7 @@ export function renderNav(snapshot, sources) {
     const check = nav.check;
     rows.push(
       row('state', '', `${nav.state || '--'}${nav.localized ? ', localized' : ''}`),
-      row('judge', '', check ? `agree ${check.agree}, through ${check.through}, opinion ${check.opinion}` : '--', check ? (check.passes ? 'ok' : 'err') : 'muted'),
+      row('judge', '', check ? `agree ${check.agree}, through ${check.through}, opinion ${check.opinion}${check.self_check == null ? '' : `, self-check ${check.self_check}`}` : '--', check ? (check.passes ? 'ok' : 'err') : 'muted'),
       row('search', '', searchText(nav.search), nav.search && nav.search.rival === 'stands' ? 'err' : 'muted'),
       row('recording', '', nav.recording || 'no', nav.recording ? 'warn' : 'muted'),
     );

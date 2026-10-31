@@ -119,12 +119,13 @@ class TelemetryMessagesTest(unittest.TestCase):
         barriers = {"main": [{"x1": 0.0, "y1": 1.0, "x2": 2.0, "y2": 1.0}]}
         check = {"agree": 0.8, "through": 0.02, "opinion": 0.9, "passes": True}
         search = {"seconds": 0.4, "best": {"map": "main", "agree": 0.9}, "winner": True, "rival": None}
-        message = nav_update("localize", "main", ["main"], True, None, None, None, {}, False, barriers=barriers, search=search, state="checking", check=check, recording="by the couch")
+        message = nav_update("localize", "main", ["main"], True, None, None, None, {}, False, barriers=barriers, search=search, state="checking", check=check, recording="by the couch", handled="pushed")
         self.assertEqual(message["barriers"], barriers)
         self.assertEqual(message["search"], search)
         self.assertEqual(message["state"], "checking")
         self.assertEqual(message["check"], check)
         self.assertEqual(message["recording"], "by the couch")
+        self.assertEqual(message["handled"], "pushed")
 
     def test_pi_battery_status_bands(self):
         self.assertEqual(pi_battery_status(None), "unknown")

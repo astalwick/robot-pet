@@ -50,9 +50,24 @@ state, read by everyone, says how far the pose is trusted:
     stale      the lidar is off; a pose held through it is checked afresh
 
 `localized` is tracking or clean checking. A navigate_to while searching
-waits for the search, then goes. The bars and switches are in
-localization.json (config/localization.py). The `record` command saves scans
-and poses for scripts/localization-replay.py.
+waits for the search, then goes.
+
+A scan the map disagrees with gets a second opinion, the self-check
+(robot_nav.scan_check): it is compared with the last scan that passed,
+carried by the wheel odometry. If they match, the room has changed there
+(a moved table) and the verdict does not count against the pose. A slide or
+a turn the wheels did not see does not match.
+
+The bridge also notices the robot in someone's hands (update_handling). While
+the robot is not driving, both cliff sensors seeing no floor means picked up,
+and the IMU rocking means pushed. While it drives the cliff sensors stay
+cliff sensors, and only a tip from how it sat means picked up. Either way
+the pose drops to checking, the search and the judge wait, and once the
+floor is back under both cliff sensors and nothing has rocked for a moment
+(put down) the pose is checked afresh and a search runs straight away.
+
+The bars and switches are in localization.json (config/localization.py). The
+`record` command saves scans and poses for scripts/localization-replay.py.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
@@ -73,6 +88,7 @@ import re
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import rclpy
@@ -89,14 +105,17 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan, Range
 from std_msgs.msg import Bool, Float32MultiArray
 from tf2_ros import Buffer, TransformException, TransformListener
 
 import robot_nav
 from config.localization import DEFAULT_CONFIG_PATH as DEFAULT_LOCALIZATION_SETTINGS_PATH
 from config.localization import LocalizationSettings, LocalizationSettingsError, load_localization_settings
+from config.sensors import DEFAULT_CONFIG_PATH as DEFAULT_SENSORS_CONFIG_PATH
+from config.sensors import SensorsConfigError, cliff_trip_mm, load_sensors_config
 from control.odometry import normalize_angle
+from drivers.imu import quaternion_to_euler_degrees
 from lib.log import setup_logging
 from telemetry.messages import nav_update
 from telemetry.paths import (
@@ -139,6 +158,14 @@ AMCL_POSE_WAIT_SECONDS = 3.0
 MAX_TURN_RADIANS = 0.2
 # while searching, the pause between one search and the next
 SEARCH_PAUSE_SECONDS = 0.2
+# The robot counts as driving this long after the last moving /cmd_vel (the
+# gamepad, Nav2), so the rock of a stop is not taken for a push. A voice
+# drive raises /nav_lock instead, which robot-motion holds 2 s past the stop.
+DRIVE_HOLD_SECONDS = 1.5
+# a cliff sensor or the IMU silent this long takes no part in noticing handling
+SENSOR_STALE_SECONDS = 1.0
+# a push is the robot rocking this long or less
+NUDGE_WINDOW_SECONDS = 1.0
 # a `record` without seconds records this long, and none longer than the max
 RECORD_SECONDS = 10.0
 RECORD_MAX_SECONDS = 120.0
@@ -194,6 +221,31 @@ class NavNode(Node):
         self.check: dict | None = None
         self.judged_scan: LaserScan | None = None
         self.judged_yaw: float | None = None
+        # The self-check (robot_nav.scan_check): the judged scan per degree
+        # with the lidar's odom pose then, the last one that passed (the
+        # reference), and how well a failed scan matched it.
+        self.judged_view: tuple | None = None
+        self.reference: tuple | None = None
+        self.scan_agree: float | None = None
+        # Noticing the robot handled (see update_handling): when it last drove,
+        # each cliff sensor's trip in metres and its latest (no floor, when),
+        # the IMU's (when, roll, pitch) over the last second, how it sat before
+        # it drove, and whether a cliff met while driving (a stair edge) is
+        # still under a sensor. handled is why the pose stopped counting
+        # ("picked up", "pushed") until the robot is put down.
+        self.drive_time = -math.inf
+        self.cliff_trips: dict[str, float] = {}
+        try:
+            sensors = load_sensors_config(args.sensors_config)
+            self.cliff_trips = {entry.name: cliff_trip_mm(entry, sensors.safety) / 1000 for entry in sensors.sensors if entry.role == "cliff"}
+        except SensorsConfigError as exc:
+            log.warning("%s; not watching the cliff sensors for pick-ups", exc)
+        self.cliffs: dict[str, tuple[bool, float]] = {}
+        self.tilts: deque = deque()
+        self.rest_tilt: tuple[float, float] | None = None
+        self.cliff_edge = False
+        self.handled: str | None = None
+        self.quiet_since = 0.0
         # AMCL's best guess, for the recordings
         self.amcl_pose: dict[str, float] | None = None
         # a `record` in progress: {"label", "file", "path", "until", "scans"}
@@ -238,6 +290,10 @@ class NavNode(Node):
         self.nav2_manage_client = self.create_client(ManageLifecycleNodes, "/lifecycle_manager_navigation/manage_nodes")
         self.create_subscription(Bool, "/nav_lock", self.on_nav_lock, 10)
         self.create_subscription(Twist, "/cmd_vel_teleop", self.on_teleop, 10)
+        self.create_subscription(Twist, "/cmd_vel", self.on_cmd_vel, 10)
+        self.create_subscription(Imu, "/imu", self.on_imu, 10)
+        for name in self.cliff_trips:
+            self.create_subscription(Range, f"/range/{name}", lambda message, name=name: self.on_cliff(name, message), 10)
         self.create_timer(0.5, self.tick)
         self.barrier_clearance_publisher = self.create_publisher(Float32MultiArray, "/barrier_clearance", 10)
         self.create_timer(1 / BARRIER_CLEARANCE_HZ, self.publish_barrier_clearance)
@@ -271,6 +327,24 @@ class NavNode(Node):
     def on_teleop(self, twist: Twist) -> None:
         if twist.linear.x != 0.0 or twist.angular.z != 0.0:
             self.cancel_goal("gamepad")
+
+    def on_cmd_vel(self, twist: Twist) -> None:
+        if twist.linear.x != 0.0 or twist.angular.z != 0.0:
+            self.drive_time = time.monotonic()
+
+    def on_cliff(self, name: str, message: Range) -> None:
+        # +inf is nothing in range: no floor. -inf (too close) and nan (a
+        # failed read) say nothing; a lifted sensor gives the odd -inf.
+        if message.range == math.inf or math.isfinite(message.range):
+            self.cliffs[name] = (message.range > self.cliff_trips[name], time.monotonic())
+
+    def on_imu(self, message: Imu) -> None:
+        rotation = message.orientation
+        roll, pitch, _ = quaternion_to_euler_degrees((rotation.x, rotation.y, rotation.z, rotation.w))
+        now = time.monotonic()
+        self.tilts.append((now, roll, pitch))
+        while self.tilts[0][0] < now - NUDGE_WINDOW_SECONDS:
+            self.tilts.popleft()
 
     def on_bt_navigator_state(self, future) -> None:
         self.nav2_state = future.result().current_state.label
@@ -307,6 +381,7 @@ class NavNode(Node):
             self.nav2_state = None
         self.update_pose()
         self.update_travelled()
+        self.update_handling()
         self.judge_scan()
         with self.pose_lock:
             self.update_state()
@@ -347,6 +422,62 @@ class NavNode(Node):
             self.travelled_m += math.hypot(position["x"] - self.odom_position["x"], position["y"] - self.odom_position["y"])
         self.odom_position = position
 
+    def update_handling(self) -> None:
+        """Notice the robot picked up, pushed or put down. While it drives,
+        the cliff sensors are cliff sensors, and only a tip from how it sat
+        says picked up. While it does not, both cliff sensors seeing no floor
+        says picked up and rocking says pushed. A cliff met while driving
+        stays a cliff, not a pick-up, until the floor is back under both.
+        The pose waits (start_handling) until the floor is under both cliff
+        sensors and nothing has rocked for set_down_s. A sensor that is
+        missing or silent takes no part."""
+        now = time.monotonic()
+        driving = self.nav_lock or now - self.drive_time < DRIVE_HOLD_SECONDS
+        no_floor = [far for far, at in self.cliffs.values() if now - at < SENSOR_STALE_SECONDS]
+        tilts = self.tilts if self.tilts and now - self.tilts[-1][0] < SENSOR_STALE_SECONDS else []
+        rolls, pitches = [roll for _, roll, _ in tilts], [pitch for _, _, pitch in tilts]
+        rocked = max(max(rolls) - min(rolls), max(pitches) - min(pitches)) if tilts else 0.0
+        if tilts and not driving:
+            self.rest_tilt = (rolls[-1], pitches[-1])
+        tipped = math.hypot(rolls[-1] - self.rest_tilt[0], pitches[-1] - self.rest_tilt[1]) if tilts and self.rest_tilt else 0.0
+        if driving and any(no_floor):
+            self.cliff_edge = True
+        elif not any(no_floor):
+            self.cliff_edge = False
+
+        reason = detail = None
+        if driving:
+            if self.settings.lift_tip and tipped > self.settings.lift_tip_degrees:
+                reason, detail = "picked up", f"tipped {tipped:.0f} degrees while driving"
+        elif self.settings.lift_cliffs and len(no_floor) == len(self.cliff_trips) > 0 and all(no_floor) and not self.cliff_edge:
+            reason, detail = "picked up", "no floor under either cliff sensor"
+        elif self.settings.nudge and rocked > self.settings.nudge_degrees:
+            reason, detail = "pushed", f"rocked {rocked:.1f} degrees"
+        if reason is not None or any(no_floor):
+            self.quiet_since = now
+        if reason is not None and self.handled is None:
+            self.start_handling(reason, detail)
+        elif self.handled is not None and now - self.quiet_since >= self.settings.set_down_s:
+            log.info("put down: checking the pose")
+            self.handled = None
+            with self.pose_lock:
+                if self.mode == "localize" and self.pose_state != "searching":
+                    self.start_checking()
+            self.search_now.set()
+
+    def start_handling(self, reason: str, detail: str) -> None:
+        """The robot is in someone's hands: the pose stops counting (checking,
+        not clean, no self-check), nothing the search found before counts, no
+        verdict or search runs until it is put down, and a trip stops."""
+        log.info("%s (%s): the pose waits until the robot is put down", reason, detail)
+        self.handled = reason
+        with self.pose_lock:
+            self.named = None
+            if self.mode == "localize" and self.pose_state != "searching":
+                self.start_checking()
+        if self.goal_request is None:
+            self.cancel_goal(reason)
+
     def judge_scan(self) -> None:
         """Judge the latest scan (robot_nav.beam_check) from the lidar's map
         pose: the latest map -> odom
@@ -356,6 +487,7 @@ class NavNode(Node):
         lidar turned too much since the last tick (from odometry)."""
         scan = self.latest_scan
         map_odom = odom_laser = None
+        self.scan_agree = None
         if self.mode == "localize" and scan is not None and scan is not self.judged_scan and self.map_info is not None and self.scanning():
             map_odom = self.lookup_pose("map", "odom", Time())
             odom_laser = self.lookup_pose("odom", scan.header.frame_id, Time.from_msg(scan.header.stamp))
@@ -372,12 +504,19 @@ class NavNode(Node):
         self.check = robot_nav.beam_check(
             self.map_rendered.data, self.map_info, laser_pose, scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max, self.settings
         )
+        # a failed scan is held against the last one that passed, carried by the wheels
+        self.judged_view = (robot_nav.degree_ranges(scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max), odom_laser)
+        if self.check is not None and not self.check["passes"] and self.reference is not None and self.settings.self_check:
+            moved = robot_nav.relative_pose(odom_laser, self.reference[1])
+            self.scan_agree = robot_nav.scan_check(self.reference[0], self.judged_view[0], moved, self.settings)
 
     def update_state(self) -> None:
         """One rule for the pose state each tick, from the judge's verdicts.
-        While a rival stands every verdict fails. While the map is being
-        switched, that thread owns the state."""
-        if self.mode != "localize" or self.activity is not None:
+        While a rival stands every verdict fails. A failed verdict whose scan
+        matches the last one that passed (the self-check) does not count.
+        While the map is being switched, that thread owns the state, and while
+        the robot is in someone's hands no verdict counts."""
+        if self.mode != "localize" or self.activity is not None or self.handled is not None:
             return
         if not self.scanning():
             # stale: the robot may be carried while the lidar is off, so a pose
@@ -391,9 +530,16 @@ class NavNode(Node):
             self.clean = True
             self.passed_scans += 1
             self.failed_scans = 0
+            self.reference = self.judged_view
             if self.pose_state == "checking" and self.passed_scans >= self.settings.fail_scans and self.travelled_m >= self.settings.motion_gate_m:
                 self.pose_state = "tracking"
                 log.info("tracking on %s (%s)", self.map_name, self.check_text())
+            return
+        if not self.rival_stands and self.scan_agree is not None and self.scan_agree >= self.settings.self_check_min:
+            # the map disagrees, but the wheels and the last scan that passed
+            # vouch for the pose: the room has changed here (a moved table)
+            self.clean = True
+            self.failed_scans = 0
             return
         self.clean = False
         self.passed_scans = 0
@@ -415,6 +561,7 @@ class NavNode(Node):
         self.pose_state = "checking"
         self.clean = False
         self.rival_stands = False
+        self.reference = None
         self.passed_scans = self.failed_scans = 0
         self.travelled_m = 0.0
         self.seeded_at = time.monotonic()
@@ -432,7 +579,8 @@ class NavNode(Node):
         if check is None:
             return "no verdict"
         rival = ", a clearly better place stands" if self.rival_stands else ""
-        return f"agree {check['agree']:.2f}, through {check['through']:.2f}{rival}"
+        self_check = "" if self.scan_agree is None else f", self-check {self.scan_agree:.2f}"
+        return f"agree {check['agree']:.2f}, through {check['through']:.2f}{self_check}{rival}"
 
     def update_map_png(self) -> None:
         grid = self.latest_map
@@ -492,7 +640,9 @@ class NavNode(Node):
                 "through": round(check["through"], 2),
                 "opinion": round(check["opinion"], 2),
                 "passes": check["passes"],
+                "self_check": None if self.scan_agree is None else round(self.scan_agree, 2),
             },
+            "handled": self.handled,
             "search": self.search_summary,
             "recording": None if self.recording is None else self.recording["label"],
             "activity": self.activity,
@@ -600,7 +750,7 @@ class NavNode(Node):
         searching, after a scan taken mid-turn, and after a rival's first
         naming, so the next search says whether it stands."""
         scan = self.latest_scan
-        if self.mode != "localize" or self.activity is not None or not self.scanning():
+        if self.mode != "localize" or self.activity is not None or self.handled is not None or not self.scanning():
             return self.pose_state == "searching"
         stamp = Time.from_msg(scan.header.stamp)
         odom_laser = self.lookup_pose("odom", scan.header.frame_id, stamp)
@@ -625,6 +775,9 @@ class NavNode(Node):
 
         seed = None
         with self.pose_lock:
+            if self.handled is not None:
+                # picked up while this search ran: its scan may be from mid-air
+                return False
             if self.pose_state == "searching":
                 rival = None
                 self.rival_stands = False
@@ -1130,6 +1283,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-png", default=DEFAULT_MAP_PNG_PATH)
     parser.add_argument("--nav-pose", default=DEFAULT_NAV_POSE_PATH)
     parser.add_argument("--localization-settings", default=DEFAULT_LOCALIZATION_SETTINGS_PATH)
+    parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)
     parser.add_argument("--recordings-dir", default=robot_nav.DEFAULT_RECORDINGS_DIR)
     return parser
 

@@ -1,5 +1,6 @@
 """Nav bridge logic: saved maps, places, nav.json, the map PNG and the nav socket,
-plus the judge (beam_check) and the search for the robot's place (global_search).
+plus the judge (beam_check), its self-check (scan_check) and the search for
+the robot's place (global_search).
 
 ros_nodes/nav_node.py wires this to ROS (the /map grid, TF, AMCL). Everything
 here is plain Python so it runs in the tests without rclpy.
@@ -53,6 +54,10 @@ KEEPOUT_RESOLUTION_METERS = 0.05
 CHECK_MIN_BEAMS = 30
 # map_server marks walls 100, free 0 and unknown -1
 OCCUPIED_THRESHOLD = 50
+# the self-check (scan_check) matches a beam against the reference points
+# this many degrees each side, to within the tolerance plus this share of range
+SCAN_CHECK_DEGREES = 2
+SCAN_CHECK_TOLERANCE_SHARE = 0.02
 
 # The search (global_search): poses this far apart and this many degrees,
 # scored on this many beams no longer than SEARCH_BEAM_MAX_M.
@@ -268,6 +273,40 @@ def beam_check(
         "passes": agree_share >= settings.agree_min and through_share <= settings.through_max,
         "classes": classes,
     }
+
+
+def degree_ranges(ranges, angle_min: float, angle_increment: float, range_min: float, range_max: float):
+    """One range per degree of the lidar frame, the scan beam nearest it;
+    inf where nothing came back."""
+    ranges = np.asarray(ranges, dtype=np.float64)
+    measured = ranges[np.round((np.radians(np.arange(360)) - angle_min) / angle_increment).astype(int) % len(ranges)]
+    return np.where(np.isfinite(measured) & (measured >= range_min) & (measured <= range_max), measured, np.inf)
+
+
+def scan_check(reference, measured, moved: dict[str, float], settings: LocalizationSettings) -> float | None:
+    """The self-check: the share of this scan's beams that land where the
+    reference scan (the last one the judge passed) says they should, both as
+    degree_ranges. moved is the reference lidar pose in this lidar's frame,
+    from the wheels. The map plays no part, so the tolerance can be tight:
+    a beam matches the nearest reference point within SCAN_CHECK_DEGREES of
+    it to self_check_tolerance_m + SCAN_CHECK_TOLERANCE_SHARE x range. None
+    when fewer than CHECK_MIN_BEAMS beams have a reference point to match."""
+    seen = np.isfinite(reference)
+    angles = np.radians(np.arange(360))[seen] + moved["yaw"]
+    x = moved["x"] + reference[seen] * np.cos(angles)
+    y = moved["y"] + reference[seen] * np.sin(angles)
+    # the reference's points seen from here, the nearest per degree
+    expected = np.full(360, np.inf)
+    np.minimum.at(expected, np.round(np.degrees(np.arctan2(y, x))).astype(int) % 360, np.hypot(x, y))
+    neighbours = np.stack([np.roll(expected, shift) for shift in range(-SCAN_CHECK_DEGREES, SCAN_CHECK_DEGREES + 1)])
+    compared = np.isfinite(measured) & np.isfinite(neighbours).any(axis=0)
+    if compared.sum() < CHECK_MIN_BEAMS:
+        return None
+    tolerance = settings.self_check_tolerance_m + SCAN_CHECK_TOLERANCE_SHARE * measured
+    # a beam with no return is inf - inf; `compared` drops it
+    with np.errstate(invalid="ignore"):
+        matches = compared & np.any(np.abs(neighbours - measured) <= tolerance, axis=0)
+    return float(matches.sum() / compared.sum())
 
 
 def search_grids(data, map_info: dict[str, Any]) -> dict[str, Any]:

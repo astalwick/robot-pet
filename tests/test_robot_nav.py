@@ -230,6 +230,41 @@ class BeamCheckTest(unittest.TestCase):
         for key in ("x", "y", "yaw"):
             self.assertAlmostEqual(back[key], odom_laser[key])
 
+    def test_degree_ranges_takes_the_nearest_beam_and_marks_no_return(self):
+        # 720 beams half a degree apart starting at -90 degrees
+        ranges = [1.0 + beam / 1000 for beam in range(720)]
+        ranges[180] = 0.0  # straight ahead: below range_min
+        ranges[182] = math.inf
+        measured = robot_nav.degree_ranges(ranges, -math.pi / 2, math.radians(0.5), 0.15, 12.0)
+        self.assertEqual(len(measured), 360)
+        self.assertEqual(measured[0], math.inf)
+        self.assertEqual(measured[1], math.inf)
+        self.assertAlmostEqual(measured[2], 1.184)
+        self.assertAlmostEqual(measured[270], 1.0)
+
+    def scan_check(self, reference_pose, pose, moved):
+        reference = robot_nav.degree_ranges(self.ray_cast(*reference_pose), 0.0, math.radians(1), 0.15, 12.0)
+        measured = robot_nav.degree_ranges(self.ray_cast(*pose), 0.0, math.radians(1), 0.15, 12.0)
+        return robot_nav.scan_check(reference, measured, moved, LocalizationSettings())
+
+    def test_the_self_check_matches_a_scan_the_wheels_explain(self):
+        # reversed 0.35 m and turned a little: the wheels say exactly that
+        reference_pose, pose = (2.0, 2.5, 0.3), (2.0 - 0.35 * math.cos(0.3), 2.5 - 0.35 * math.sin(0.3), 0.4)
+        moved = robot_nav.relative_pose(dict(zip("xy", pose[:2]), yaw=pose[2]), dict(zip("xy", reference_pose[:2]), yaw=reference_pose[2]))
+        self.assertGreater(self.scan_check(reference_pose, pose, moved), 0.95)
+
+    def test_the_self_check_fails_a_slide_or_turn_the_wheels_did_not_see(self):
+        still = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        self.assertGreater(self.scan_check((2.0, 2.5, 0.3), (2.0, 2.5, 0.3), still), 0.95)
+        self.assertLess(self.scan_check((2.0, 2.5, 0.3), (2.0, 2.8, 0.3), still), 0.75)
+        self.assertLess(self.scan_check((2.0, 2.5, 0.3), (2.0, 2.5, 0.3 + math.radians(10)), still), 0.75)
+
+    def test_the_self_check_needs_beams_to_compare(self):
+        reference = np.full(360, np.inf)
+        reference[:20] = 2.0
+        measured = robot_nav.degree_ranges(self.ray_cast(2.5, 2.5, 0.0), 0.0, math.radians(1), 0.15, 12.0)
+        self.assertIsNone(robot_nav.scan_check(reference, measured, {"x": 0.0, "y": 0.0, "yaw": 0.0}, LocalizationSettings()))
+
 
 class SearchTest(unittest.TestCase):
     # A 5 m square room at 5 cm with a box in it, so only one pose sees what

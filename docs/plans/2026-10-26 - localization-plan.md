@@ -591,6 +591,55 @@ The phase 1 recordings replayed through the search every fourth scan
   median, but the judge drops that pose by itself.
 - **Time:** 0.24 s per search on the Mac at the median, 1.21 s at most.
 
+### Phase 2b: the self-check and handling (built 2026-10-31)
+
+Found on the floor: reversing into the spot by the living room table, the
+map disagreed (the table and chairs had moved since mapping) and the judge
+dropped a pose the wheels plainly vouched for. Two additions, each with its
+own switch in localization.json.
+
+- **The self-check** (`robot_nav.scan_check`). A scan that fails the map is
+  compared with the last scan that passed, carried by the wheel odometry.
+  The map plays no part, so the tolerance is tight: 0.08 m + 2% of range,
+  neighbours 2 degrees each side. Matching 0.75 of the beams or more, the
+  verdict does not count. A rival still fails every verdict.
+- **Handling** (`update_handling` in the bridge). While not driving, both
+  cliff sensors past their cliff trip means picked up; rocking more than
+  0.5 degrees within a second means pushed. While driving (a non-zero
+  `/cmd_vel`, `/nav_lock`, or 1.5 s after either), the cliff sensors stay
+  cliff sensors and a tip of 6 degrees from how the robot sat means picked
+  up. A cliff met while driving is not a pick-up until the floor is back
+  under both. Handled, the pose drops to checking and the judge and the
+  search wait; put down (floor under both, no rocking for 1 s) the pose is
+  checked afresh and a search runs at once. Put back where it was, the
+  judge re-earns the pose with a short drive; carried elsewhere, it fails
+  and is found.
+
+#### Recordings, 2026-10-31
+
+Self-check score (share of beams matching the last good scan):
+
+| Case | Score |
+| --- | --- |
+| Reverse into the table spot (true pose, map disagrees) | 0.88 or more |
+| Person walking past | 0.79 at least |
+| Hidden 20 cm slide | 0.20 to 0.68 |
+| Hidden 10 degree turn | 0.29 to 0.74 |
+| Gamepad drive, scans the map fails | 0.48 to 0.69 (not excused, as before) |
+| Carried to another room | 0.13 to 0.46 |
+| Lifted along the passage | about 0.1 |
+
+IMU and cliff sensors:
+
+| Case | Reading |
+| --- | --- |
+| Still on the floor | rocking 0.17 degrees at most |
+| Pushed by hand | rocking 1 to 2 degrees |
+| Driving, rug edge, sill | tip 3.1 degrees, rocking 3.8 at most |
+| Picked up | tip 11 degrees |
+| Cliff sensors on the floor | 76 to 92 mm |
+| Cliff sensors when lifted | past 110 mm within 0.1 to 0.2 s |
+
 ### Phase 3: held trips, voice, off map (three evenings)
 
 - Held trips in the bridge, the trip tool's short wait and notes, `off_map`,

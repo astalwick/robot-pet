@@ -392,6 +392,10 @@ main {
   white-space: nowrap;
 }
 
+#nav-record-seconds {
+  flex: 0 0 4.5rem;
+}
+
 .nav-actions input,
 .nav-actions select {
   font: inherit;

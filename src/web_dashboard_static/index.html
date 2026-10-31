@@ -149,7 +149,8 @@
           </div>
           <div class="nav-actions hidden" id="nav-debug-actions">
             <input id="nav-record-label" type="text" placeholder="recording label" maxlength="60" aria-label="Recording label">
-            <button id="nav-record-button" type="button" disabled title="Save the next 10 seconds of scans for the localization replay tool">Record</button>
+            <input id="nav-record-seconds" type="number" min="1" max="120" value="10" aria-label="Recording seconds">
+            <button id="nav-record-button" type="button" disabled title="Save the next few seconds of scans for the localization replay tool">Record</button>
           </div>
           <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. The Map button above the camera shows it; click the map to drive there. Draw barrier: click two points to draw a wall the robot must not cross (the steps down to the dining room). Erase: click a barrier or a place to delete it.</p>
         </article>

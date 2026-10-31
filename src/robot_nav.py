@@ -226,7 +226,9 @@ def beam_check(
     spread = settings.neighbour_degrees if settings.neighbour_rule else 0
     neighbours = np.stack([np.roll(predicted, shift) for shift in range(-spread, spread + 1)])
     tolerance = settings.tolerance_m + settings.tolerance_share * measured
-    agree = returned & np.any(np.abs(neighbours - measured) <= tolerance, axis=0)
+    # a beam with no return against a wall with no prediction is inf - inf; `returned` drops it
+    with np.errstate(invalid="ignore"):
+        agree = returned & np.any(np.abs(neighbours - measured) <= tolerance, axis=0)
     no_opinion = returned & ~agree & reaches_unknown
     farthest = neighbours.max(axis=0)
     through = returned & ~agree & ~no_opinion & (farthest <= settings.through_max_range_m) & (measured > farthest + 2 * tolerance)

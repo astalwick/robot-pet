@@ -318,13 +318,14 @@ function onSavePlace() {
   sendNav({ cmd: 'create_place', name }).then((ok) => { if (ok) input.value = ''; });
 }
 
-// Save the next 10 s of scans for scripts/localization-replay.py, labelled with
-// where the robot is ("cross 2") or what just went wrong.
+// Save the next few seconds of scans for scripts/localization-replay.py,
+// labelled with where the robot is ("cross 2") or what just went wrong.
 function onRecord() {
   const input = document.getElementById('nav-record-label');
   const label = input.value.trim();
   if (!label) return;
-  sendNav({ cmd: 'record', label }).then((ok) => { if (ok) input.value = ''; });
+  const seconds = Number(document.getElementById('nav-record-seconds').value);
+  sendNav({ cmd: 'record', label, seconds }).then((ok) => { if (ok) input.value = ''; });
 }
 
 async function sendNav(message) {

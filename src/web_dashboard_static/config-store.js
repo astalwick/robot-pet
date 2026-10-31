@@ -140,6 +140,7 @@ export const configStore = {
   vision: createSection('vision'),
   voice: createSection('voice'),
   sensors: createSection('sensors'),
+  localization: createSection('localization'),
 };
 
 export async function loadAll() {
@@ -148,6 +149,7 @@ export async function loadAll() {
     configStore.vision.load(),
     configStore.voice.load(),
     configStore.sensors.load(),
+    configStore.localization.load(),
   ]);
   return results;
 }

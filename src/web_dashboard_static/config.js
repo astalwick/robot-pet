@@ -63,6 +63,7 @@ function renderConfigFields() {
   const visionHtml = configStore.vision.fields.map((field) => fieldHtml(field, configStore.vision.server, 'vision')).join('');
   const voiceHtml = configStore.voice.fields.map((field) => fieldHtml(field, configStore.voice.server, 'voice')).join('');
   const sensorsHtml = configStore.sensors.fields.map((field) => fieldHtml(field, configStore.sensors.server, 'sensors')).join('');
+  const localizationHtml = configStore.localization.fields.map((field) => fieldHtml(field, configStore.localization.server, 'localization')).join('');
   document.getElementById('config-fields').innerHTML = `
       <h3 class="config-section">Drive</h3>
       ${driveHtml}
@@ -72,6 +73,8 @@ function renderConfigFields() {
       ${voiceHtml}
       <h3 class="config-section">Sensors &amp; safety</h3>
       ${sensorsHtml}
+      <h3 class="config-section">Localization</h3>
+      ${localizationHtml}
     `;
 }
 
@@ -91,6 +94,7 @@ async function openConfig() {
   if (results[1].error) messages.push(`Vision: ${results[1].error}`);
   if (results[2].error) messages.push(`Voice: ${results[2].error}`);
   if (results[3].error) messages.push(`Sensors: ${results[3].error}`);
+  if (results[4].error) messages.push(`Localization: ${results[4].error}`);
   error.textContent = messages.join('\n');
 
   renderConfigFields();
@@ -105,11 +109,13 @@ async function applyConfig(event) {
   const visionValues = {};
   const voiceValues = {};
   const sensorsValues = {};
+  const localizationValues = {};
   event.currentTarget.querySelectorAll('input[data-section], select[data-section]').forEach((input) => {
     let target = voiceValues;
     if (input.dataset.section === 'drive') target = driveValues;
     else if (input.dataset.section === 'vision') target = visionValues;
     else if (input.dataset.section === 'sensors') target = sensorsValues;
+    else if (input.dataset.section === 'localization') target = localizationValues;
     if (input.type === 'checkbox') {
       target[input.dataset.key] = input.checked;
     } else if (input.type === 'text' || input.tagName === 'SELECT') {
@@ -128,6 +134,12 @@ async function applyConfig(event) {
   if (!driveResult.ok) messages.push(`Drive: ${driveResult.error}`);
   const sensorsResult = await configStore.sensors.apply(sensorsValues);
   if (!sensorsResult.ok) messages.push(`Sensors: ${sensorsResult.error}`);
+  // saving restarts the nav bridge, which ends a trip, so only on a change
+  const localization = configStore.localization;
+  if (Object.keys(localizationValues).some((key) => localizationValues[key] !== localization.server[key])) {
+    const localizationResult = await localization.apply(localizationValues);
+    if (!localizationResult.ok) messages.push(`Localization: ${localizationResult.error}`);
+  }
 
   if (messages.length) {
     error.textContent = messages.join('\n');

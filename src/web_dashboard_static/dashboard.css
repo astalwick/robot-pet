@@ -384,6 +384,10 @@ main {
   margin-top: 0.5rem;
 }
 
+.nav-actions.hidden {
+  display: none;
+}
+
 .nav-actions button {
   white-space: nowrap;
 }

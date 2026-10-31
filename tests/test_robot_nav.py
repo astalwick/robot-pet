@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 import robot_nav
+from config.localization import LocalizationSettings
 from robot_nav import NavSocketServer, request_nav
 
 
@@ -154,7 +155,7 @@ class ScanFitTest(unittest.TestCase):
     def test_the_scan_does_not_fit_from_the_wrong_pose(self):
         ranges = self.ray_cast(2.0, 1.5, 0.0)
         # believed to face 45 degrees off: the room's outline lands across the floor and off the map
-        self.assertLess(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": math.radians(45)}), robot_nav.SCAN_FIT_LOST)
+        self.assertLess(self.fit(ranges, {"x": 2.0, "y": 1.5, "yaw": math.radians(45)}), 0.4)
         # a metre off: only the beams along the walls still match
         self.assertLess(self.fit(ranges, {"x": 3.0, "y": 1.5, "yaw": 0.0}), 0.6)
 
@@ -165,18 +166,84 @@ class ScanFitTest(unittest.TestCase):
         ranges[180:340] = [math.nan] * 160
         self.assertIsNone(self.fit(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}))
 
-    def test_localized_change_rule(self):
-        lost_run, found_run = robot_nav.SCAN_FIT_LOST_TICKS, robot_nav.SCAN_FIT_FOUND_TICKS
-        # while localized: only a long enough run of bad fits loses it
-        self.assertIsNone(robot_nav.localized_change(True, 0, 0))
-        self.assertIsNone(robot_nav.localized_change(True, lost_run - 1, 0))
-        self.assertIsNone(robot_nav.localized_change(True, 0, found_run))
-        self.assertEqual(robot_nav.localized_change(True, lost_run, 0), (False, "the scan does not match the map here"))
-        # while lost: only a run of good fits finds it
-        self.assertIsNone(robot_nav.localized_change(False, 0, 0))
-        self.assertIsNone(robot_nav.localized_change(False, 0, found_run - 1))
-        self.assertIsNone(robot_nav.localized_change(False, lost_run, 0))
-        self.assertEqual(robot_nav.localized_change(False, 0, found_run), (True, "the scan fits the map here"))
+    def check(self, ranges, laser_pose, **settings):
+        return robot_nav.beam_check(
+            self.room(), self.ROOM, laser_pose, ranges, 0.0, math.radians(1), 0.15, 12.0, LocalizationSettings(**settings)
+        )
+
+    def test_the_judge_passes_the_true_pose(self):
+        check = self.check(self.ray_cast(2.0, 1.5, 0.3), {"x": 2.0, "y": 1.5, "yaw": 0.3})
+        self.assertGreater(check["agree"], 0.95)
+        self.assertEqual(check["through"], 0.0)
+        self.assertTrue(check["passes"])
+        self.assertEqual(len(check["classes"]), 360)
+
+    def test_the_judge_fails_a_wrong_heading_and_a_wrong_spot(self):
+        ranges = self.ray_cast(2.0, 1.5, 0.0)
+        self.assertFalse(self.check(ranges, {"x": 2.0, "y": 1.5, "yaw": math.radians(45)})["passes"])
+        self.assertFalse(self.check(ranges, {"x": 3.0, "y": 1.5, "yaw": 0.0})["passes"])
+
+    def test_beams_through_a_wall_count_unless_they_are_the_one_forgiven_patch(self):
+        ranges = self.ray_cast(2.5, 2.5, 0.0)
+        # an open door: 41 beams see 2 m past the wall the map has there
+        ranges[70:111] = [r + 2.0 for r in ranges[70:111]]
+        check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
+        self.assertEqual(check["through"], 0.0)
+        self.assertEqual(list(check["classes"]).count("forgiven"), 41)
+        # it stays in the agree share as beams that fit nothing
+        self.assertAlmostEqual(check["agree"], 319 / 360)
+        self.assertTrue(check["passes"])
+        self.assertFalse(self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0}, forgiven_patch=False)["passes"])
+        # a second patch elsewhere is not forgiven
+        ranges[250:291] = [r + 2.0 for r in ranges[250:291]]
+        check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
+        self.assertAlmostEqual(check["through"], 41 / 360)
+        self.assertFalse(check["passes"])
+
+    def test_a_missing_return_never_counts_as_through_and_does_not_split_the_patch(self):
+        ranges = self.ray_cast(2.5, 2.5, 0.0)
+        ranges[70:111] = [r + 2.0 for r in ranges[70:111]]
+        ranges[90] = math.inf
+        ranges[200:260] = [math.inf] * 60
+        check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
+        self.assertEqual(check["through"], 0.0)
+        self.assertEqual(list(check["classes"]).count("forgiven"), 40)
+        self.assertEqual(list(check["classes"]).count("no_return"), 61)
+
+    def test_something_in_the_way_is_short_not_through(self):
+        ranges = self.ray_cast(2.5, 2.5, 0.0)
+        ranges[10:30] = [0.8] * 20  # a person standing in front
+        check = self.check(ranges, {"x": 2.5, "y": 2.5, "yaw": 0.0})
+        self.assertEqual(list(check["classes"]).count("short"), 20)
+        self.assertEqual(check["through"], 0.0)
+        self.assertTrue(check["passes"])
+
+    def test_beams_into_unknown_map_have_no_opinion_and_too_few_opinions_is_no_verdict(self):
+        grid = np.asarray(self.room(), dtype=np.int16).reshape(100, 100)
+        # the left half of the room was never mapped
+        grid[1:-1, 1:50] = -1
+        ranges = self.ray_cast(3.75, 2.5, 0.0)
+        pose = {"x": 3.75, "y": 2.5, "yaw": 0.0}
+        check = robot_nav.beam_check(grid.ravel(), self.ROOM, pose, ranges, 0.0, math.radians(1), 0.15, 12.0, LocalizationSettings())
+        self.assertGreater(list(check["classes"]).count("none"), 100)
+        self.assertTrue(check["passes"])
+        # only the bottom right quarter is mapped: three quarters of the beams reach unknown
+        grid[1:-1, 1:48] = -1
+        grid[52:-1, 1:-1] = -1
+        pose = {"x": 2.5, "y": 2.5, "yaw": 0.0}
+        ranges = self.ray_cast(2.5, 2.5, 0.0)
+        self.assertIsNone(robot_nav.beam_check(grid.ravel(), self.ROOM, pose, ranges, 0.0, math.radians(1), 0.15, 12.0, LocalizationSettings()))
+
+    def test_poses_compose_and_come_apart(self):
+        map_odom = {"x": 1.0, "y": 2.0, "yaw": math.pi / 2}
+        odom_laser = {"x": 0.5, "y": 0.0, "yaw": 0.25}
+        laser = robot_nav.compose_poses(map_odom, odom_laser)
+        self.assertAlmostEqual(laser["x"], 1.0)
+        self.assertAlmostEqual(laser["y"], 2.5)
+        self.assertAlmostEqual(laser["yaw"], math.pi / 2 + 0.25)
+        back = robot_nav.relative_pose(map_odom, laser)
+        for key in ("x", "y", "yaw"):
+            self.assertAlmostEqual(back[key], odom_laser[key])
 
 
 class RenderMapPngTest(unittest.TestCase):

@@ -147,6 +147,10 @@
             <button id="nav-save-place-button" type="button" disabled title="Remember the robot's current spot by name">Save place</button>
             <button id="nav-cancel-button" type="button" disabled title="Stop driving to the goal">Cancel trip</button>
           </div>
+          <div class="nav-actions hidden" id="nav-debug-actions">
+            <input id="nav-record-label" type="text" placeholder="recording label" maxlength="60" aria-label="Recording label">
+            <button id="nav-record-button" type="button" disabled title="Save the next 10 seconds of scans for the localization replay tool">Record</button>
+          </div>
           <p class="modal-help">Mapping builds a new map as you drive with the gamepad. Save it, and the robot localizes on it from then on. The Map button above the camera shows it; click the map to drive there. Draw barrier: click two points to draw a wall the robot must not cross (the steps down to the dining room). Erase: click a barrier or a place to delete it.</p>
         </article>
         <article id="imu-panel" class="panel hidden">
@@ -168,7 +172,7 @@
     <div id="config-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="config-title">
       <form id="config-form" class="modal-card">
         <h2 id="config-title">Robot Config</h2>
-        <p class="modal-help">OK saves all sections. Drive changes restart gamepad-teleop; sensors changes restart robot-sensors and robot-motion; vision and voice apply live.</p>
+        <p class="modal-help">OK saves all sections. Drive changes restart gamepad-teleop; sensors changes restart robot-sensors and robot-motion; localization changes restart robot-nav-bridge; vision and voice apply live.</p>
         <div id="config-fields"></div>
         <div id="config-error" class="value err"></div>
         <div class="modal-actions">

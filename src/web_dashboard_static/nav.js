@@ -11,6 +11,16 @@ import { appendLog } from './logs.js';
 // Same as robot_nav.BARRIER_HALF_WIDTH_METERS: how far each side of a barrier
 // line the bridge paints forbidden.
 const BARRIER_HALF_WIDTH_M = 0.3;
+// ?debug shows the judge's numbers and the Record button for the replay tool
+const DEBUG = new URLSearchParams(location.search).has('debug');
+
+// How sure the robot is of its position, for the panel. Mapping has no state.
+const POSITION_TEXT = {
+  tracking: ['sure', 'ok'],
+  checking: ['checking my position, sure after a short drive', 'warn'],
+  searching: ['lost, press Localize', 'err'],
+  stale: ['lidar off', 'muted'],
+};
 
 let mapImage = null;
 let mapSerial = null;
@@ -35,13 +45,21 @@ export function renderNav(snapshot, sources) {
   const rows = [
     row('mode', '', nav.mode, nav.mode === 'localize' ? 'ok' : ''),
     row('map', '', nav.map || (nav.mode === 'mapping' ? 'new map' : '--')),
-    row('localized', '', nav.localized ? 'yes' : 'no', nav.localized ? 'ok' : 'muted'),
+    row('position', '', ...(POSITION_TEXT[nav.state] || ['mapping', 'muted'])),
     row('scan fit', '', nav.scan_fit == null ? '--' : `${Math.round(nav.scan_fit * 100)}%`, nav.scan_fit == null ? 'muted' : ''),
     row('activity', '', nav.activity || 'idle', nav.activity ? 'warn' : 'muted'),
     row('pose', '', pose ? `${fmt(pose.x, ' m', 2)}, ${fmt(pose.y, ' m', 2)}, ${fmt((pose.yaw * 180) / Math.PI, '°', 0)}` : '--'),
     row('places', '', String(Object.keys(nav.places || {}).length)),
     row('goal', '', goalText(nav.goal), goalClass(nav.goal)),
   ];
+  if (DEBUG) {
+    const check = nav.check;
+    rows.push(
+      row('state', '', `${nav.state || '--'}${nav.localized ? ', localized' : ''}`),
+      row('judge', '', check ? `agree ${check.agree}, through ${check.through}, opinion ${check.opinion}` : '--', check ? (check.passes ? 'ok' : 'err') : 'muted'),
+      row('recording', '', nav.recording || 'no', nav.recording ? 'warn' : 'muted'),
+    );
+  }
   setRows('nav-rows', rows);
 
   if (nav.map_info && nav.map_info.serial !== mapSerial) loadMap(nav.map_info);
@@ -139,13 +157,20 @@ function drawMap() {
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(-nav.pose.yaw);
-    ctx.fillStyle = nav.localized || nav.mode === 'mapping' ? '#00d4ff' : '#f87171';
     ctx.beginPath();
     ctx.moveTo(size, 0);
     ctx.lineTo(-size, size * 0.7);
     ctx.lineTo(-size, -size * 0.7);
     ctx.closePath();
-    ctx.fill();
+    // solid when sure, soft while checking or with the lidar off, hollow when lost
+    if (nav.state === 'searching') {
+      ctx.strokeStyle = '#f87171';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = nav.state === 'tracking' || nav.mode === 'mapping' ? '#00d4ff' : 'rgba(0, 212, 255, 0.45)';
+      ctx.fill();
+    }
     ctx.restore();
   }
 }
@@ -163,7 +188,9 @@ function updateNavControls() {
   setDisabled('nav-start-mapping-button', navStale || mapping);
   setDisabled('nav-save-map-button', !mapping);
   setDisabled('nav-localize-button', !localize);
-  setDisabled('nav-save-place-button', !(localize && nav.localized && nav.pose));
+  // a place saved on an unconfirmed position could be off by a room
+  setDisabled('nav-save-place-button', !(localize && nav.state === 'tracking' && nav.pose));
+  setDisabled('nav-record-button', !localize || nav.recording != null);
   setDisabled('nav-cancel-button', !(nav && nav.goal && nav.goal.state === 'navigating'));
 
   const select = document.getElementById('nav-map-select');
@@ -191,6 +218,8 @@ export function bindNavHandlers(bindOn) {
   bindOn('view-map-button', 'click', () => showMap(true));
   bindOn('nav-draw-barrier-button', 'click', () => setMapTool('barrier'));
   bindOn('nav-erase-button', 'click', () => setMapTool('erase'));
+  bindOn('nav-record-button', 'click', onRecord);
+  document.getElementById('nav-debug-actions').classList.toggle('hidden', !DEBUG);
 }
 
 // A tool stays on until clicked again (or the other one is picked).
@@ -287,6 +316,15 @@ function onSavePlace() {
   const name = input.value.trim();
   if (!name) return;
   sendNav({ cmd: 'create_place', name }).then((ok) => { if (ok) input.value = ''; });
+}
+
+// Save the next 10 s of scans for scripts/localization-replay.py, labelled with
+// where the robot is ("cross 2") or what just went wrong.
+function onRecord() {
+  const input = document.getElementById('nav-record-label');
+  const label = input.value.trim();
+  if (!label) return;
+  sendNav({ cmd: 'record', label }).then((ok) => { if (ok) input.value = ''; });
 }
 
 async function sendNav(message) {

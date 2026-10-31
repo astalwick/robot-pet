@@ -10,6 +10,8 @@ Files, all under ~/.config/robot-pet:
     barriers.json {"<map>": [{"x1": .., "y1": .., "x2": .., "y2": ..}, ...]}
     maps/<name>.yaml + .pgm, written by nav2's map_saver_cli
     keepout/<name>.yaml + .pgm, the barriers drawn as a Nav2 keepout mask
+    localization.json, the judge's bars and switches (config/localization.py)
+    recordings/<time>-<label>.jsonl, scans saved for scripts/localization-replay.py
 
 config/nav.launch.py reads nav.json at robot-nav.service start; the bridge
 writes it and restarts the unit to switch modes.
@@ -30,6 +32,7 @@ from typing import Any, Callable
 import numpy as np
 from PIL import Image
 
+from config.localization import LocalizationSettings
 from robot_model import FOOTPRINT_FRONT_X_METERS, FOOTPRINT_HALF_WIDTH_METERS, FOOTPRINT_REAR_X_METERS
 from telemetry.socket_client import send_voice_command
 
@@ -38,6 +41,7 @@ DEFAULT_PLACES_PATH = "/home/pi/.config/robot-pet/places.json"
 DEFAULT_MAPS_DIR = "/home/pi/.config/robot-pet/maps"
 DEFAULT_BARRIERS_PATH = "/home/pi/.config/robot-pet/barriers.json"
 DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
+DEFAULT_RECORDINGS_DIR = "/home/pi/.config/robot-pet/recordings"
 
 # A barrier line is forbidden this far to each side. Keepout cells are not
 # inflated, and the tail sweeps 0.31 m from the axle when the robot turns.
@@ -54,14 +58,10 @@ SCAN_FIT_MIN_BEAMS = 30
 # map_server marks walls 100, free 0 and unknown -1
 OCCUPIED_THRESHOLD = 50
 # Floor numbers (ground floor, 2026-10-26): 55-90% at the true pose, 44-49% at
-# the right spot facing the wrong way, 23% on the kitchen counter. Under
-# SCAN_FIT_LOST for SCAN_FIT_LOST_TICKS ticks (0.5 s each) in a row means lost;
-# SCAN_FIT_FOUND or better for SCAN_FIT_FOUND_TICKS in a row means found. A
-# wrong heading at the right spot falls between the two and is not caught yet.
-SCAN_FIT_LOST = 0.4
-SCAN_FIT_LOST_TICKS = 6
+# the right spot facing the wrong way, 23% on the kitchen counter. Until the
+# search replaces the relocalize spin, a spin is accepted only at
+# SCAN_FIT_FOUND or better and when beam_check passes too.
 SCAN_FIT_FOUND = 0.6
-SCAN_FIT_FOUND_TICKS = 3
 
 # Map names become file names; place names are spoken, so they may have spaces.
 MAP_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
@@ -142,18 +142,6 @@ def maps_to_try(maps: list[str], last_used: str | None) -> list[str]:
     return list(maps)
 
 
-def localized_change(localized: bool, low_fit_ticks: int, high_fit_ticks: int) -> tuple[bool, str] | None:
-    """The per-tick localized rule: (new value, why) when it changes, else
-    None. The counters are runs of consecutive ticks with a bad or a good scan
-    fit; a tick without a fit (no fresh scan, no map pose, turning) resets
-    both, so silence is no opinion, never a vote either way."""
-    if localized and low_fit_ticks >= SCAN_FIT_LOST_TICKS:
-        return False, "the scan does not match the map here"
-    if not localized and high_fit_ticks >= SCAN_FIT_FOUND_TICKS:
-        return True, "the scan fits the map here"
-    return None
-
-
 def scan_fit(
     data, map_info: dict[str, Any], laser_pose: dict[str, float], ranges, angle_min: float, angle_increment: float, range_min: float, range_max: float
 ) -> float | None:
@@ -178,6 +166,122 @@ def scan_fit(
             near_wall |= occupied[shift_y : shift_y + height, shift_x : shift_x + width]
     on_map = (columns >= 0) & (columns < width) & (rows >= 0) & (rows < height)
     return float(near_wall[rows[on_map], columns[on_map]].sum() / len(ranges))
+
+
+def beam_check(
+    data,
+    map_info: dict[str, Any],
+    laser_pose: dict[str, float],
+    ranges,
+    angle_min: float,
+    angle_increment: float,
+    range_min: float,
+    range_max: float,
+    settings: LocalizationSettings,
+) -> dict[str, Any] | None:
+    """The judge: does this pose contradict the map? One beam per degree is
+    ray-cast across the map from the lidar's pose and its measured range is
+    sorted into one of:
+
+        agree     within tolerance of its own wall or a neighbour beam's
+        through   well beyond the farthest of those walls: it went through one
+        short     something unmapped is in the way (a person, a chair)
+        none      the ray reaches unknown map before any wall: no opinion
+        no_return the lidar got nothing back (black furniture), never through
+
+    The largest run of through beams is forgiven (an open door, a moved sofa):
+    it is not counted as through but stays in the agree share's denominator,
+    so a wrong pose cannot gain by it. Returns {"agree", "through" (shares of
+    the beams with an opinion), "opinion" (share of returned beams with one),
+    "passes", "classes" (per degree)}, or None when there is no verdict: fewer
+    than a third of the returned beams have an opinion, or too few returned."""
+    resolution = map_info["resolution"]
+    width, height = map_info["width"], map_info["height"]
+    grid = np.asarray(data, dtype=np.int16).reshape(height, width)
+
+    # one measured beam per degree, the scan beam nearest it
+    ranges = np.asarray(ranges, dtype=np.float64)
+    degrees = np.radians(np.arange(360))
+    measured = ranges[np.round((degrees - angle_min) / angle_increment).astype(int) % len(ranges)]
+    returned = np.isfinite(measured) & (measured >= range_min) & (measured <= range_max)
+    if returned.sum() < SCAN_FIT_MIN_BEAMS:
+        return None
+
+    # ray-cast in half-cell steps to the first wall or unknown cell (off the map is unknown)
+    angles = laser_pose["yaw"] + degrees
+    distances = np.arange(1, int(range_max / (resolution / 2)) + 1) * (resolution / 2)
+    columns = np.floor((laser_pose["x"] + np.cos(angles)[:, None] * distances - map_info["origin_x"]) / resolution).astype(int)
+    rows = np.floor((laser_pose["y"] + np.sin(angles)[:, None] * distances - map_info["origin_y"]) / resolution).astype(int)
+    on_map = (columns >= 0) & (columns < width) & (rows >= 0) & (rows < height)
+    cells = np.full(columns.shape, -1, dtype=np.int16)
+    cells[on_map] = grid[rows[on_map], columns[on_map]]
+    stops = (cells >= OCCUPIED_THRESHOLD) | (cells < 0)
+    first_stop = stops.argmax(axis=1)
+    reaches_unknown = stops.any(axis=1) & (cells[np.arange(360), first_stop] < 0)
+    # the wall each beam should see; inf when it sees unknown or nothing in range
+    predicted = np.where(stops.any(axis=1) & ~reaches_unknown, distances[first_stop], np.inf)
+
+    # each beam against its own wall and its neighbours', always in the
+    # direction that makes "through" harder to claim
+    spread = settings.neighbour_degrees if settings.neighbour_rule else 0
+    neighbours = np.stack([np.roll(predicted, shift) for shift in range(-spread, spread + 1)])
+    tolerance = settings.tolerance_m + settings.tolerance_share * measured
+    agree = returned & np.any(np.abs(neighbours - measured) <= tolerance, axis=0)
+    no_opinion = returned & ~agree & reaches_unknown
+    farthest = neighbours.max(axis=0)
+    through = returned & ~agree & ~no_opinion & (farthest <= settings.through_max_range_m) & (measured > farthest + 2 * tolerance)
+    classes = np.full(360, "short", dtype="<U9")
+    classes[~returned] = "no_return"
+    classes[no_opinion] = "none"
+    classes[agree] = "agree"
+    classes[through] = "through"
+
+    opinion = np.flatnonzero(returned & ~no_opinion)
+    if len(opinion) * 3 < returned.sum():
+        return None
+    if settings.forgiven_patch and through.any():
+        # Go round the scan over only the beams with an opinion, so a missing
+        # return in the middle of an open door does not split it in two, and
+        # start just after a beam that is not through, so no run wraps the end.
+        flags = through[opinion]
+        start = int(np.argmin(flags)) + 1
+        largest_run: list[int] = []
+        run: list[int] = []
+        for offset in range(len(flags)):
+            index = (start + offset) % len(flags)
+            run = run + [int(opinion[index])] if flags[index] else []
+            if len(run) > len(largest_run):
+                largest_run = run
+        classes[largest_run] = "forgiven"
+    agree_share = float((classes == "agree").sum() / len(opinion))
+    through_share = float((classes == "through").sum() / len(opinion))
+    return {
+        "agree": agree_share,
+        "through": through_share,
+        "opinion": float(len(opinion) / returned.sum()),
+        "passes": agree_share >= settings.agree_min and through_share <= settings.through_max,
+        "classes": classes,
+    }
+
+
+def compose_poses(first: dict[str, float], second: dict[str, float]) -> dict[str, float]:
+    """second, given in first's frame, in the frame first is given in
+    (map -> odom with odom -> laser is the laser in the map)."""
+    cos_yaw, sin_yaw = math.cos(first["yaw"]), math.sin(first["yaw"])
+    return {
+        "x": first["x"] + cos_yaw * second["x"] - sin_yaw * second["y"],
+        "y": first["y"] + sin_yaw * second["x"] + cos_yaw * second["y"],
+        "yaw": math.atan2(math.sin(first["yaw"] + second["yaw"]), math.cos(first["yaw"] + second["yaw"])),
+    }
+
+
+def relative_pose(origin: dict[str, float], pose: dict[str, float]) -> dict[str, float]:
+    """pose in origin's frame, both given in the same frame: how the robot
+    moved from origin to pose, as seen from origin."""
+    dx, dy = pose["x"] - origin["x"], pose["y"] - origin["y"]
+    cos_yaw, sin_yaw = math.cos(origin["yaw"]), math.sin(origin["yaw"])
+    turned = pose["yaw"] - origin["yaw"]
+    return {"x": cos_yaw * dx + sin_yaw * dy, "y": cos_yaw * dy - sin_yaw * dx, "yaw": math.atan2(math.sin(turned), math.cos(turned))}
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:

@@ -47,6 +47,10 @@ class RobotModelTest(unittest.TestCase):
         # AMCL recovers from a wrong pose on its own while driving (0.0 turns that off)
         self.assertIn("recovery_alpha_fast: 0.1", nav2)
         self.assertIn("recovery_alpha_slow: 0.001", nav2)
+        # AMCL corrects every 10 cm or 6 degrees with a sharp beam weight on our 5 cm map
+        self.assertIn("update_min_d: 0.1", nav2)
+        self.assertIn("update_min_a: 0.1", nav2)
+        self.assertIn("sigma_hit: 0.1", nav2)
         self.assertIn("/nav_lock", (CONFIG_DIR / "twist_mux.yaml").read_text())
 
     def test_cliff_sensors_pitch_downward(self):

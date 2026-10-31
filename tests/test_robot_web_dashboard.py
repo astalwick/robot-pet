@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -312,6 +313,20 @@ class WebDashboardHandlersTest(unittest.IsolatedAsyncioTestCase):
             async with self.client.post("/config/vision", json=body) as resp:
                 self.assertEqual(resp.status, 200)
         restart.assert_not_called()
+
+    async def test_post_config_localization_saves_and_restarts_the_nav_bridge(self):
+        self.state.localization_config_path = os.path.join(self.tmpdir.name, "localization.json")
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch("robot_web_dashboard.restart_robot_nav_bridge", return_value=done) as restart:
+            async with self.client.post("/config/localization", json={"forgiven_patch": False, "agree_min": 0.6}) as resp:
+                self.assertEqual(resp.status, 200)
+                payload = await resp.json()
+        restart.assert_called_once()
+        self.assertFalse(payload["values"]["forgiven_patch"])
+        with open(self.state.localization_config_path) as file_obj:
+            saved = json.load(file_obj)
+        self.assertEqual(saved["agree_min"], 0.6)
+        self.assertEqual(saved["tolerance_m"], 0.2)
 
     async def test_post_config_vision_rejects_non_object_body(self):
         async with self.client.post("/config/vision", json=[1, 2, 3]) as resp:

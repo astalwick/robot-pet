@@ -446,7 +446,7 @@ Each phase ends with something Arlen can see on the floor or in a replay.
   drive around the floor while localized; the open door and the dark sofa;
   the removed coffee table; a cluttered room; a person walking past and one
   standing in front; a carry with the lidar on.
-- **Replay tool**, `tools/localization_replay.py`: prints today's
+- **Replay tool**, `scripts/localization-replay.py`: prints today's
   `scan_fit` beside the new agree and through shares for every recording,
   AMCL's error at the crosses, and the beams that always hit the body. A, T,
   the tolerance and N are read off its table, and the table goes into this

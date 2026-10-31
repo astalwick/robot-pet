@@ -33,6 +33,14 @@ from config.drive_tuning import (
     load_drive_tuning,
     save_drive_tuning,
 )
+from config.localization import (
+    DEFAULT_CONFIG_PATH as DEFAULT_LOCALIZATION_CONFIG_PATH,
+    LOCALIZATION_FIELDS,
+    LocalizationSettings,
+    LocalizationSettingsError,
+    load_localization_settings,
+    save_localization_settings,
+)
 from config.vision import (
     DEFAULT_CONFIG_PATH as DEFAULT_VISION_CONFIG_PATH,
     VISION_FIELDS,
@@ -337,6 +345,16 @@ def restart_robot_motion() -> subprocess.CompletedProcess[str]:
     )
 
 
+def restart_robot_nav_bridge() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sudo", "systemctl", "restart", "robot-nav-bridge.service"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+
+
 def run_lidar_transition(transition: str) -> subprocess.CompletedProcess[str]:
     # The dashboard isn't a ROS process, so it borrows the ROS env for this one call.
     command = (
@@ -388,6 +406,7 @@ class WebDashboardState:
         redeploy_status_path: str = DEFAULT_REDEPLOY_STATUS_PATH,
         nav_socket: str = DEFAULT_NAV_SOCKET,
         map_png_path: str = DEFAULT_MAP_PNG_PATH,
+        localization_config_path: str = DEFAULT_LOCALIZATION_CONFIG_PATH,
     ):
         self.loop = loop
         self.snapshot_store = snapshot_store
@@ -400,6 +419,7 @@ class WebDashboardState:
         self.redeploy_status_path = redeploy_status_path
         self.nav_socket = nav_socket
         self.map_png_path = map_png_path
+        self.localization_config_path = localization_config_path
         self.log_hub = BroadcastHub(loop)
         self.journal_follower = JournalFollower(self.log_hub)
         self._lock = threading.Lock()
@@ -651,6 +671,13 @@ def voice_config_payload(config: VoiceConfig) -> dict[str, Any]:
     }
 
 
+def localization_config_payload(config: LocalizationSettings) -> dict[str, Any]:
+    return {
+        "values": config.to_dict(),
+        "fields": [dict(field) for field in LOCALIZATION_FIELDS],
+    }
+
+
 def sensors_form_values(config: SensorsConfig) -> dict[str, Any]:
     return {
         "enabled": config.enabled,
@@ -728,6 +755,16 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "error": SensorsConfigError,
         "payload": sensors_config_payload,
         "saved_log": "Sensors config saved.",
+    },
+    "localization": {
+        "path_attr": "localization_config_path",
+        "load": load_localization_settings,
+        "save": save_localization_settings,
+        "from_dict": LocalizationSettings.from_dict,
+        "default": LocalizationSettings,
+        "error": LocalizationSettingsError,
+        "payload": localization_config_payload,
+        "saved_log": "Localization settings saved.",
     },
 }
 
@@ -844,6 +881,24 @@ async def config_apply(request: web.Request) -> web.Response:
         state.log_hub.publish("Sensors config saved. robot-sensors and robot-motion restarted.")
         return web.json_response({"ok": True, **spec["payload"](config)})
 
+    if name == "localization":
+        # the nav bridge reads its settings at startup; a running trip ends
+        state.log_hub.publish("Saving localization settings and restarting robot-nav-bridge...")
+        try:
+            await asyncio.to_thread(spec["save"], config, path)
+            bridge_result = await asyncio.to_thread(restart_robot_nav_bridge)
+        except Exception as exc:
+            state.log_hub.publish(f"Localization settings apply failed: {exc}")
+            return web.json_response({"error": str(exc)}, status=500)
+
+        if bridge_result.returncode != 0:
+            output = (bridge_result.stderr or bridge_result.stdout).strip()
+            state.log_hub.publish(f"Localization settings saved, but robot-nav-bridge restart failed: {output}")
+            return web.json_response({"error": output, **spec["payload"](config)}, status=500)
+
+        state.log_hub.publish("Localization settings saved. robot-nav-bridge restarted.")
+        return web.json_response({"ok": True, **spec["payload"](config)})
+
     try:
         await asyncio.to_thread(spec["save"], config, path)
     except OSError as exc:
@@ -885,7 +940,7 @@ async def voice_command_handler(request: web.Request) -> web.Response:
 
 NAV_COMMANDS = {
     "nav_status", "set_mode", "save_map", "localize", "create_place", "delete_place",
-    "create_barrier", "delete_barrier", "navigate_to", "nav_cancel",
+    "create_barrier", "delete_barrier", "navigate_to", "nav_cancel", "record",
 }
 
 
@@ -1026,6 +1081,7 @@ async def run_service(args: argparse.Namespace) -> None:
         args.sensors_config,
         nav_socket=args.nav_socket,
         map_png_path=args.map_png,
+        localization_config_path=args.localization_config,
     )
 
     subscriber = TelemetrySubscriberThread(snapshot_store, args.telemetry_socket)
@@ -1058,6 +1114,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vision-config", default=DEFAULT_VISION_CONFIG_PATH)
     parser.add_argument("--voice-config", default=DEFAULT_VOICE_CONFIG_PATH)
     parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)
+    parser.add_argument("--localization-config", default=DEFAULT_LOCALIZATION_CONFIG_PATH)
     parser.add_argument("--voice-command-socket", default=DEFAULT_VOICE_COMMAND_SOCKET)
     parser.add_argument("--nav-socket", default=DEFAULT_NAV_SOCKET)
     parser.add_argument("--map-png", default=DEFAULT_MAP_PNG_PATH)

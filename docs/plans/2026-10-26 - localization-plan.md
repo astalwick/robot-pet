@@ -491,10 +491,17 @@ leaves AMCL's particles where they were (switch_map relies on that), and
 size and origin never change, so places and barriers are untouched. The
 search's grid cache must notice the .pgm changing, not only the .yaml.
 
-The tally is the truth. On start, the bridge builds both maps from it
-again, so a crash between two writes heals itself. The tally also keeps
-when the last visit closed, so a restart does not start the next visit
-early.
+A floor switch loads both of the new floor's maps, and a trip stays held
+until both have loaded, so the robot never finds its place upstairs while
+planning on downstairs.
+
+The tally is the truth, written the same safe way. With the learner on, the
+bridge builds both maps from it on start, so a crash between two writes
+heals itself. In watch or off, the bridge puts the saved map back if
+learning had replaced it, and the planning map is the saved map itself; the
+tally is kept, so turning learning back on loses nothing. The tally also
+keeps when the last visit closed, so a restart does not start the next
+visit early.
 
 A change big enough that the robot cannot find its place is never learned,
 because learning needs a sure pose. Remaking the map (saving under the same
@@ -815,8 +822,14 @@ before it touches the map.
     black, still passes.
   - No wall loses a square, open floor gains no speckle, and unknown stays
     unknown.
-  - Every recording judged against the learned strict map agrees at least
-    as well as against the saved one, with no more through beams.
+  - Against the learned strict map, every recording's known right poses
+    still pass, its known wrong poses still fail, and the search finds the
+    robot as well as before. (An old recording made with the table still
+    there may agree a little less once the table is learned away; that is
+    fine.)
+  - Recordings made after a change agree at least as well against the
+    learned strict map as against the saved one, with no more through
+    beams.
   - One visit replayed four times with its poses shifted 10 cm and 5
     degrees takes no square from a wall.
   - A unit test: two bad clear visits on a wall seen ten times leave it
@@ -835,7 +848,9 @@ before it touches the map.
   **Exit, on the floor:** remove the coffee table; after three visits on
   separate occasions (five, once it has filled its ten) it is gone from the
   map, and trips route through where it stood. A door shut on some visits:
-  trips still use it when it is open and go around when it is shut.
+  trips still use it when it is open and go around when it is shut. A
+  floor switch with learned maps on both floors: the trip after it plans on
+  the new floor's planning map.
   "Forget" brings back the saved map. Places, barriers and accuracy are
   unchanged.
 
@@ -849,9 +864,12 @@ To watch for:
   every visit, and separate visits do not guard against it. The drawn
   changes are how it would show; "forget" is the way back.
 - **Changed marks never clear.** The watch week counts them. If wall edges
-  light up, two visits each becomes three. If moved furniture sends routes
-  the long way, the mark could clear after ten visits that agree, at the
-  price of a door shut for that long becoming a wall again.
+  light up, two visits each becomes three. Two route symptoms, with
+  opposite fixes:
+  - The planner steers around grey squares it could cross: lower the 50%.
+  - Routes keep heading through furniture that has settled in a new spot,
+    then turning back: clear the mark after ten visits that agree, at the
+    price of a door shut for that long becoming a wall again.
 - **The Pi.** Casting the scan's rays twice a second within 4 m is about
   what the judge already does; 4b measures it.
 

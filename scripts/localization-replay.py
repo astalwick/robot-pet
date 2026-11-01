@@ -12,6 +12,15 @@ that winner was right. Then the beams that always hit the
 robot's own body, and where through beams land at true poses: a cluster is a
 map error to fix or re-map, spread everywhere means the tolerance is wrong.
 
+With --learn, each recording is also one visit for the learner
+(src/map_learner.py), taught by the bridge's rules: one scan per tick, only
+while tracking and clean, nobody holding the robot, not turning. Recordings
+made before the bridge recorded `clean` and `handled` teach from every
+tracking scan. The learned strict map is written into the --learn folder as
+<map>.yaml + .pgm, so a second run with --maps-dir there judges against it,
+with <map>-learned.png (red: black that was white, green: white that was
+black, blue: changed) and <map>-planning.png (pale blue: unknown).
+
 The judge's settings come from localization.json (missing means the
 defaults), so a tweak can be tried here before the floor.
 
@@ -22,6 +31,8 @@ Usage, on the Pi:
     python scripts/localization-replay.py --truth "cross 1=2.10,3.40,90" --audit ~/audit
     python scripts/localization-replay.py --stamp-offset 0.07 --settings /tmp/try.json
     python scripts/localization-replay.py --search --truth "cross 1=2.10,3.40,90"
+    python scripts/localization-replay.py --learn ~/learned --repeat 4
+    python scripts/localization-replay.py --maps-dir ~/learned
 """
 
 import argparse
@@ -36,6 +47,7 @@ from PIL import Image
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+import map_learner
 import robot_nav
 from config.localization import DEFAULT_CONFIG_PATH, load_localization_settings
 
@@ -46,6 +58,10 @@ BODY_SHARE = 0.9
 AUDIT_CELL_M = 0.25
 # --search runs on every this-many scans (about one a second, like the bridge while searching)
 SEARCH_EVERY = 4
+# --learn teaches from one scan per bridge tick, and none after the lidar
+# turned more than this since the last (ros_nodes/nav_node.py's)
+TICK_SECONDS = 0.5
+MAX_TURN_RADIANS = 0.2
 
 
 def parse_truth(text):
@@ -66,6 +82,26 @@ def carried(scans, index, offset):
     share = abs(offset / (scans[neighbour]["time"] - scans[index]["time"]))
     turned = math.atan2(math.sin(other["yaw"] - pose["yaw"]), math.cos(other["yaw"] - pose["yaw"]))
     return {"x": pose["x"] + share * (other["x"] - pose["x"]), "y": pose["y"] + share * (other["y"] - pose["y"]), "yaw": pose["yaw"] + share * turned}
+
+
+def learned_pictures(saved, tally, map_info, settings, folder, name):
+    """<name>-learned.png, the strict map with what the learner changed in
+    colour, and <name>-planning.png, the planning map with unknown pale blue."""
+    strict = map_learner.strict_map(tally)
+    changed = (tally["own_full"] >= map_learner.CHANGED_VISITS) & (tally["own_clear"] >= map_learner.CHANGED_VISITS)
+    grey = np.where(strict < 0, 128, 255 - strict.astype(int) * 255 // 100).astype(np.uint8)
+    pixels = np.stack([grey] * 3, axis=1)
+    pixels[changed] = (0, 90, 255)
+    pixels[(strict == 100) & (saved == 0)] = (220, 0, 0)
+    pixels[(strict == 0) & (saved == 100)] = (0, 170, 0)
+    shape = (map_info["height"], map_info["width"], 3)
+    Image.fromarray(np.flipud(pixels.reshape(shape)), "RGB").save(folder / f"{name}-learned.png")
+    planning = map_learner.planning_map(tally, settings)
+    grey = (255 - np.maximum(planning, 0).astype(int) * 255 // 100).astype(np.uint8)
+    pixels = np.stack([grey] * 3, axis=1)
+    pixels[planning < 0] = (200, 220, 255)
+    Image.fromarray(np.flipud(pixels.reshape(shape)), "RGB").save(folder / f"{name}-planning.png")
+    return int(changed.sum())
 
 
 def degree_runs(degrees):
@@ -92,6 +128,9 @@ def main():
     parser.add_argument("--stamp-offset", type=float, default=0.0, help="judge the laser pose this many seconds after the scan's stamp")
     parser.add_argument("--audit", help="a folder to draw <map>-through.png into: through beams at true poses")
     parser.add_argument("--search", action="store_true", help="also run the search on the recording's map")
+    parser.add_argument("--learn", help="a folder to write the learned maps into, each recording one visit")
+    parser.add_argument("--repeat", type=int, default=1, help="with --learn, each recording counts as this many visits")
+    parser.add_argument("--shift", default="0,0,0", help='"x,y,yaw_degrees" added to every recorded lidar pose: a wrong pose')
     args = parser.parse_args()
 
     settings = load_localization_settings(args.settings)
@@ -104,6 +143,9 @@ def main():
     scan_time = None
     # per map: where through beams ended at true poses, in map metres
     through_ends = {}
+    shift_x, shift_y, shift_degrees = (float(value) for value in args.shift.split(","))
+    # per map: the learner's tally and how many visits and scans taught it
+    tallies, visits, learned_scans = {}, {}, {}
 
     print(f"settings: {json.dumps(settings.to_dict())}")
     print(f"{'recording':40} {'scans':>5} {'agree':>5} {'thru':>5} {'pass':>5}  states       {'true agree':>10} {'thru':>5} {'AMCL off':>13} {'found':>5} {'right':>5}")
@@ -125,6 +167,8 @@ def main():
         searched, found, right = 0, 0, 0
         agrees, throughs, passes, true_agrees, true_throughs, amcl_off_m, amcl_off_degrees = [], [], [], [], [], [], []
         states = sorted({scan["state"] for scan in scans if scan["state"]})
+        visit = map_learner.new_visit(len(data)) if args.learn else None
+        ticked_time = ticked_yaw = None
         for index, scan in enumerate(scans):
             ranges = [math.inf if value is None else value for value in scan["ranges"]]
             scan_args = (ranges, scan["angle_min"], scan["angle_increment"], scan["range_min"], scan["range_max"])
@@ -135,6 +179,14 @@ def main():
             if scan["map_odom"] is None or scan["odom_laser"] is None:
                 continue
             laser_pose = robot_nav.compose_poses(scan["map_odom"], carried(scans, index, args.stamp_offset))
+            laser_pose = {"x": laser_pose["x"] + shift_x, "y": laser_pose["y"] + shift_y, "yaw": laser_pose["yaw"] + math.radians(shift_degrees)}
+            if visit is not None and (ticked_time is None or scan["time"] - ticked_time >= TICK_SECONDS):
+                yaw = scan["odom_laser"]["yaw"]
+                turned = ticked_yaw is not None and abs(math.atan2(math.sin(yaw - ticked_yaw), math.cos(yaw - ticked_yaw))) > MAX_TURN_RADIANS
+                ticked_time, ticked_yaw = scan["time"], yaw
+                if not turned and scan["state"] == "tracking" and scan.get("clean", True) and not scan.get("handled", False):
+                    map_learner.learn_scan(visit, map_info, laser_pose, *scan_args, settings)
+                    learned_scans[name] = learned_scans.get(name, 0) + 1
             check = robot_nav.beam_check(data, map_info, laser_pose, *scan_args, settings)
             winner = None
             if grids is not None and index % SEARCH_EVERY == 0:
@@ -159,6 +211,11 @@ def main():
             if scan["amcl"] is not None:
                 amcl_off_m.append(math.hypot(scan["amcl"]["x"] - truth["x"], scan["amcl"]["y"] - truth["y"]))
                 amcl_off_degrees.append(abs(math.degrees(math.atan2(math.sin(scan["amcl"]["yaw"] - truth["yaw"]), math.cos(scan["amcl"]["yaw"] - truth["yaw"])))))
+        if visit is not None and visit["scans"].any():
+            tally = tallies.setdefault(name, map_learner.new_tally(data))
+            for _ in range(args.repeat):
+                map_learner.close_visit(tally, visit, map_info, settings)
+            visits[name] = visits.get(name, 0) + args.repeat
         pass_share = f"{sum(passes) / len(passes):.2f}" if passes else "--"
         amcl_off = f"{np.median(amcl_off_m) * 100:.0f} cm {np.median(amcl_off_degrees):.0f} deg" if amcl_off_m else "--"
         found_share = f"{found / searched:.2f}" if searched else "--"
@@ -191,6 +248,19 @@ def main():
                     image.putpixel((column, row), (255, 0, 0))
             image.save(audit)
             print(f"  drawn in {audit}")
+
+    for name, tally in tallies.items():
+        data, map_info, _ = maps[name]
+        folder = Path(args.learn).expanduser()
+        strict = map_learner.strict_map(tally)
+        map_learner.write_map_file(strict, map_info, str(folder / name))
+        changed = learned_pictures(data, tally, map_info, settings, folder, name)
+        print(
+            f"learned {name} from {visits[name]} visits, {learned_scans.get(name, 0)} scans: "
+            f"{int(((strict == 100) & (data == 0)).sum())} squares black that were white, "
+            f"{int(((strict == 0) & (data == 100)).sum())} white that were black, "
+            f"{int(((strict >= 0) & (data < 0)).sum())} known that were unknown, {changed} changed; drawn in {folder}"
+        )
 
 
 if __name__ == "__main__":

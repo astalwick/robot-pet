@@ -105,6 +105,20 @@ class LocalizationSettings:
     nudge_degrees: float = 0.5
     # put down: the floor under both cliff sensors and no rocking for this long
     set_down_s: float = 1.0
+    # The learner (src/map_learner.py): a beam teaches the squares within
+    # learn_range_m of the lidar, the one it ended in as full and the ones it
+    # crossed as clear. A square is full for a visit when learn_full_share of
+    # its looks ended in it, and clear only when fewer ended within
+    # learn_near_m of it, so a wall keeps the squares beams cross on their way
+    # into it: the ground floor's walls are drawn about 15 cm thick with the
+    # readings landing mid-way, and a 10 cm reach left a fifth of the holes a
+    # square-exact rule made.
+    learn_range_m: float = 4.0
+    learn_full_share: float = 0.33
+    learn_near_m: float = 0.1
+    # on the planning map a square that is not a wall costs this share of a
+    # wall times its share of full visits; around 0.8 changes how Nav2 plans near it
+    planning_grey: float = 0.5
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
@@ -138,6 +152,10 @@ class LocalizationSettings:
             nudge=bool(values.get("nudge", defaults.nudge)),
             nudge_degrees=clamp(float(values.get("nudge_degrees", defaults.nudge_degrees)), 0.1, 10.0),
             set_down_s=clamp(float(values.get("set_down_s", defaults.set_down_s)), 0.5, 10.0),
+            learn_range_m=clamp(float(values.get("learn_range_m", defaults.learn_range_m)), 1.0, 8.0),
+            learn_full_share=clamp(float(values.get("learn_full_share", defaults.learn_full_share)), 0.05, 1.0),
+            learn_near_m=clamp(float(values.get("learn_near_m", defaults.learn_near_m)), 0.0, 0.3),
+            planning_grey=clamp(float(values.get("planning_grey", defaults.planning_grey)), 0.0, 0.99),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -173,6 +191,10 @@ LOCALIZATION_FIELDS = (
     {"key": "nudge", "label": "Notice pushes", "type": "boolean", "help": "While not driving, the robot rocking means pushed"},
     {"key": "nudge_degrees", "label": "Push rocking (degrees)", "type": "number", "help": "0.1 .. 10 within a second", "min": 0.1, "max": 10.0, "step": 0.1},
     {"key": "set_down_s", "label": "Put down after (s)", "type": "number", "help": "0.5 .. 10 of floor under both cliff sensors and no rocking", "min": 0.5, "max": 10.0, "step": 0.5},
+    {"key": "learn_range_m", "label": "Learn within (m)", "type": "number", "help": "1 .. 8; the learner trusts beams this far", "min": 1.0, "max": 8.0, "step": 0.5},
+    {"key": "learn_full_share", "label": "Full when hit at least", "type": "number", "help": "0.05 .. 1; share of a square's looks in a visit that must end there", "min": 0.05, "max": 1.0, "step": 0.01},
+    {"key": "learn_near_m", "label": "Clear only this far from hits (m)", "type": "number", "help": "0 .. 0.3; a square is clear for a visit only when few beams ended this close to it", "min": 0.0, "max": 0.3, "step": 0.01},
+    {"key": "planning_grey", "label": "Moved things cost", "type": "number", "help": "0 .. 0.99 of a wall, on routes, for a square full on every visit", "min": 0.0, "max": 0.99, "step": 0.01},
 )
 
 

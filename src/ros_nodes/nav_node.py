@@ -341,7 +341,7 @@ class NavNode(Node):
         self.last_scan_time = time.monotonic()
         if self.recording is not None:
             # the odometry for the scan's time arrives after it, so the tick writes it
-            self.recording["scans"].append((scan, self.lookup_pose("map", "odom", Time()), self.amcl_pose, self.state()))
+            self.recording["scans"].append((scan, self.lookup_pose("map", "odom", Time()), self.amcl_pose, self.state(), self.clean, self.handled is not None))
 
     def on_nav_lock(self, message: Bool) -> None:
         # under trip_lock, so navigate_to cannot open a trip just after a stop
@@ -1148,7 +1148,7 @@ class NavNode(Node):
             return
         scans, recording["scans"] = recording["scans"], []
         try:
-            for scan, map_odom, amcl_pose, state in scans:
+            for scan, map_odom, amcl_pose, state, clean, handled in scans:
                 stamp = Time.from_msg(scan.header.stamp)
                 line = {
                     "time": stamp.nanoseconds / 1e9,
@@ -1165,6 +1165,9 @@ class NavNode(Node):
                     "map_laser": self.lookup_pose("map", scan.header.frame_id, stamp),
                     "amcl": amcl_pose,
                     "state": state,
+                    # what the learner goes by: the judge vouched for the pose, nobody holds the robot
+                    "clean": clean,
+                    "handled": handled,
                 }
                 recording["file"].write(json.dumps(line) + "\n")
         except OSError as exc:

@@ -29,8 +29,12 @@ ros_modules = {
 }
 ros_modules["rclpy.node"].Node = Node
 ros_modules["action_msgs.msg"].GoalStatus = types.SimpleNamespace(STATUS_SUCCEEDED=4, STATUS_CANCELED=5)
-with mock.patch.dict(sys.modules, ros_modules):
-    from ros_nodes import nav_node
+# Only the stand-ins come out again: the real modules the bridge pulls in
+# (NumPy among them) cannot be loaded a second time.
+sys.modules.update(ros_modules)
+from ros_nodes import nav_node
+for name in ros_modules:
+    del sys.modules[name]
 
 PLACES = {
     "kitchen": {"map": "downstairs", "x": 2.0, "y": 1.0, "yaw": 0.0},
@@ -187,6 +191,36 @@ class TripTest(unittest.TestCase):
         self.node.set_initial_pose({"x": 1.0, "y": 1.0, "yaw": 0.0})
         self.assertEqual(self.node.goal["state"], "held")
         self.assertEqual(self.node.pose_state, "checking")
+
+    def test_the_tick_cannot_send_a_trip_on_the_old_pose_mid_reseed(self):
+        self.drive()
+        self.node.lookup_pose = mock.Mock(return_value=None)
+        tick = threading.Thread(target=self.node.send_pending_goal)
+
+        def publish(message):
+            # the tick runs while the new pose is half handed over
+            tick.start()
+            tick.join(0.1)
+
+        self.node.initial_pose_publisher = mock.Mock(publish=publish)
+        self.node.set_initial_pose({"x": 1.0, "y": 1.0, "yaw": 0.0})
+        tick.join()
+        self.assertEqual(self.node.goal["state"], "held")
+        self.assertEqual(self.node.goal_attempt, 1)
+
+    def test_a_stop_while_a_trip_request_waits_refuses_it(self):
+        self.drive()
+        replies = []
+        request = threading.Thread(target=lambda: replies.append(self.node.navigate_to({"place": "hall"})))
+        with self.node.trip_lock:
+            # the request waits for the trip lock while the stop comes in
+            request.start()
+            request.join(0.1)
+            self.node.on_nav_lock(mock.Mock(data=True))
+        request.join()
+        self.assertEqual(replies[0]["reason"], "wheels_busy")
+        self.assertEqual(self.node.goal["target"], "kitchen")
+        self.assertEqual(self.node.goal["reason"], "stopped")
 
     def test_a_map_switch_holds_the_trip_before_the_map_changes(self):
         self.drive()

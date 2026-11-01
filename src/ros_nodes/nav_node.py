@@ -344,9 +344,11 @@ class NavNode(Node):
             self.recording["scans"].append((scan, self.lookup_pose("map", "odom", Time()), self.amcl_pose, self.state()))
 
     def on_nav_lock(self, message: Bool) -> None:
-        self.nav_lock = message.data
-        if message.data:
-            self.cancel_goal("stopped")
+        # under trip_lock, so navigate_to cannot open a trip just after a stop
+        with self.trip_lock:
+            self.nav_lock = message.data
+            if message.data:
+                self.cancel_goal("stopped")
 
     def on_teleop(self, twist: Twist) -> None:
         if twist.linear.x == 0.0 and twist.angular.z == 0.0:
@@ -729,11 +731,14 @@ class NavNode(Node):
         message.pose.covariance[0] = INITIAL_POSE_XY_VARIANCE
         message.pose.covariance[7] = INITIAL_POSE_XY_VARIANCE
         message.pose.covariance[35] = INITIAL_POSE_YAW_VARIANCE
-        # a trip driving on the old pose stops until the new one is checked
-        self.hold_goal("new pose")
-        self.initial_pose_publisher.publish(message)
-        self.pose = {"x": pose["x"], "y": pose["y"], "yaw": pose["yaw"]}
-        self.start_checking()
+        # A trip driving on the old pose stops until the new one is checked.
+        # Under trip_lock, so the tick cannot send it again on the old pose
+        # before start_checking marks the new one unchecked.
+        with self.trip_lock:
+            self.hold_goal("new pose")
+            self.initial_pose_publisher.publish(message)
+            self.pose = {"x": pose["x"], "y": pose["y"], "yaw": pose["yaw"]}
+            self.start_checking()
 
     def start_activity(self, name: str, target, *args) -> dict:
         """Run target on its own thread unless a save or a map switch is
@@ -1241,9 +1246,9 @@ class NavNode(Node):
             return {"ok": True, "accepted": False, "reason": "off_map"}
         if self.busy.locked():
             return {"ok": True, "accepted": False, "reason": self.activity or "busy"}
-        if self.nav_lock:
-            return {"ok": True, "accepted": False, "reason": "wheels_busy"}
         with self.trip_lock:
+            if self.nav_lock:
+                return {"ok": True, "accepted": False, "reason": "wheels_busy"}
             if place_name is not None and self.navigating() and self.goal["target"] == place_name:
                 # asked again for where it is already going: the trip goes on
                 return {"ok": True, "accepted": True, "goal": self.goal, "trip_wait_s": self.settings.trip_wait_s}

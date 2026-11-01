@@ -136,7 +136,15 @@ Lidar stand on today's cover (measured 2026-10-26; the CAD model still uses the 
 - the posts make a trapezoid, 55 apart side to side at the front, 40 apart at the back, and 70 front to back (centre to centre)
 - the front posts are about 7 behind the front edge of the lidar's round top (x ≈ -54), so the back posts are at x ≈ -124; hard to measure, so allow a few mm
 
+Modelled in the CAD (2026-10-26): frame with the 3 mm deck plate, bumper with cliff boards and flush speaker,
+wheels, caster fork and wheel, lidar and its plate-on-hex-posts stand, camera post with the centre ToF board,
+side ToF boards and IMU on their posts, Pi case with a cable envelope on top, voice LED box, power switch,
+mic array holder on its shaft.
+
 Still assumed in the CAD model (measure when convenient):
-- electronics on the platform: now measured (Pi, voice LED box, IMU above; the RoboClaw and battery are inside the frame), but the model still uses one 240 x 204 box, top at 120
+- the printed cover under the lidar stand is not modelled, so the stand floats at its measured height with 10 mm posts
+- lidar stand plate size (model uses 90 x 70 x 3)
+- Pi cable envelope footprint (model uses 50 x 40 up to the measured 139)
+- deck plate inset from the frame edge (model uses 3)
 
 Printer: Bambu X2D, bed 256 x 256.

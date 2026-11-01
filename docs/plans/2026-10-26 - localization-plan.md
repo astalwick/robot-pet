@@ -440,7 +440,9 @@ a slightly wrong pose is one visit at most. Trips closer together than 30
 minutes add to the same visit. An open visit lives in memory: a restart
 loses it, and a map switch drops it.
 
-**Two maps from one tally.**
+**Two maps from one tally**, each with its own rule. AMCL, the judge and the
+search are unchanged: they read the strict map as they read the saved map
+today.
 
 - **The strict map**, for AMCL, the judge, the search and the dashboard. A
   square is black when its visits are more often full than clear and at
@@ -449,11 +451,26 @@ loses it, and a map switch drops it.
   unknown: the judge's rays stop at unknown, which would hide the wall
   behind the door. It is written over the map's own .pgm in the format
   map_saver writes, so map_server, AMCL and the search read it unchanged.
-- **The planning map**, for Nav2's routes. Black where the strict map is
-  black; elsewhere a grey of 80% times the share of full visits, so a door
-  shut on three visits in ten costs a little and one shut on five costs
-  more; unknown stays unknown. Grey never forbids: the live lidar still
-  decides what is in the way now.
+- **The planning map**, for Nav2's routes. A square never seen is unknown.
+  One black on the strict map and never changed (below) is black, a wall.
+  Every other square seen is a grey of 50% times its share of full visits,
+  even where the strict map is black, so a door shut on eight visits in ten
+  is costly but never a wall. Grey only costs, it never forbids, and the
+  live lidar cannot lower it; a shut door is in the way because the lidar
+  sees it. 50% is a start: around 80% crosses the planner's limit for its
+  shortcut attempts (cost 200) and changes how it plans near grey.
+
+**Changed for good.** On the strict map, a door shut on most visits turns
+black, and as a wall on the planning map it would forbid routes through it
+even when it stands open. The ten-visit window also forgets that the door
+was ever open. So each square also counts the robot's own full visits and
+clear visits (not the saved map's three), each stopping at two. Once both
+reach two, the square is marked changed until "forget what you learned" or
+a new map under the same name, and a changed square is never a wall for
+routes. The mark is permanent on purpose: a door shut for a week stays
+usable the day it is opened. The cost: furniture moved onto floor the
+robot had seen empty is only ever grey for routes, so a route may head
+through it until the lidar sees it and plans around.
 
 Adding a square to the strict map takes more than removing one. A new couch
 on white floor (three clear) turns black on its fourth full visit; a
@@ -464,35 +481,54 @@ which costs little. A table the robot has seen on all ten of its visits
 takes five.
 
 **Applying it.** When a visit closes, the lidar has just stopped, so no trip
-is driving. The bridge writes both maps and asks both map servers to reload.
-The pose is stale while the lidar is off anyway, so the next scans check it
-afresh. Reloading the same map leaves AMCL's particles where they were
-(switch_map relies on that), and size and origin never change, so places
-and barriers are untouched. The search's grid cache must notice the .pgm
-changing, not only the .yaml.
+is driving. The bridge builds both maps from the tally and the saved map,
+writes each to a temporary file and renames it over the old one (a power cut
+never leaves half a map), and asks both map servers to reload. That runs as
+a background job, the way saving a map does: a reload waits for the
+server's reply, and the tick must not. The pose is stale while the lidar is
+off anyway, so the next scans check it afresh. Reloading the same map
+leaves AMCL's particles where they were (switch_map relies on that), and
+size and origin never change, so places and barriers are untouched. The
+search's grid cache must notice the .pgm changing, not only the .yaml.
+
+The tally is the truth. On start, the bridge builds both maps from it
+again, so a crash between two writes heals itself. The tally also keeps
+when the last visit closed, so a restart does not start the next visit
+early.
+
+A change big enough that the robot cannot find its place is never learned,
+because learning needs a sure pose. Remaking the map (saving under the same
+name) is the answer.
 
 Files, in `~/.config/robot-pet/learned/`: `<map>.npz` (each square's last
-ten marks), `<map>.original.pgm` (the map as saved; "forget what you
-learned" copies it back and deletes the rest) and `<map>.planning.yaml` +
-`.pgm` (raw mode). Saving a map under an existing name deletes its learned
-files.
+ten marks, its two counts, and when the last visit closed),
+`<map>.original.pgm` (the map as saved; "forget what you learned" copies it
+back and deletes the rest) and `<map>.planning.yaml` + `.pgm` (raw mode).
+Saving a map under an existing name deletes its learned files.
 
 Nav2: a second map_server (`planning_map_server`, topic `planning_map`,
-like the keepout mask server) serves the planning map, and in localize mode
-the global costmap's static layer reads `planning_map` with
-`trinary_costmap` off, so grey becomes cost. With nothing learned, the
-planning map is the map itself. Mapping mode is unchanged.
+like the keepout mask server) serves the planning map in localize mode. The
+global costmap's static layer reads `planning_map` with `trinary_costmap`
+off, so grey becomes cost. In mapping mode the launch file points the
+planner's `planning_map` at slam_toolbox's `/map`, which reads the same with
+trinary off. With nothing learned, the planning map is the map itself.
+Barriers stay in their own keepout mask, which the costmaps add on top, so
+learning never weakens a barrier.
 
 **Switches and values.** `learner`: off, watch or on. Watch learns and
-shows but applies nothing: the tally and both maps go to `learned/`, the
-dashboard draws the changes, and the robot keeps using the saved map. On
-applies them. Values: ten visits kept, the saved map counting as three, 4 m,
-0.1 m short of each end, a third of looks, 30 minutes, 1 m, 80% grey.
+shows but applies nothing: only the tally goes to `learned/`, the
+dashboard draws the changes from it, and the robot keeps using the saved
+map. On applies them. Values: 4 m, 0.1 m short of each end, a third of
+looks, 30 minutes, 1 m, 50% grey. Ten visits kept, the saved map counting
+as three, and two visits each to mark a square changed are fixed: they
+shape the tally from its first visit, so changing them later would mean
+forgetting.
 
-**The dashboard.** On the map, in two colours: squares the learner has made
-black that the saved map had white, and squares it has made white that were
-black, in watch mode as well as on. A line: "learned from N visits, last
-<time>". "Forget what you learned", per map, behind the debug toggle.
+**The dashboard.** Drawn into the map picture the bridge already makes, in
+watch mode as well as on: squares the learner has made black that the saved
+map had white, squares it has made white that were black, and squares
+marked changed, each in its own colour. A line: "learned from N visits,
+last <time>". "Forget what you learned", per map, behind the debug toggle.
 
 ## Fixes to try
 
@@ -516,6 +552,7 @@ symptom. Most are a few lines.
 | AMCL's particles collapse with the new settings | `resample_interval` 2, `sigma_hit` 0.15. |
 | Scans taken while Nav2 turns are judged wrongly | De-skew scans by odometry yaw rate. |
 | A carry with the lidar on slips past the judge | Keep the first scan of a still period and compare each new one against it. |
+| One bad visit (a wrong pose the judge passed) changes many squares at once | Skip a visit that would change more than a set number of squares. |
 
 ## Phases
 
@@ -761,28 +798,40 @@ before it touches the map.
 
 - **4a. The tally, on recordings.** `src/map_learner.py`: a few flat
   functions (what one scan says, closing a visit, the strict map, the
-  planning map) with unit tests. The replay tool gets `--learn`, which takes
-  each recording as one visit and writes both maps as PNGs. Recordings, by
+  planning map) with unit tests. Recordings gain `clean` and `handled` for
+  each scan, so the replay learns by the bridge's rules. The replay tool
+  gets `--learn`, which takes each recording as one visit (a recording may
+  be replayed as several) and writes both maps as PNGs. Recordings, by
   pressing Record during ordinary trips: three or four with the coffee
-  table in place, three or four on separate occasions with it moved, one
-  with a door shut and one with it open.
-  **Exit, on the replay:** the coffee table is gone from the strict map after
-  three visits and grey on the planning map; the door is white on the strict
-  map and grey on the planning map; no wall loses a square and open floor
-  gains no speckle; every recording judged against the learned strict map
-  agrees at least as well as against the saved one, with no more through
-  beams. One visit replayed with its poses shifted 10 cm and 5 degrees
-  changes no square of the strict map.
+  table in place, three or four on separate occasions with it moved, and
+  two each with a door shut and open.
+  **Exit, on the replay:**
+  - The coffee table is gone from the strict map after three visits, and
+    after five once table-in visits have filled all ten; grey on the
+    planning map meanwhile.
+  - The door, seen shut twice and open twice and then shut on ten more
+    visits, is marked changed and still grey on the planning map.
+  - An open-door recording, judged against a learned map with that door
+    black, still passes.
+  - No wall loses a square, open floor gains no speckle, and unknown stays
+    unknown.
+  - Every recording judged against the learned strict map agrees at least
+    as well as against the saved one, with no more through beams.
+  - One visit replayed four times with its poses shifted 10 cm and 5
+    degrees takes no square from a wall.
+  - A unit test: two bad clear visits on a wall seen ten times leave it
+    black on the strict map.
 - **4b. Watching, in the bridge.** The bridge learns while tracking, closes
-  visits and writes `learned/`; the dashboard draws the changes, the visit
+  visits and writes the tally; the dashboard draws the changes, the visit
   count and "forget". `learner: watch`. The tick time and the Pi's CPU are
   measured before and after.
   **Exit:** a week of ordinary use; the drawn changes are the house's
   changes and nothing else.
-- **4c. Applying.** The strict map written over the .pgm and reloaded, the
+- **4c. Applying.** Both maps written and reloaded in a background job, the
   search's cache keyed on the .pgm, the planning map server, and the static
   layer reading it. First, on the floor: a same-map reload keeps AMCL's
-  pose, and the Nav2 1.5 parameter names for grey are what this plan says.
+  pose, the Nav2 1.5 parameter names for grey are what this plan says, and
+  the mapping-mode pointer reaches the planner's costmap.
   **Exit, on the floor:** remove the coffee table; after three visits on
   separate occasions (five, once it has filled its ten) it is gone from the
   map, and trips route through where it stood. A door shut on some visits:
@@ -799,6 +848,10 @@ To watch for:
 - **A repeated error**, such as a lidar mounted slightly crooked, repeats on
   every visit, and separate visits do not guard against it. The drawn
   changes are how it would show; "forget" is the way back.
+- **Changed marks never clear.** The watch week counts them. If wall edges
+  light up, two visits each becomes three. If moved furniture sends routes
+  the long way, the mark could clear after ten visits that agree, at the
+  price of a door shut for that long becoming a wall again.
 - **The Pi.** Casting the scan's rays twice a second within 4 m is about
   what the judge already does; 4b measures it.
 
@@ -851,7 +904,9 @@ Arlen's:
 - One map changed in place by the learner, with "forget what you learned";
   three visits, 30 minutes apart.
 - On 2026-11-01: learning is a gradient. Walls stay black; furniture that
-  moves goes grey on the map routes are planned on.
+  moves goes grey on the map routes are planned on. A square seen both full
+  and empty is marked changed for good, until "forget": a door seen open
+  stays usable for routes however long it is then shut.
 - Recordings come from normal floor tests, not a separate evening.
 - On 2026-10-28, after ten review rounds had grown the plan fourfold: cut
   back to the skeleton, with the refinements kept as a list of fixes to
@@ -875,9 +930,15 @@ Claude's:
 - One search for finding, map choice and slip checks; the judge decides.
 - Phase 1 keeps the spins, judged strictly; phase 2 deletes them.
 - The learner keeps each square's last ten visits, not a lifetime count, so
-  a long-standing table still goes. One tally makes two maps: a strict
-  black-and-white one for finding the robot's place, and a grey one for
-  planning. It runs in watch mode for a week before it is switched on.
+  a long-standing table still goes. One tally makes two maps with their own
+  rules: a strict black-and-white one for finding the robot's place (the
+  majority of visits), and a grey one for planning, where a changed square
+  is never a wall. It runs in watch mode for a week before it is switched
+  on.
+- The planning map has its own map server rather than going into the
+  barrier mask: the planner reads its walls from that map, and only a map
+  of its own can soften a wall that the strict map keeps for finding the
+  robot's place.
 
 ## Sources
 

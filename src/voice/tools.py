@@ -57,6 +57,7 @@ TRIP_NOTES = {
     "nav2": "the planner is starting up; the trip leaves by itself",
     "lost": "could not work out where it is; moving the robot a little and asking again may help",
     "off_map": "cannot find its place on any saved map; it needs putting somewhere it knows, or this area mapping",
+    "place_on_other_map": "that place is on another saved map (another floor, named in the result); the robot has to be carried there first",
 }
 # where_am_i calls the robot "at" a place when it is within this distance of it.
 AT_PLACE_METERS = 2.0
@@ -699,7 +700,7 @@ def with_trip_note(result: dict[str, Any]) -> dict[str, Any]:
     (or was refused) for a reason the model should explain."""
     goal = result.get("goal")
     if goal is None:
-        key = result.get("reason")
+        key = result.get("reason") or result.get("error")
     elif goal.get("state") == "held":
         key = goal.get("waiting_for")
     else:

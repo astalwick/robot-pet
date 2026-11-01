@@ -5450,6 +5450,12 @@ class RobotToolDispatchTest(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_navigate_to_a_place_on_another_map_says_to_carry_the_robot(self):
+        reply = {"ok": False, "error": "place_on_other_map", "map": "upstairs"}
+        result = start_navigation(lambda cmd, **params: reply, "bedroom", sleep=lambda seconds: None)
+        self.assertEqual(result["map"], "upstairs")
+        self.assertIn("carried", result["note"])
+
     def test_check_navigation_waits_through_a_hold(self):
         replies = [
             {"ok": True, "goal": {"state": "held", "waiting_for": "position"}, "pose": None},

@@ -650,7 +650,11 @@ Nav2 counts as an attempt, and a callback for an earlier attempt is ignored.
 A held trip that resumes is a new attempt. The trip remembers its map. The
 voice's wait (`trip_wait_s`) comes back in the `navigate_to` reply, so the
 voice reads no settings file. Besides a pose drop and a pick-up, the lidar
-going quiet mid-trip and the dashboard's Localize button also hold a trip.
+going quiet mid-trip, a new pose (search, dashboard pose or Localize button)
+and a map switch also hold a trip; time spent switching maps counts toward
+`hold_s`. A place on another map is refused only when the robot is
+`localized()` (tracking, or checking with the latest scan passing), the same
+rule a held trip is failed by.
 "Stop" or "cancel" in the first three words heard cancels the trip, whether
 or not a turn starts. Off the map the barriers stand down, as there is no
 pose to measure them from.

@@ -702,8 +702,9 @@ def nav_update(
     search's summary {seconds, best {map, agree} or None, winner, rival None /
     "named" / "stands"}, or None before the first. state is how far the pose is
     trusted: tracking, checking, searching, off_map (searching and finding
-    nothing on any map), or stale while the lidar is off (None while mapping); localized is tracking, or checking with the latest
-    scan passing. check is the judge's latest verdict {agree, through,
+    nothing on any map), or stale while the lidar is off (None while
+    mapping); localized is tracking, or checking with the latest scan
+    passing. check is the judge's latest verdict {agree, through,
     opinion, passes, self_check}, or None; self_check is how well a failed
     scan matched the last one that passed, or None. handled is "picked up" or
     "pushed" while the robot is in someone's hands, else None. recording is

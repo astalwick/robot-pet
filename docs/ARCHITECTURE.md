@@ -272,8 +272,9 @@ lost or off-the-map trip. The `stop` tool and a bare spoken "stop" or
 (the steps down to the dining room look like open floor to the lidar). They
 live per map in `~/.config/robot-pet/barriers.json`. The bridge paints the
 current map's barriers as a Nav2 keepout mask, a small occupancy grid in the
-map frame with each line a 0.6 m wide black band (keepout cells are not
-inflated, and the tail sweeps 0.31 m when the robot turns), into
+map frame with each line a thin forbidden wall (0.05 m to each side) inside a
+nearly forbidden band out to 0.3 m (keepout cells are not inflated, and the
+tail sweeps 0.33 m when the robot turns), into
 `~/.config/robot-pet/keepout/<map>.yaml` + `.pgm`. `nav.launch.py` serves it
 with a second `map_server` (`filter_mask_server`) and
 `costmap_filter_info_server`, and both costmaps carry a `keepout_filter`.
@@ -282,6 +283,7 @@ After a barrier is drawn or deleted the bridge re-renders the mask and calls
 The gamepad never meets Nav2, so the bridge also publishes `/barrier_clearance`
 (the body's room to the nearest barrier ahead and behind, 10 Hz, only while
 localized) and `robot-motion`'s safety gate stops 0.2 m short of a line the
-way it stops short of a lidar return. Not localized: no message, no rule.
-A robot already inside a band cannot plan its way out; drive it out by gamepad.
+way it stops short of a lidar return (turning on the spot is never stopped).
+Not localized: no message, no rule. A robot that ends up inside a band can
+still plan its way back out, as only the thin wall is forbidden.
 See [plans/2026-10-25 - virtual-barriers.md](plans/2026-10-25%20-%20virtual-barriers.md).

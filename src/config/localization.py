@@ -73,7 +73,8 @@ class LocalizationSettings:
     # Searches that find nothing agreeing agree_min on any map for this long:
     # off the map (on a counter, an unmapped room). Trips are refused.
     off_map_s: float = 20.0
-    # A trip waits for the lidar, the pose and Nav2, at most hold_s in all.
+    # A trip waits for the lidar, the pose and Nav2; one still waiting after
+    # hold_s of holding in all fails.
     # With resume_trips a trip the robot loses its place on waits too, and
     # goes on by itself once it is sure again; without, that trip ends lost.
     hold_s: float = 30.0
@@ -160,7 +161,7 @@ LOCALIZATION_FIELDS = (
     {"key": "other_maps", "label": "Search other maps", "type": "boolean", "help": "Also look on the other saved maps (another floor)"},
     {"key": "search_interval_s", "label": "Search every (s)", "type": "number", "help": "1 .. 60, while the robot knows where it is", "min": 1.0, "max": 60.0, "step": 1},
     {"key": "off_map_s", "label": "Off the map after (s)", "type": "number", "help": "5 .. 120 of finding nothing on any map", "min": 5.0, "max": 120.0, "step": 1},
-    {"key": "hold_s", "label": "Trip waits at most (s)", "type": "number", "help": "5 .. 120 in all, for the lidar and the position", "min": 5.0, "max": 120.0, "step": 1},
+    {"key": "hold_s", "label": "Trip waits at most (s)", "type": "number", "help": "5 .. 120 in all; a trip still waiting then gives up", "min": 5.0, "max": 120.0, "step": 1},
     {"key": "resume_trips", "label": "Resume trips", "type": "boolean", "help": "A trip the robot loses its place on waits and goes on by itself"},
     {"key": "trip_wait_s", "label": "Voice waits for a find (s)", "type": "number", "help": "0 .. 10; a quick find is not mentioned (0: off)", "min": 0.0, "max": 10.0, "step": 0.5},
     {"key": "self_check", "label": "Self-check", "type": "boolean", "help": "Keep a pose the map disagrees with when the scan matches the last good one, carried by the wheels"},

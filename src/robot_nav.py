@@ -46,11 +46,11 @@ DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 DEFAULT_RECORDINGS_DIR = "/home/pi/.config/robot-pet/recordings"
 
 # Nav2 keeps the robot this far to each side of a barrier line. Keepout cells
-# are not inflated, and the tail sweeps 0.31 m from the axle when the robot
+# are not inflated, and the tail sweeps 0.33 m from the axle when the robot
 # turns. Only a thin wall along the line itself is forbidden: the rest of the
 # band is just very expensive, so a robot that ends up with a corner in it can
-# still drive back out instead of freezing. robot-motion's barrier gate is the
-# hard stop.
+# still drive back out instead of freezing. robot-motion's barrier gate stops
+# straight driving at a line; turning on the spot it always allows.
 BARRIER_HALF_WIDTH_METERS = 0.3
 BARRIER_WALL_HALF_WIDTH_METERS = 0.05
 KEEPOUT_RESOLUTION_METERS = 0.05

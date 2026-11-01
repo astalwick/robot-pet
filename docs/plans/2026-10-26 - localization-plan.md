@@ -516,9 +516,12 @@ Saving a map under an existing name deletes its learned files.
 Nav2: a second map_server (`planning_map_server`, topic `planning_map`,
 like the keepout mask server) serves the planning map in localize mode. The
 global costmap's static layer reads `planning_map` with `trinary_costmap`
-off, so grey becomes cost. In mapping mode the launch file points the
-planner's `planning_map` at slam_toolbox's `/map`, which reads the same with
-trinary off. With nothing learned, the planning map is the map itself.
+off, so grey becomes cost. In mapping mode, a three-line settings file
+(`config/nav2-mapping.yaml`), loaded after `nav2.yaml`, points the static
+layer back at slam_toolbox's `/map`, which reads the same with trinary off.
+It names the costmap the way `nav2.yaml` does, so it reaches it for
+certain, where a launch remapping might not reach a costmap's own node.
+With nothing learned, the planning map is the map itself.
 Barriers stay in their own keepout mask, which the costmaps add on top, so
 learning never weakens a barrier.
 
@@ -844,7 +847,7 @@ before it touches the map.
   search's cache keyed on the .pgm, the planning map server, and the static
   layer reading it. First, on the floor: a same-map reload keeps AMCL's
   pose, the Nav2 1.5 parameter names for grey are what this plan says, and
-  the mapping-mode pointer reaches the planner's costmap.
+  mapping mode still plans on slam_toolbox's map.
   **Exit, on the floor:** remove the coffee table; after three visits on
   separate occasions (five, once it has filled its ten) it is gone from the
   map, and trips route through where it stood. A door shut on some visits:

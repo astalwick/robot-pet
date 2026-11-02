@@ -738,7 +738,7 @@ class NavNode(Node):
         # what the learner changed; mid-switch the tally may be for the other map
         changes = None
         if self.tally is not None and self.saved_map.size == len(grid.data):
-            changes = map_learner.changes(self.tally, self.saved_map)
+            changes = map_learner.changes(self.tally, self.saved_map, self.settings.learner_early)
         try:
             robot_nav.render_map_png(info.width, info.height, grid.data, self.args.map_png, changes)
         except OSError as exc:

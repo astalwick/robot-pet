@@ -124,10 +124,12 @@ class LocalizationSettings:
     # it is and the dashboard draws what changed, but the robot keeps using
     # the saved map. A visit closes at the first lidar stop visit_gap_min
     # after the last one closed, and counts only if the robot drove
-    # visit_drive_m while learning in it.
+    # visit_drive_m while learning in it. learner_early also draws, pale,
+    # what a single visit saw against the map.
     learner: str = "watch"
     visit_gap_min: float = 30.0
     visit_drive_m: float = 1.0
+    learner_early: bool = True
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
@@ -170,6 +172,7 @@ class LocalizationSettings:
             learner=values.get("learner", defaults.learner),
             visit_gap_min=clamp(float(values.get("visit_gap_min", defaults.visit_gap_min)), 1.0, 240.0),
             visit_drive_m=clamp(float(values.get("visit_drive_m", defaults.visit_drive_m)), 0.0, 20.0),
+            learner_early=bool(values.get("learner_early", defaults.learner_early)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -212,6 +215,7 @@ LOCALIZATION_FIELDS = (
     {"key": "learner", "label": "Learner", "type": "select", "options": list(LEARNER_CHOICES), "help": "watch: learn what changed and draw it on the map; the robot keeps the saved map"},
     {"key": "visit_gap_min", "label": "Visits apart (min)", "type": "number", "help": "1 .. 240; a visit closes at the first lidar stop this long after the last", "min": 1.0, "max": 240.0, "step": 1},
     {"key": "visit_drive_m", "label": "Visit counts after (m)", "type": "number", "help": "0 .. 20 driven while learning, or the visit is dropped", "min": 0.0, "max": 20.0, "step": 0.5},
+    {"key": "learner_early", "label": "Show early learning", "type": "boolean", "help": "Draw pale red and pale green where one visit saw something the map does not show yet"},
 )
 
 

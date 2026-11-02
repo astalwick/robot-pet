@@ -108,7 +108,7 @@ function searchText(search) {
 function learnedText(learned) {
   if (!learned.last_closed) return 'nothing yet';
   const last = new Date(learned.last_closed * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  return `from ${learned.visits} visits, last ${last} (red: new, green: gone, orange: comes and goes)`;
+  return `from ${learned.visits} visits, last ${last} (red: new, green: gone, orange: comes and goes; pale: seen, not sure yet)`;
 }
 
 function goalClass(goal) {

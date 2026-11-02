@@ -53,8 +53,10 @@ CHANGED_VISITS = 2
 
 FULL, CLEAR, NONE = 1, 0, -1
 
-# the dashboard's colours for what the learner changed (changes)
+# the dashboard's colours for what the learner changed (changes), and pale
+# ones for what a visit saw that has not changed the map yet
 ADDED_COLOUR, REMOVED_COLOUR, CHANGED_COLOUR = (220, 50, 50), (40, 170, 90), (240, 150, 20)
+EARLY_ADDED_COLOUR, EARLY_REMOVED_COLOUR = (245, 130, 130), (120, 210, 150)
 
 
 def new_tally(data) -> dict[str, np.ndarray]:
@@ -184,13 +186,20 @@ def planning_map(tally: dict[str, np.ndarray], settings: LocalizationSettings) -
     return np.select([full + clear == 0, (strict_map(tally) == 100) & ~changed], [-1, 100], grey).astype(np.int8)
 
 
-def changes(tally: dict[str, Any], saved) -> dict[tuple[int, int, int], np.ndarray]:
-    """What the dashboard draws over the map, {colour: squares}: red where the
-    strict map is black and the saved map white, green where it is white and
-    the saved map black, and orange where a square is marked changed (drawn
-    last, over the other two)."""
+def changes(tally: dict[str, Any], saved, early: bool = True) -> dict[tuple[int, int, int], np.ndarray]:
+    """What the dashboard draws over the map, {colour: squares}, in order:
+    with early, pale red where one of the last ten visits saw a white square
+    full and pale green where one saw a black square clear, not yet enough
+    to change it; then red where the strict map is black and the saved map
+    white, green where it is white and the saved map black, and orange
+    where a square is marked changed. The saved map's own visits agree with
+    it, so a mark against it is always the robot's."""
     strict, saved = strict_map(tally), np.asarray(saved)
-    return {
+    drawn = {}
+    if early:
+        drawn[EARLY_ADDED_COLOUR] = (saved == 0) & (tally["marks"] == FULL).any(axis=0)
+        drawn[EARLY_REMOVED_COLOUR] = (saved >= robot_nav.OCCUPIED_THRESHOLD) & (tally["marks"] == CLEAR).any(axis=0)
+    return drawn | {
         ADDED_COLOUR: (strict == 100) & (saved == 0),
         REMOVED_COLOUR: (strict == 0) & (saved >= robot_nav.OCCUPIED_THRESHOLD),
         CHANGED_COLOUR: (tally["own_full"] >= CHANGED_VISITS) & (tally["own_clear"] >= CHANGED_VISITS),

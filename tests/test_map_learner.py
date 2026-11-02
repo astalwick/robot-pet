@@ -170,6 +170,21 @@ class ChangesTest(unittest.TestCase):
         self.assertEqual(changes[map_learner.REMOVED_COLOUR].tolist(), [False, True, False, False])
         self.assertEqual(changes[map_learner.CHANGED_COLOUR].tolist(), [False, False, True, False])
 
+    def test_one_visit_against_the_map_is_pale_and_can_be_left_off(self):
+        saved = [0, 100, 0, 100]
+        tally = map_learner.new_tally(saved)
+        visits(tally, map_learner.FULL, 1, square=0)
+        visits(tally, map_learner.CLEAR, 1, square=1)
+        visits(tally, map_learner.CLEAR, 1, square=2)
+        visits(tally, map_learner.FULL, 1, square=3)
+        changes = map_learner.changes(tally, saved)
+        self.assertEqual(changes[map_learner.EARLY_ADDED_COLOUR].tolist(), [True, False, False, False])
+        self.assertEqual(changes[map_learner.EARLY_REMOVED_COLOUR].tolist(), [False, True, False, False])
+        self.assertFalse(changes[map_learner.ADDED_COLOUR].any() or changes[map_learner.REMOVED_COLOUR].any())
+        # drawn first, so the full colours paint over them
+        self.assertEqual(list(changes)[:2], [map_learner.EARLY_ADDED_COLOUR, map_learner.EARLY_REMOVED_COLOUR])
+        self.assertEqual(list(map_learner.changes(tally, saved, early=False)), [map_learner.ADDED_COLOUR, map_learner.REMOVED_COLOUR, map_learner.CHANGED_COLOUR])
+
 
 class TallyFileTest(unittest.TestCase):
     def test_a_saved_tally_loads_back_as_saved(self):

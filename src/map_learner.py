@@ -206,20 +206,25 @@ def changes(tally: dict[str, Any], saved, early: bool = True) -> dict[tuple[int,
     }
 
 
-def write_map_file(data, map_info: dict[str, Any], stem: str) -> None:
+def write_map_file(data, map_info: dict[str, Any], stem: str, raw: bool = False) -> None:
     """Write <stem>.pgm + <stem>.yaml the way map_saver does (trinary:
     black 0, white 254, unknown 205), so map_server, AMCL and
-    robot_nav.load_map_file read it like a saved map. Each file goes to a
-    temporary name first and is renamed over the old one, so a power cut
-    never leaves half a map."""
+    robot_nav.load_map_file read it like a saved map. raw, for the planning
+    map: each pixel is the square's value, 0 to 100, and 255 unknown, which
+    map_server's raw mode serves as it is. Each file goes to a temporary
+    name first and is renamed over the old one, so a power cut never leaves
+    half a map."""
     grid = np.asarray(data).reshape(map_info["height"], map_info["width"])
-    pixels = np.select([grid >= robot_nav.OCCUPIED_THRESHOLD, grid == 0], [0, 254], 205).astype(np.uint8)
+    if raw:
+        pixels = np.where(grid < 0, 255, grid).astype(np.uint8)
+    else:
+        pixels = np.select([grid >= robot_nav.OCCUPIED_THRESHOLD, grid == 0], [0, 254], 205).astype(np.uint8)
     path = Path(stem)
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.flipud(pixels), "L").save(f"{stem}.pgm.tmp", format="PPM")
     os.replace(f"{stem}.pgm.tmp", f"{stem}.pgm")
     Path(f"{stem}.yaml.tmp").write_text(
-        f"image: {path.name}.pgm\nmode: trinary\nresolution: {map_info['resolution']:.3f}\n"
+        f"image: {path.name}.pgm\nmode: {'raw' if raw else 'trinary'}\nresolution: {map_info['resolution']:.3f}\n"
         f"origin: [{map_info['origin_x']:.3f}, {map_info['origin_y']:.3f}, 0]\nnegate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.196\n"
     )
     os.replace(f"{stem}.yaml.tmp", f"{stem}.yaml")

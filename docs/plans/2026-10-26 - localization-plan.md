@@ -869,7 +869,12 @@ before it touches the map.
   layer reading it. First, on the floor: a same-map reload keeps AMCL's
   pose, the Nav2 1.5 parameter names for grey are what this plan says, and
   mapping mode still plans on slam_toolbox's map.
-  First of all, the wrong-pose check from 4a passes.
+  Built 2026-11-01 behind a switch, "Learner updates maps" (Arlen: "That
+  way we're not gated and we can just get code in and then test over
+  time"), off by default: watch mode is unchanged until it is ticked, and
+  unticking puts the saved map back. The wrong-pose check from 4a now gates
+  ticking it for good, not the code. The search's cache needs no change:
+  the strict map rewrites the .yaml along with the .pgm.
   **Exit, on the floor:** remove the coffee table; after three visits on
   separate occasions (five, once it has filled its ten) it is gone from the
   map, and trips route through where it stood. A door shut on some visits:

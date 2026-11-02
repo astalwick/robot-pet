@@ -77,8 +77,12 @@ closes at the first lidar stop visit_gap_min after the last one closed, into
 the map's tally in learned/<map>.npz, and counts only if the robot drove
 visit_drive_m while learning in it. The open visit lives in memory: a
 restart loses it and a map switch drops it. The dashboard's map picture
-draws what the tally says changed; the robot itself keeps using the saved
-map. `forget_learned` starts the map's tally over.
+draws what the tally says changed. With learner_updates_maps the robot also
+uses it: on start and as each visit closes, the strict map is written over
+maps/<map> (the map as saved is kept as learned/<map>.original) and the
+planning map as learned/<map>.planning, and both map servers load them
+again. Without it, the saved map is put back. `forget_learned` starts the
+map's tally over and puts the saved map back.
 
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
@@ -331,6 +335,7 @@ class NavNode(Node):
         self.initial_pose_publisher = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.amcl_state_client = self.create_client(GetState, "/amcl/get_state")
         self.load_map_client = self.create_client(LoadMap, "/map_server/load_map")
+        self.planning_map_client = self.create_client(LoadMap, "/planning_map_server/load_map")
         self.filter_mask_client = self.create_client(LoadMap, "/filter_mask_server/load_map")
         self.nav_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
         self.nav_cancel_client = self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal")
@@ -590,6 +595,8 @@ class NavNode(Node):
             self.forget_asked = False
             log.info("learner: forgetting what it learned on %s", self.map_name)
             self.learned_path(self.map_name).unlink(missing_ok=True)
+            if self.restore_saved_map():
+                self.reload_maps()
             self.tally_map = None
         if self.tally_map != self.map_name:
             self.load_tally()
@@ -609,16 +616,30 @@ class NavNode(Node):
             map_learner.save_tally(self.tally, self.learned_path(self.map_name))
         except OSError as exc:
             log.warning("learner: could not write the tally: %s", exc)
+        if self.updates_maps():
+            self.apply_learned()
+
+    def updates_maps(self) -> bool:
+        return self.settings.learner == "watch" and self.settings.learner_updates_maps
 
     def load_tally(self) -> None:
         """The tally for the map in use from learned/<map>.npz, or a new one
-        from the saved map. Any open visit was on another map, so it goes."""
+        from the saved map. Any open visit was on another map, so it goes.
+        Updating maps, both maps are built from it now, so a crash between
+        two writes heals; not, the saved map is put back if it was replaced."""
         self.tally_map, self.tally, self.visit = self.map_name, None, None
         self.map_png_stale = True
-        if self.map_name is None or self.settings.learner == "off":
+        if self.map_name is None:
+            return
+        if not self.updates_maps() and self.restore_saved_map():
+            self.reload_maps()
+        if self.settings.learner == "off":
             return
         try:
-            self.saved_map, self.saved_map_info = robot_nav.load_map_file(self.map_name, self.args.maps_dir)
+            if (Path(self.args.learned_dir) / f"{self.map_name}.original.yaml").exists():
+                self.saved_map, self.saved_map_info = robot_nav.load_map_file(f"{self.map_name}.original", self.args.learned_dir)
+            else:
+                self.saved_map, self.saved_map_info = robot_nav.load_map_file(self.map_name, self.args.maps_dir)
         except (OSError, KeyError, ValueError) as exc:
             log.warning("learner: cannot read map %s: %s", self.map_name, exc)
             return
@@ -633,9 +654,65 @@ class NavNode(Node):
         if tally is None or tally["marks"].shape[1] != self.saved_map.size:
             tally = map_learner.new_tally(self.saved_map)
         self.tally = tally
+        if self.updates_maps():
+            self.apply_learned()
 
     def learned_path(self, map_name: str) -> Path:
         return Path(self.args.learned_dir) / f"{map_name}.npz"
+
+    def apply_learned(self) -> None:
+        """Write the strict map over the map's own files, keeping the map as
+        saved in learned/<map>.original the first time, and the planning map
+        as learned/<map>.planning; then both map servers load them again.
+        The size and origin never change, so places and barriers stay put."""
+        learned_stem = Path(self.args.learned_dir) / self.map_name
+        try:
+            if not Path(f"{learned_stem}.original.yaml").exists():
+                map_learner.write_map_file(self.saved_map, self.saved_map_info, f"{learned_stem}.original")
+            map_learner.write_map_file(map_learner.planning_map(self.tally, self.settings), self.saved_map_info, f"{learned_stem}.planning", raw=True)
+            map_learner.write_map_file(map_learner.strict_map(self.tally), self.saved_map_info, str(Path(self.args.maps_dir) / self.map_name))
+        except OSError as exc:
+            log.warning("learner: could not write the learned maps: %s", exc)
+            return
+        self.reload_maps()
+
+    def restore_saved_map(self) -> bool:
+        """Put the map as saved back over the learned one, if learning
+        replaced it, and drop the planning map. True when it did."""
+        if not (Path(self.args.learned_dir) / f"{self.map_name}.original.yaml").exists():
+            return False
+        try:
+            data, map_info = robot_nav.load_map_file(f"{self.map_name}.original", self.args.learned_dir)
+            map_learner.write_map_file(data, map_info, str(Path(self.args.maps_dir) / self.map_name))
+        except (OSError, KeyError, ValueError) as exc:
+            log.warning("learner: could not put the saved map %s back: %s", self.map_name, exc)
+            return False
+        for path in [*Path(self.args.learned_dir).glob(f"{self.map_name}.original.*"), *Path(self.args.learned_dir).glob(f"{self.map_name}.planning.*")]:
+            path.unlink()
+        log.info("learner: put the saved map %s back", self.map_name)
+        return True
+
+    def planning_yaml(self, map_name: str) -> str:
+        """The route planner's map: the learner's planning map, else the map itself."""
+        planning = Path(self.args.learned_dir) / f"{map_name}.planning.yaml"
+        return str(planning) if planning.exists() else robot_nav.map_yaml_path(map_name, self.args.maps_dir)
+
+    def reload_maps(self) -> None:
+        """Have both map servers load the map in use again, on a thread: a
+        load waits for the server's reply, and the tick must not. Skipped
+        during a map switch or a save, which load the maps themselves."""
+        if self.mode != "localize" or not self.busy.acquire(blocking=False):
+            return
+        name = self.map_name
+
+        def run():
+            try:
+                if self.load_map(self.load_map_client, robot_nav.map_yaml_path(name, self.args.maps_dir)):
+                    self.load_map(self.planning_map_client, self.planning_yaml(name))
+            finally:
+                self.busy.release()
+
+        threading.Thread(target=run, name="nav-reload-maps", daemon=True).start()
 
     def learn(self, scan: LaserScan, laser_pose: dict) -> None:
         """Add the scan the judge is about to judge to the open visit, from
@@ -802,7 +879,7 @@ class NavNode(Node):
             "motor_power_requested": self.navigating(),
             "goal": self.goal,
             "barriers": self.barriers,
-            "learned": None if self.tally is None else {"visits": self.tally["visits"], "last_closed": self.tally["last_closed"] or None},
+            "learned": None if self.tally is None else {"visits": self.tally["visits"], "last_closed": self.tally["last_closed"] or None, "updates_maps": self.updates_maps()},
         }
 
     # --- localize mode -----------------------------------------------------
@@ -868,20 +945,21 @@ class NavNode(Node):
     def scan_age(self) -> float:
         return math.inf if self.last_scan_time is None else time.monotonic() - self.last_scan_time
 
-    def load_map(self, name: str) -> bool:
-        """Hand a saved map to map_server, which publishes it to AMCL and the costmaps."""
-        if not self.load_map_client.wait_for_service(SERVICE_WAIT_SECONDS):
-            log.warning("load_map %s: map_server not available", name)
+    def load_map(self, client, map_yaml: str) -> bool:
+        """Hand a map file to a map server: map_server publishes it to AMCL
+        and the judge, planning_map_server to the route planner."""
+        if not client.wait_for_service(SERVICE_WAIT_SECONDS):
+            log.warning("%s %s: not available", client.srv_name, map_yaml)
             return False
         request = LoadMap.Request()
-        request.map_url = robot_nav.map_yaml_path(name, self.args.maps_dir)
+        request.map_url = map_yaml
         try:
-            response = self.load_map_client.call(request, timeout_sec=SERVICE_WAIT_SECONDS)
+            response = client.call(request, timeout_sec=SERVICE_WAIT_SECONDS)
         except TimeoutError:
-            log.warning("load_map %s: map_server did not answer", name)
+            log.warning("%s %s: no answer", client.srv_name, map_yaml)
             return False
         if response.result != LoadMap.Response.RESULT_SUCCESS:
-            log.warning("load_map %s failed with result %d", name, response.result)
+            log.warning("%s %s failed with result %d", client.srv_name, map_yaml, response.result)
             return False
         return True
 
@@ -1021,7 +1099,10 @@ class NavNode(Node):
             name = laser_pose["map"]
             log.info("search: found the robot on %s twice, switching to it", name)
             rendered = self.map_rendered
-            if not self.load_map(name):
+            # both of the floor's maps, so the trip held here plans on the new one
+            if not self.load_map(self.load_map_client, robot_nav.map_yaml_path(name, self.args.maps_dir)):
+                return
+            if not self.load_map(self.planning_map_client, self.planning_yaml(name)):
                 return
             self.map_name = name
             robot_nav.save_nav_config("localize", name, self.args.nav_config)
@@ -1147,7 +1228,8 @@ class NavNode(Node):
             return
         log.info("saved map %s", name)
         # what the learner saw of an old map by this name is not about this one
-        self.learned_path(name).unlink(missing_ok=True)
+        for path in Path(self.args.learned_dir).glob(f"{name}.*"):
+            path.unlink()
         if pose is not None:
             Path(self.args.nav_pose).write_text(json.dumps({"map": name, **pose}))
         self.switch_to("localize", name)

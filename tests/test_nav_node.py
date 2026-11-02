@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import numpy as np
 
 import map_learner
+import robot_nav
 from config.localization import LocalizationSettings
 
 
@@ -230,8 +231,10 @@ class TripTest(unittest.TestCase):
     def test_a_map_switch_holds_the_trip_before_the_map_changes(self):
         self.drive()
         self.node.map_rendered = None
+        self.node.args = types.SimpleNamespace(maps_dir="/maps", learned_dir="/learned")
+        self.node.load_map_client = self.node.planning_map_client = None
         states = []
-        self.node.load_map = mock.Mock(side_effect=lambda name: states.append(self.node.goal["state"]) or False)
+        self.node.load_map = mock.Mock(side_effect=lambda client, map_yaml: states.append(self.node.goal["state"]) or False)
         self.node.switch_map({"map": "upstairs"}, None)
         self.assertEqual(states, ["held"])
 
@@ -266,11 +269,13 @@ class LearnerTest(unittest.TestCase):
         self.addCleanup(log_patch.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
+        self.maps_dir = directory.name
         self.learned_dir = os.path.join(directory.name, "learned")
         # a 4 m x 2 m room at 5 cm with a wall along x = 3 m
         grid = np.zeros((40, 80), dtype=np.int8)
         grid[:, 60] = 100
-        map_learner.write_map_file(grid.ravel(), {"width": 80, "height": 40, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}, os.path.join(directory.name, "downstairs"))
+        self.saved = grid.ravel()
+        map_learner.write_map_file(self.saved, {"width": 80, "height": 40, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}, os.path.join(directory.name, "downstairs"))
 
         # only what the learner touches, as __init__ would set it
         node = object.__new__(nav_node.NavNode)
@@ -284,6 +289,8 @@ class LearnerTest(unittest.TestCase):
         node.tally_map = node.saved_map = node.saved_map_info = node.tally = node.visit = None
         node.visit_driven_m = node.moved_m = 0.0
         node.forget_asked = node.map_png_stale = False
+        node.busy = threading.Lock()
+        node.reload_maps = mock.Mock()
         self.node = node
 
     def drive(self, scans=4, metres=0.5):
@@ -344,6 +351,58 @@ class LearnerTest(unittest.TestCase):
         self.node.update_learner()
         self.assertEqual(self.node.tally["visits"], 0)
         self.assertFalse(os.path.exists(os.path.join(self.learned_dir, "downstairs.npz")))
+
+    def map_now(self, name="downstairs", directory=None):
+        return robot_nav.load_map_file(name, directory or self.maps_dir)[0]
+
+    def learned_away(self, square):
+        """A tally on file that has seen `square` clear on three visits."""
+        tally = map_learner.new_tally(self.saved)
+        tally["marks"][-3:, square] = map_learner.CLEAR
+        map_learner.save_tally(tally, os.path.join(self.learned_dir, "downstairs.npz"))
+
+    def test_watching_only_never_touches_the_map(self):
+        self.learned_away(20 * 80 + 60)
+        self.drive()
+        self.stop_lidar()
+        np.testing.assert_array_equal(self.map_now(), self.saved)
+        self.assertEqual(os.listdir(self.learned_dir), ["downstairs.npz"])
+        self.node.reload_maps.assert_not_called()
+
+    def test_updating_maps_writes_both_maps_and_keeps_the_saved_one(self):
+        wall = 20 * 80 + 60
+        self.learned_away(wall)
+        self.node.settings = LocalizationSettings(learner_updates_maps=True)
+        self.drive()
+        # on start, from the tally on file
+        self.assertEqual(self.map_now()[wall], 0)
+        np.testing.assert_array_equal(self.map_now("downstairs.original", self.learned_dir), self.saved)
+        self.assertIn("mode: raw", open(os.path.join(self.learned_dir, "downstairs.planning.yaml")).read())
+        self.assertEqual(self.node.reload_maps.call_count, 1)
+        # and again as a visit closes, still learning from the map as saved
+        self.stop_lidar()
+        self.assertEqual(self.node.reload_maps.call_count, 2)
+        np.testing.assert_array_equal(self.node.saved_map, self.saved)
+
+    def test_turning_updates_off_puts_the_saved_map_back_and_keeps_the_tally(self):
+        self.learned_away(20 * 80 + 60)
+        self.node.settings = LocalizationSettings(learner_updates_maps=True)
+        self.drive()
+        self.node.settings = LocalizationSettings()
+        self.node.tally_map = None  # a bridge restart
+        self.node.update_learner()
+        np.testing.assert_array_equal(self.map_now(), self.saved)
+        self.assertEqual(os.listdir(self.learned_dir), ["downstairs.npz"])
+        self.assertEqual(self.node.reload_maps.call_count, 2)
+
+    def test_forgetting_while_updating_maps_brings_back_the_saved_map(self):
+        self.learned_away(20 * 80 + 60)
+        self.node.settings = LocalizationSettings(learner_updates_maps=True)
+        self.drive()
+        self.node.forget_asked = True
+        self.node.update_learner()
+        np.testing.assert_array_equal(self.map_now(), self.saved)
+        self.assertEqual(self.node.tally["visits"], 0)
 
     def test_with_the_learner_off_there_is_no_tally(self):
         self.node.settings = LocalizationSettings(learner="off")

@@ -8,8 +8,12 @@ mapping: slam_toolbox online async with config/slam_toolbox.yaml builds /map
 and publishes TF map -> odom, the same thing robot-slam.service used to run.
 
 localize: nav2 map_server serves ~/.config/robot-pet/maps/<name>.yaml and AMCL
-localizes against it with config/nav2.yaml. Nav2 1.5's localization_launch.py
-has no lifecycle manager, so we start the three nodes ourselves.
+localizes against it with config/nav2.yaml. A second map server,
+planning_map_server, serves the route planner's map: the learner's
+~/.config/robot-pet/learned/<name>.planning.yaml, or the map itself when there
+is none. Nav2 1.5's localization_launch.py has no lifecycle manager, so we
+start the nodes ourselves. In mapping mode config/nav2-mapping.yaml points the
+planner back at slam_toolbox's /map.
 
 Both modes also run Nav2's keepout filter servers on the barriers the bridge
 drew for the map (~/.config/robot-pet/keepout/<name>.yaml), or on an empty
@@ -37,8 +41,10 @@ from launch_ros.actions import Node
 NAV_CONFIG_PATH = "/home/pi/.config/robot-pet/nav.json"
 MAPS_DIR = "/home/pi/.config/robot-pet/maps"
 KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
+LEARNED_DIR = "/home/pi/.config/robot-pet/learned"
 CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 NAV2_PARAMS = os.path.join(CONFIG_DIR, "nav2.yaml")
+NAV2_MAPPING_PARAMS = os.path.join(CONFIG_DIR, "nav2-mapping.yaml")
 NAV2_TRIP_TREE = os.path.join(CONFIG_DIR, "nav2_navigate_to_pose.xml")
 EMPTY_KEEPOUT = os.path.join(CONFIG_DIR, "keepout-empty.yaml")
 NAV_CMD_VEL_REMAP = [("cmd_vel", "cmd_vel_nav")]
@@ -55,6 +61,12 @@ def keepout_mask(map_yaml: str | None) -> str:
     """The keepout mask yaml for the map in use, else the empty one."""
     mask_yaml = os.path.join(KEEPOUT_DIR, f"{nav_config().get('map')}.yaml")
     return mask_yaml if map_yaml is not None and os.path.exists(mask_yaml) else EMPTY_KEEPOUT
+
+
+def planning_map(map_yaml: str) -> str:
+    """The learner's planning map for the map in use, else the map itself."""
+    planning_yaml = os.path.join(LEARNED_DIR, f"{nav_config().get('map')}.planning.yaml")
+    return planning_yaml if os.path.exists(planning_yaml) else map_yaml
 
 
 def nav_config() -> dict:
@@ -88,6 +100,13 @@ def localize_nodes(map_yaml: str) -> list:
             parameters=[NAV2_PARAMS, {"yaml_filename": map_yaml}],
         ),
         Node(
+            package="nav2_map_server",
+            executable="map_server",
+            name="planning_map_server",
+            output="screen",
+            parameters=[NAV2_PARAMS, {"yaml_filename": planning_map(map_yaml)}],
+        ),
+        Node(
             package="nav2_amcl",
             executable="amcl",
             name="amcl",
@@ -99,7 +118,7 @@ def localize_nodes(map_yaml: str) -> list:
             executable="lifecycle_manager",
             name="lifecycle_manager_localization",
             output="screen",
-            parameters=[{"autostart": True, "node_names": ["map_server", "amcl"]}],
+            parameters=[{"autostart": True, "node_names": ["map_server", "planning_map_server", "amcl"]}],
         ),
     ]
 
@@ -130,7 +149,8 @@ def keepout_nodes(mask_yaml: str) -> list:
     ]
 
 
-def navigation_nodes() -> list:
+def navigation_nodes(mapping: bool) -> list:
+    planner_params = [NAV2_PARAMS, NAV2_MAPPING_PARAMS] if mapping else [NAV2_PARAMS]
     return [
         Node(
             package="nav2_controller",
@@ -145,7 +165,7 @@ def navigation_nodes() -> list:
             executable="planner_server",
             name="planner_server",
             output="screen",
-            parameters=[NAV2_PARAMS],
+            parameters=planner_params,
         ),
         Node(
             package="nav2_behaviors",
@@ -180,4 +200,4 @@ def navigation_nodes() -> list:
 def generate_launch_description() -> LaunchDescription:
     map_yaml = map_to_localize()
     mode_nodes = mapping_nodes() if map_yaml is None else localize_nodes(map_yaml)
-    return LaunchDescription(mode_nodes + keepout_nodes(keepout_mask(map_yaml)) + navigation_nodes())
+    return LaunchDescription(mode_nodes + keepout_nodes(keepout_mask(map_yaml)) + navigation_nodes(map_yaml is None))

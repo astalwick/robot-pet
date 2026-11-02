@@ -113,7 +113,7 @@ plan_service_restarts() {
       src/ros_nodes/lidar_status_node.py)
         want_restart robot-lidar-status.service
         ;;
-      src/robot_nav.py | src/ros_nodes/nav_node.py)
+      src/robot_nav.py | src/map_learner.py | src/ros_nodes/nav_node.py)
         want_restart robot-nav-bridge.service
         ;;
       src/ros_nodes/gamepad_teleop_node.py)
@@ -205,7 +205,7 @@ plan_service_restarts() {
       config/twist_mux.yaml)
         want_restart robot-twist-mux.service
         ;;
-      config/nav.launch.py | config/nav2.yaml | config/nav2_navigate_to_pose.xml | config/slam_toolbox.yaml | config/keepout-empty.*)
+      config/nav.launch.py | config/nav2.yaml | config/nav2-mapping.yaml | config/nav2_navigate_to_pose.xml | config/slam_toolbox.yaml | config/keepout-empty.*)
         want_restart robot-nav.service
         ;;
       config/rplidar.launch.py)

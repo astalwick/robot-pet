@@ -3,9 +3,10 @@
 # (base_link, there is no base_footprint in our TF tree), the A1's range and
 # no initial pose: the nav bridge asks AMCL for a global localization instead.
 #
-# amcl and map_server run in localize mode only. The navigation stack below
-# (bt_navigator, controller, planner, behaviors, costmaps) runs in both modes:
-# while mapping, slam_toolbox's live /map is the global costmap's static layer.
+# amcl and the two map servers run in localize mode only. The navigation
+# stack below (bt_navigator, controller, planner, behaviors, costmaps) runs in
+# both modes: while mapping, slam_toolbox's live /map is the global costmap's
+# static layer (config/nav2-mapping.yaml).
 amcl:
   ros__parameters:
     alpha1: 0.2
@@ -59,6 +60,16 @@ amcl:
 map_server:
   ros__parameters:
     # yaml_filename comes from nav.launch.py (the map named in nav.json)
+    introspection_mode: "disabled"
+
+# The route planner's map (localize mode only): the learner's planning map,
+# where a moved chair is a grey that costs but never forbids, or the map
+# itself when nothing is learned (yaml_filename from nav.launch.py). The
+# global costmap's static layer reads it below.
+planning_map_server:
+  ros__parameters:
+    topic_name: "/planning_map"
+    frame_id: "map"
     introspection_mode: "disabled"
 
 # --- barriers --------------------------------------------------------------
@@ -320,6 +331,10 @@ global_costmap:
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+        # the planning map; mapping mode points this back at /map
+        # (config/nav2-mapping.yaml). Not trinary, so its greys become cost.
+        map_topic: "/planning_map"
+        trinary_costmap: false
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true

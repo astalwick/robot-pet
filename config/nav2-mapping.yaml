@@ -1,0 +1,8 @@
+# Mapping mode only, loaded after nav2.yaml (nav.launch.py): there is no
+# planning map while mapping, so the route planner plans on slam_toolbox's
+# /map. It names the costmap the way nav2.yaml does, so it reaches it.
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      static_layer:
+        map_topic: "/map"

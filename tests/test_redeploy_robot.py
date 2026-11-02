@@ -61,7 +61,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-pi-battery.service")
         elif path == "src/ros_nodes/lidar_status_node.py":
             want("robot-lidar-status.service")
-        elif path in ("src/robot_nav.py", "src/ros_nodes/nav_node.py"):
+        elif path in ("src/robot_nav.py", "src/map_learner.py", "src/ros_nodes/nav_node.py"):
             want("robot-nav-bridge.service")
         elif path == "src/ros_nodes/gamepad_teleop_node.py":
             want("gamepad-teleop.service")
@@ -136,7 +136,7 @@ def planned_services(paths: list[str]) -> set[str]:
             want("robot-state-publisher.service")
         elif path == "config/twist_mux.yaml":
             want("robot-twist-mux.service")
-        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/nav2_navigate_to_pose.xml", "config/slam_toolbox.yaml") or path.startswith("config/keepout-empty."):
+        elif path in ("config/nav.launch.py", "config/nav2.yaml", "config/nav2-mapping.yaml", "config/nav2_navigate_to_pose.xml", "config/slam_toolbox.yaml") or path.startswith("config/keepout-empty."):
             want("robot-nav.service")
         elif path == "config/rplidar.launch.py":
             want("robot-lidar.service")

@@ -8,6 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 import numpy as np
+from PIL import Image
 
 import map_learner
 import robot_nav
@@ -210,6 +211,15 @@ class MapFileTest(unittest.TestCase):
             loaded, loaded_info = robot_nav.load_map_file("downstairs", maps_dir)
         np.testing.assert_array_equal(loaded, data)
         self.assertEqual(loaded_info, map_info)
+
+    def test_a_raw_map_keeps_each_squares_grey(self):
+        map_info = {"width": 4, "height": 1, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}
+        with tempfile.TemporaryDirectory() as maps_dir:
+            map_learner.write_map_file([100, 25, 0, -1], map_info, os.path.join(maps_dir, "downstairs.planning"), raw=True)
+            pixels = np.asarray(Image.open(os.path.join(maps_dir, "downstairs.planning.pgm"))).ravel()
+            self.assertIn("mode: raw", open(os.path.join(maps_dir, "downstairs.planning.yaml")).read())
+        # map_server's raw mode serves 0 .. 100 as they are, anything above as unknown
+        self.assertEqual(pixels.tolist(), [100, 25, 0, 255])
 
 
 if __name__ == "__main__":

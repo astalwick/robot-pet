@@ -718,8 +718,9 @@ def nav_update(
     none.
     barriers are the virtual walls per map, {map: [{x1, y1, x2, y2}, ...]}.
     learned is what the learner has of the map in use, {visits, last_closed
-    (seconds since the epoch, or None before the first visit)}, or None with
-    the learner off or while mapping.
+    (seconds since the epoch, or None before the first visit), updates_maps
+    (the robot uses what it learned)}, or None with the learner off or while
+    mapping.
     """
     return {
         "type": "source_update",

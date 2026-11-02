@@ -125,11 +125,14 @@ class LocalizationSettings:
     # the saved map. A visit closes at the first lidar stop visit_gap_min
     # after the last one closed, and counts only if the robot drove
     # visit_drive_m while learning in it. learner_early also draws, pale,
-    # what a single visit saw against the map.
+    # what a single visit saw against the map. learner_updates_maps: the
+    # robot finds its place and plans routes on what it learned instead of
+    # the saved map (watching only; off puts the saved map back).
     learner: str = "watch"
     visit_gap_min: float = 30.0
     visit_drive_m: float = 1.0
     learner_early: bool = True
+    learner_updates_maps: bool = False
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
@@ -173,6 +176,7 @@ class LocalizationSettings:
             visit_gap_min=clamp(float(values.get("visit_gap_min", defaults.visit_gap_min)), 1.0, 240.0),
             visit_drive_m=clamp(float(values.get("visit_drive_m", defaults.visit_drive_m)), 0.0, 20.0),
             learner_early=bool(values.get("learner_early", defaults.learner_early)),
+            learner_updates_maps=bool(values.get("learner_updates_maps", defaults.learner_updates_maps)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -216,6 +220,7 @@ LOCALIZATION_FIELDS = (
     {"key": "visit_gap_min", "label": "Visits apart (min)", "type": "number", "help": "1 .. 240; a visit closes at the first lidar stop this long after the last", "min": 1.0, "max": 240.0, "step": 1},
     {"key": "visit_drive_m", "label": "Visit counts after (m)", "type": "number", "help": "0 .. 20 driven while learning, or the visit is dropped", "min": 0.0, "max": 20.0, "step": 0.5},
     {"key": "learner_early", "label": "Show early learning", "type": "boolean", "help": "Draw pale red and pale green where one visit saw something the map does not show yet"},
+    {"key": "learner_updates_maps", "label": "Learner updates maps", "type": "boolean", "help": "The robot finds its place and plans routes on what it learned, not the saved map. Off: it only watches, and the saved map comes back"},
 )
 
 

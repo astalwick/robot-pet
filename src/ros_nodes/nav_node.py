@@ -70,6 +70,16 @@ floor is back under both cliff sensors and nothing has rocked for a moment
 The bars and switches are in localization.json (config/localization.py). The
 `record` command saves scans and poses for scripts/localization-replay.py.
 
+The learner (src/map_learner.py) watches the house change. While the robot
+is tracking, nobody holds it and the lidar has not just turned, each tick's
+judged scan also teaches the open visit, from the judge's own pose. A visit
+closes at the first lidar stop visit_gap_min after the last one closed, into
+the map's tally in learned/<map>.npz, and counts only if the robot drove
+visit_drive_m while learning in it. The open visit lives in memory: a
+restart loses it and a map switch drops it. The dashboard's map picture
+draws what the tally says changed; the robot itself keeps using the saved
+map. `forget_learned` starts the map's tally over.
+
 Navigation goals (`navigate_to`, `nav_cancel` on the socket) go to Nav2's
 NavigateToPose action. nav.launch.py starts the navigation servers in both
 modes but does not activate them: their costmaps need the map frame, and the
@@ -116,6 +126,7 @@ from sensor_msgs.msg import Imu, LaserScan, Range
 from std_msgs.msg import Bool, Float32MultiArray
 from tf2_ros import Buffer, TransformException, TransformListener
 
+import map_learner
 import robot_nav
 from config.localization import DEFAULT_CONFIG_PATH as DEFAULT_LOCALIZATION_SETTINGS_PATH
 from config.localization import LocalizationSettings, LocalizationSettingsError, load_localization_settings
@@ -266,6 +277,21 @@ class NavNode(Node):
         self.amcl_pose: dict[str, float] | None = None
         # a `record` in progress: {"label", "file", "path", "until", "scans"}
         self.recording: dict | None = None
+        # The learner (see update_learner): the map its tally is for, that
+        # map as saved with its map_info, the tally (None while mapping or
+        # with the learner off), the open visit and the wheel travel while
+        # learning in it. moved_m is the wheel travel this tick. A forget
+        # asked for over the socket waits for the tick, which owns the tally.
+        # map_png_stale: the tally changed, so the map picture is drawn again.
+        self.tally_map: str | None = None
+        self.saved_map = None
+        self.saved_map_info: dict | None = None
+        self.tally: dict | None = None
+        self.visit: dict | None = None
+        self.visit_driven_m = 0.0
+        self.moved_m = 0.0
+        self.forget_asked = False
+        self.map_png_stale = False
         # the AMCL lifecycle state the timer last saw; None until decided
         self.amcl_active: bool | None = None
         self.started = time.monotonic()
@@ -412,6 +438,7 @@ class NavNode(Node):
         self.update_pose()
         self.update_travelled()
         self.update_handling()
+        self.update_learner()
         self.judge_scan()
         with self.pose_lock:
             self.update_state()
@@ -448,11 +475,13 @@ class NavNode(Node):
     def update_travelled(self) -> None:
         """Add up the wheel travel for the motion gate. Odometry counts the
         wheels, so a robot carried or turned by hand confirms nothing."""
+        self.moved_m = 0.0
         position = self.lookup_pose("odom", "base_link", Time())
         if position is None:
             return
         if self.odom_position is not None:
-            self.travelled_m += math.hypot(position["x"] - self.odom_position["x"], position["y"] - self.odom_position["y"])
+            self.moved_m = math.hypot(position["x"] - self.odom_position["x"], position["y"] - self.odom_position["y"])
+            self.travelled_m += self.moved_m
         self.odom_position = position
 
     def update_handling(self) -> None:
@@ -540,6 +569,7 @@ class NavNode(Node):
             self.check = None
             return
         laser_pose = robot_nav.compose_poses(map_odom, odom_laser)
+        self.learn(scan, laser_pose)
         # map_rendered is the grid map_info describes (latest_map may be 2 s newer)
         self.check = robot_nav.beam_check(
             self.map_rendered.data, self.map_info, laser_pose, scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max, self.settings
@@ -549,6 +579,75 @@ class NavNode(Node):
         if self.check is not None and not self.check["passes"] and self.reference is not None and self.settings.self_check:
             moved = robot_nav.relative_pose(odom_laser, self.reference[1])
             self.scan_agree = robot_nav.scan_check(self.reference[0], self.judged_view[0], moved, self.settings)
+
+    def update_learner(self) -> None:
+        """Keep the tally for the map in use, forget it when asked, and close
+        the open visit at the first lidar stop visit_gap_min after the last
+        one closed (no trip is driving then). A visit the robot drove less
+        than visit_drive_m in is dropped: a robot parked on a slightly wrong
+        pose teaches nothing."""
+        if self.forget_asked:
+            self.forget_asked = False
+            log.info("learner: forgetting what it learned on %s", self.map_name)
+            self.learned_path(self.map_name).unlink(missing_ok=True)
+            self.tally_map = None
+        if self.tally_map != self.map_name:
+            self.load_tally()
+        if self.visit is None or self.scanning() or time.time() - self.tally["last_closed"] < self.settings.visit_gap_min * 60:
+            return
+        if self.visit_driven_m < self.settings.visit_drive_m:
+            log.info("learner: dropped a visit on %s, only %.1f m driven", self.map_name, self.visit_driven_m)
+            self.visit = None
+            return
+        map_learner.close_visit(self.tally, self.visit, self.saved_map_info, self.settings)
+        self.tally["visits"] += 1
+        self.tally["last_closed"] = time.time()
+        self.visit = None
+        self.map_png_stale = True
+        log.info("learner: visit %d on %s closed, %.1f m driven", self.tally["visits"], self.map_name, self.visit_driven_m)
+        try:
+            map_learner.save_tally(self.tally, self.learned_path(self.map_name))
+        except OSError as exc:
+            log.warning("learner: could not write the tally: %s", exc)
+
+    def load_tally(self) -> None:
+        """The tally for the map in use from learned/<map>.npz, or a new one
+        from the saved map. Any open visit was on another map, so it goes."""
+        self.tally_map, self.tally, self.visit = self.map_name, None, None
+        self.map_png_stale = True
+        if self.map_name is None or self.settings.learner == "off":
+            return
+        try:
+            self.saved_map, self.saved_map_info = robot_nav.load_map_file(self.map_name, self.args.maps_dir)
+        except (OSError, KeyError, ValueError) as exc:
+            log.warning("learner: cannot read map %s: %s", self.map_name, exc)
+            return
+        path = self.learned_path(self.map_name)
+        tally = None
+        if path.exists():
+            try:
+                tally = map_learner.load_tally(path)
+            except (OSError, KeyError, ValueError) as exc:
+                log.warning("learner: cannot read %s, starting over: %s", path, exc)
+        # a map file replaced by hand, not saved over, has another size
+        if tally is None or tally["marks"].shape[1] != self.saved_map.size:
+            tally = map_learner.new_tally(self.saved_map)
+        self.tally = tally
+
+    def learned_path(self, map_name: str) -> Path:
+        return Path(self.args.learned_dir) / f"{map_name}.npz"
+
+    def learn(self, scan: LaserScan, laser_pose: dict) -> None:
+        """Add the scan the judge is about to judge to the open visit, from
+        the same pose, when the learner can trust that pose: tracking, its
+        latest verdict passed, and nobody holds the robot. Not while a map
+        switch is under way: the pose may be on the other map."""
+        if self.tally is None or self.activity is not None or self.state() != "tracking" or not self.clean or self.handled is not None:
+            return
+        if self.visit is None:
+            self.visit, self.visit_driven_m = map_learner.new_visit(self.saved_map.size), 0.0
+        map_learner.learn_scan(self.visit, self.saved_map_info, laser_pose, scan.ranges, scan.angle_min, scan.angle_increment, scan.range_min, scan.range_max, self.settings)
+        self.visit_driven_m += self.moved_m
 
     def update_state(self) -> None:
         """One rule for the pose state each tick, from the judge's verdicts.
@@ -630,13 +729,18 @@ class NavNode(Node):
 
     def update_map_png(self) -> None:
         grid = self.latest_map
-        if grid is None or grid is self.map_rendered or time.monotonic() - self.map_png_time < MAP_PNG_MIN_INTERVAL:
+        if grid is None or (grid is self.map_rendered and not self.map_png_stale) or time.monotonic() - self.map_png_time < MAP_PNG_MIN_INTERVAL:
             return
         self.map_rendered = grid
+        self.map_png_stale = False
         self.map_png_time = time.monotonic()
         info = grid.info
+        # what the learner changed; mid-switch the tally may be for the other map
+        changes = None
+        if self.tally is not None and self.saved_map.size == len(grid.data):
+            changes = map_learner.changes(self.tally, self.saved_map)
         try:
-            robot_nav.render_map_png(info.width, info.height, grid.data, self.args.map_png)
+            robot_nav.render_map_png(info.width, info.height, grid.data, self.args.map_png, changes)
         except OSError as exc:
             log.warning("could not write %s: %s", self.args.map_png, exc)
             return
@@ -698,6 +802,7 @@ class NavNode(Node):
             "motor_power_requested": self.navigating(),
             "goal": self.goal,
             "barriers": self.barriers,
+            "learned": None if self.tally is None else {"visits": self.tally["visits"], "last_closed": self.tally["last_closed"] or None},
         }
 
     # --- localize mode -----------------------------------------------------
@@ -972,6 +1077,11 @@ class NavNode(Node):
             return self.navigate_to(request)
         if cmd == "record":
             return self.start_recording(request.get("label"), request.get("seconds", RECORD_SECONDS))
+        if cmd == "forget_learned":
+            if self.tally is None:
+                return {"ok": False, "error": "not_learning"}
+            self.forget_asked = True
+            return {"ok": True, "accepted": True}
         if cmd == "nav_cancel":
             if not self.navigating():
                 return {"ok": True, "accepted": False, "reason": "no_goal"}
@@ -1036,6 +1146,8 @@ class NavNode(Node):
             log.warning("save_map %s failed: %s", name, (result.stderr or result.stdout).strip()[-400:])
             return
         log.info("saved map %s", name)
+        # what the learner saw of an old map by this name is not about this one
+        self.learned_path(name).unlink(missing_ok=True)
         if pose is not None:
             Path(self.args.nav_pose).write_text(json.dumps({"map": name, **pose}))
         self.switch_to("localize", name)
@@ -1396,6 +1508,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--localization-settings", default=DEFAULT_LOCALIZATION_SETTINGS_PATH)
     parser.add_argument("--sensors-config", default=DEFAULT_SENSORS_CONFIG_PATH)
     parser.add_argument("--recordings-dir", default=robot_nav.DEFAULT_RECORDINGS_DIR)
+    parser.add_argument("--learned-dir", default=robot_nav.DEFAULT_LEARNED_DIR)
     return parser
 
 

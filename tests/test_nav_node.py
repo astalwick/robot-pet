@@ -1,5 +1,7 @@
+import math
 import os
 import sys
+import tempfile
 import threading
 import time
 import types
@@ -9,6 +11,9 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+import numpy as np
+
+import map_learner
 from config.localization import LocalizationSettings
 
 
@@ -249,6 +254,102 @@ class TripTest(unittest.TestCase):
         self.node.hold_goal("lost")
         self.assertEqual(self.node.goal["state"], "cancelled")
         self.assertEqual(self.node.goal["reason"], "lost")
+
+
+
+class LearnerTest(unittest.TestCase):
+    """The learner in the bridge: what it learns from, and when a visit closes."""
+
+    def setUp(self):
+        log_patch = mock.patch.object(nav_node, "log")
+        log_patch.start()
+        self.addCleanup(log_patch.stop)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.learned_dir = os.path.join(directory.name, "learned")
+        # a 4 m x 2 m room at 5 cm with a wall along x = 3 m
+        grid = np.zeros((40, 80), dtype=np.int8)
+        grid[:, 60] = 100
+        map_learner.write_map_file(grid.ravel(), {"width": 80, "height": 40, "resolution": 0.05, "origin_x": 0.0, "origin_y": 0.0}, os.path.join(directory.name, "downstairs"))
+
+        # only what the learner touches, as __init__ would set it
+        node = object.__new__(nav_node.NavNode)
+        node.args = types.SimpleNamespace(maps_dir=directory.name, learned_dir=self.learned_dir)
+        node.settings = LocalizationSettings()
+        node.mode, node.map_name = "localize", "downstairs"
+        node.pose_state, node.clean = "tracking", True
+        node.unplaced_since = None
+        node.last_scan_time = time.monotonic()
+        node.activity, node.handled = None, None
+        node.tally_map = node.saved_map = node.saved_map_info = node.tally = node.visit = None
+        node.visit_driven_m = node.moved_m = 0.0
+        node.forget_asked = node.map_png_stale = False
+        self.node = node
+
+    def drive(self, scans=4, metres=0.5):
+        """A tick per scan, each seeing the wall 2 m ahead from (1, 1), the
+        wheels moving `metres` per tick."""
+        scan = types.SimpleNamespace(ranges=[2.0] + [math.inf] * 359, angle_min=0.0, angle_increment=math.radians(1), range_min=0.05, range_max=12.0)
+        for _ in range(scans):
+            self.node.moved_m = metres
+            self.node.update_learner()
+            self.node.learn(scan, {"x": 1.01, "y": 1.01, "yaw": 0.0})
+
+    def stop_lidar(self, minutes_since_last=31):
+        """The lidar goes quiet `minutes_since_last` after the last visit closed."""
+        self.node.last_scan_time = None
+        self.node.tally["last_closed"] = time.time() - minutes_since_last * 60
+        self.node.update_learner()
+
+    def test_a_visit_driven_a_metre_closes_at_the_lidar_stop_and_is_saved(self):
+        self.drive()
+        self.stop_lidar()
+        self.assertIsNone(self.node.visit)
+        self.assertEqual(self.node.tally["visits"], 1)
+        # the wall's square has its first full visit of the robot's own
+        self.assertEqual(self.node.tally["own_full"][20 * 80 + 60], 1)
+        saved = map_learner.load_tally(os.path.join(self.learned_dir, "downstairs.npz"))
+        self.assertEqual(saved["visits"], 1)
+
+    def test_a_visit_driven_less_than_a_metre_is_dropped(self):
+        self.drive(metres=0.1)
+        self.stop_lidar()
+        self.assertIsNone(self.node.visit)
+        self.assertEqual(self.node.tally["visits"], 0)
+        self.assertFalse(os.path.exists(self.learned_dir))
+
+    def test_a_lidar_stop_within_half_an_hour_of_the_last_visit_keeps_it_open(self):
+        self.drive()
+        self.stop_lidar(minutes_since_last=20)
+        self.assertIsNotNone(self.node.visit)
+        self.assertEqual(self.node.tally["visits"], 0)
+
+    def test_nothing_is_learned_while_unsure_or_held(self):
+        for state, clean, handled in (("checking", True, None), ("tracking", False, None), ("tracking", True, "picked up")):
+            self.node.pose_state, self.node.clean, self.node.handled = state, clean, handled
+            self.drive()
+            self.assertIsNone(self.node.visit, state)
+
+    def test_a_map_switch_drops_the_open_visit(self):
+        self.drive()
+        self.node.map_name = "upstairs"
+        self.node.update_learner()
+        self.assertIsNone(self.node.visit)
+        self.assertIsNone(self.node.tally)
+
+    def test_forgetting_starts_the_tally_over(self):
+        self.drive()
+        self.stop_lidar()
+        self.node.forget_asked = True
+        self.node.update_learner()
+        self.assertEqual(self.node.tally["visits"], 0)
+        self.assertFalse(os.path.exists(os.path.join(self.learned_dir, "downstairs.npz")))
+
+    def test_with_the_learner_off_there_is_no_tally(self):
+        self.node.settings = LocalizationSettings(learner="off")
+        self.drive()
+        self.assertIsNone(self.node.tally)
+        self.assertEqual(self.node.handle_request({"cmd": "forget_learned"}), {"ok": False, "error": "not_learning"})
 
 
 if __name__ == "__main__":

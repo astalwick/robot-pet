@@ -351,6 +351,18 @@ class RenderMapPngTest(unittest.TestCase):
         self.assertEqual(list(pixels[1]), [255, 0, 128])  # grid row 0 at the bottom
         self.assertEqual(list(pixels[0]), [128, 255, 255])  # 50% occupied is mid gray
 
+    def test_coloured_squares_are_drawn_in_their_colour(self):
+        data = [0, 100, -1, 50, 0, 0]
+        red = np.array([False, True, False, False, False, False])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "map.png")
+            robot_nav.render_map_png(3, 2, data, path, {(220, 50, 50): red})
+            pixels = np.asarray(Image.open(path))
+
+        self.assertEqual(pixels.shape, (2, 3, 3))
+        self.assertEqual(pixels[1, 1].tolist(), [220, 50, 50])
+        self.assertEqual(pixels[1, 0].tolist(), [255, 255, 255])
+
 
 class RenderKeepoutMaskTest(unittest.TestCase):
     def read_mask(self, barriers):

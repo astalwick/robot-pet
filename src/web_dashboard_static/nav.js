@@ -65,6 +65,7 @@ export function renderNav(snapshot, sources) {
     row('places', '', String(Object.keys(nav.places || {}).length)),
     row('goal', '', goalText(nav.goal), goalClass(nav.goal)),
   ];
+  if (nav.learned) rows.push(row('learned', '', learnedText(nav.learned), 'muted'));
   if (DEBUG) {
     const check = nav.check;
     rows.push(
@@ -101,6 +102,13 @@ function searchText(search) {
   const found = search.winner ? ', clear winner' : '';
   const rival = search.rival ? `, better place ${search.rival}` : '';
   return `${search.seconds} s, ${best}${found}${rival}`;
+}
+
+// the learner's line; the map draws what it changed in these colours
+function learnedText(learned) {
+  if (!learned.last_closed) return 'nothing yet';
+  const last = new Date(learned.last_closed * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `from ${learned.visits} visits, last ${last} (red: new, green: gone, orange: comes and goes)`;
 }
 
 function goalClass(goal) {
@@ -226,6 +234,7 @@ function updateNavControls() {
   // a place saved on an unconfirmed position could be off by a room
   setDisabled('nav-save-place-button', !(localize && nav.state === 'tracking' && nav.pose));
   setDisabled('nav-record-button', !localize || nav.recording != null);
+  setDisabled('nav-forget-button', !(nav && nav.learned));
   setDisabled('nav-cancel-button', !(nav && nav.goal && (nav.goal.state === 'navigating' || nav.goal.state === 'held')));
 
   const select = document.getElementById('nav-map-select');
@@ -254,6 +263,7 @@ export function bindNavHandlers(bindOn) {
   bindOn('nav-draw-barrier-button', 'click', () => setMapTool('barrier'));
   bindOn('nav-erase-button', 'click', () => setMapTool('erase'));
   bindOn('nav-record-button', 'click', onRecord);
+  bindOn('nav-forget-button', 'click', () => sendNav({ cmd: 'forget_learned' }));
   document.getElementById('nav-debug-actions').classList.toggle('hidden', !DEBUG);
 }
 

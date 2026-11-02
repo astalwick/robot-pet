@@ -22,6 +22,7 @@ from typing import Any
 
 
 DEFAULT_CONFIG_PATH = "/home/pi/.config/robot-pet/localization.json"
+LEARNER_CHOICES = ("off", "watch")
 
 
 class LocalizationSettingsError(ValueError):
@@ -119,10 +120,20 @@ class LocalizationSettings:
     # on the planning map a square that is not a wall costs this share of a
     # wall times its share of full visits; around 0.8 changes how Nav2 plans near it
     planning_grey: float = 0.5
+    # The learner off, or watching: it learns while the robot is sure where
+    # it is and the dashboard draws what changed, but the robot keeps using
+    # the saved map. A visit closes at the first lidar stop visit_gap_min
+    # after the last one closed, and counts only if the robot drove
+    # visit_drive_m while learning in it.
+    learner: str = "watch"
+    visit_gap_min: float = 30.0
+    visit_drive_m: float = 1.0
 
     @classmethod
     def from_dict(cls, values: dict[str, Any]) -> "LocalizationSettings":
         defaults = cls()
+        if values.get("learner", defaults.learner) not in LEARNER_CHOICES:
+            raise ValueError(f"learner must be one of: {', '.join(LEARNER_CHOICES)}")
         return cls(
             tolerance_m=clamp(float(values.get("tolerance_m", defaults.tolerance_m)), 0.05, 1.0),
             tolerance_share=clamp(float(values.get("tolerance_share", defaults.tolerance_share)), 0.0, 0.2),
@@ -156,6 +167,9 @@ class LocalizationSettings:
             learn_full_share=clamp(float(values.get("learn_full_share", defaults.learn_full_share)), 0.05, 1.0),
             learn_near_m=clamp(float(values.get("learn_near_m", defaults.learn_near_m)), 0.0, 0.3),
             planning_grey=clamp(float(values.get("planning_grey", defaults.planning_grey)), 0.0, 0.99),
+            learner=values.get("learner", defaults.learner),
+            visit_gap_min=clamp(float(values.get("visit_gap_min", defaults.visit_gap_min)), 1.0, 240.0),
+            visit_drive_m=clamp(float(values.get("visit_drive_m", defaults.visit_drive_m)), 0.0, 20.0),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -195,6 +209,9 @@ LOCALIZATION_FIELDS = (
     {"key": "learn_full_share", "label": "Full when hit at least", "type": "number", "help": "0.05 .. 1; share of a square's looks in a visit that must end there", "min": 0.05, "max": 1.0, "step": 0.01},
     {"key": "learn_near_m", "label": "Clear only this far from hits (m)", "type": "number", "help": "0 .. 0.3; a square is clear for a visit only when few beams ended this close to it", "min": 0.0, "max": 0.3, "step": 0.01},
     {"key": "planning_grey", "label": "Moved things cost", "type": "number", "help": "0 .. 0.99 of a wall, on routes, for a square full on every visit", "min": 0.0, "max": 0.99, "step": 0.01},
+    {"key": "learner", "label": "Learner", "type": "select", "options": list(LEARNER_CHOICES), "help": "watch: learn what changed and draw it on the map; the robot keeps the saved map"},
+    {"key": "visit_gap_min", "label": "Visits apart (min)", "type": "number", "help": "1 .. 240; a visit closes at the first lidar stop this long after the last", "min": 1.0, "max": 240.0, "step": 1},
+    {"key": "visit_drive_m", "label": "Visit counts after (m)", "type": "number", "help": "0 .. 20 driven while learning, or the visit is dropped", "min": 0.0, "max": 20.0, "step": 0.5},
 )
 
 

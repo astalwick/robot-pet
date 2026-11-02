@@ -940,7 +940,7 @@ async def voice_command_handler(request: web.Request) -> web.Response:
 
 NAV_COMMANDS = {
     "nav_status", "set_mode", "save_map", "localize", "create_place", "delete_place",
-    "create_barrier", "delete_barrier", "navigate_to", "nav_cancel", "record",
+    "create_barrier", "delete_barrier", "navigate_to", "nav_cancel", "record", "forget_learned",
 }
 
 

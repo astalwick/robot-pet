@@ -693,6 +693,7 @@ def nav_update(
     check: dict[str, Any] | None = None,
     recording: str | None = None,
     handled: str | None = None,
+    learned: dict[str, Any] | None = None,
     now: float | None = None,
 ) -> dict[str, Any]:
     """The nav bridge's hub message.
@@ -716,6 +717,9 @@ def nav_update(
     ended early (stopped, replaced, lost, off_map, ...), or None if there was
     none.
     barriers are the virtual walls per map, {map: [{x1, y1, x2, y2}, ...]}.
+    learned is what the learner has of the map in use, {visits, last_closed
+    (seconds since the epoch, or None before the first visit)}, or None with
+    the learner off or while mapping.
     """
     return {
         "type": "source_update",
@@ -737,4 +741,5 @@ def nav_update(
         "motor_power_requested": motor_power_requested,
         "goal": goal,
         "barriers": barriers or {},
+        "learned": learned,
     }

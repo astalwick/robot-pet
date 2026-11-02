@@ -157,6 +157,35 @@ class LearnScanTest(unittest.TestCase):
         self.assertEqual(np.flatnonzero(visit["looks"].reshape(40, 80)[20]).tolist(), list(range(40)))
 
 
+class ChangesTest(unittest.TestCase):
+    def test_new_gone_and_coming_and_going_squares_each_get_their_colour(self):
+        saved = [0, 100, 0, 0]
+        tally = map_learner.new_tally(saved)
+        visits(tally, map_learner.FULL, 4, square=0)
+        visits(tally, map_learner.CLEAR, 3, square=1)
+        visits(tally, map_learner.FULL, 2, square=2)
+        visits(tally, map_learner.CLEAR, 2, square=2)
+        changes = map_learner.changes(tally, saved)
+        self.assertEqual(changes[map_learner.ADDED_COLOUR].tolist(), [True, False, False, False])
+        self.assertEqual(changes[map_learner.REMOVED_COLOUR].tolist(), [False, True, False, False])
+        self.assertEqual(changes[map_learner.CHANGED_COLOUR].tolist(), [False, False, True, False])
+
+
+class TallyFileTest(unittest.TestCase):
+    def test_a_saved_tally_loads_back_as_saved(self):
+        tally = map_learner.new_tally([100, 0, -1])
+        visits(tally, map_learner.FULL, 2, square=1)
+        tally["visits"], tally["last_closed"] = 2, 1761998400.5
+        with tempfile.TemporaryDirectory() as learned_dir:
+            path = os.path.join(learned_dir, "learned", "downstairs.npz")
+            map_learner.save_tally(tally, path)
+            self.assertEqual(os.listdir(os.path.dirname(path)), ["downstairs.npz"])
+            loaded = map_learner.load_tally(path)
+        for key in ("marks", "own_full", "own_clear"):
+            np.testing.assert_array_equal(loaded[key], tally[key])
+        self.assertEqual((loaded["visits"], loaded["last_closed"]), (2, 1761998400.5))
+
+
 class MapFileTest(unittest.TestCase):
     def test_a_written_map_reads_back_as_written(self):
         data = np.array([100, 0, -1, 0, 100, -1], dtype=np.int8)

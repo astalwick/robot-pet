@@ -14,6 +14,7 @@ Files, all under ~/.config/robot-pet:
     keepout/<name>.yaml + .pgm, the barriers drawn as a Nav2 keepout mask
     localization.json, the judge's and the search's bars and switches (config/localization.py)
     recordings/<time>-<label>.jsonl, scans saved for scripts/localization-replay.py
+    learned/<name>.npz, what the learner has seen of each map (map_learner.py)
 
 config/nav.launch.py reads nav.json at robot-nav.service start; the bridge
 writes it and restarts the unit to switch modes.
@@ -44,6 +45,7 @@ DEFAULT_MAPS_DIR = "/home/pi/.config/robot-pet/maps"
 DEFAULT_BARRIERS_PATH = "/home/pi/.config/robot-pet/barriers.json"
 DEFAULT_KEEPOUT_DIR = "/home/pi/.config/robot-pet/keepout"
 DEFAULT_RECORDINGS_DIR = "/home/pi/.config/robot-pet/recordings"
+DEFAULT_LEARNED_DIR = "/home/pi/.config/robot-pet/learned"
 
 # Nav2 keeps the robot this far to each side of a barrier line. Keepout cells
 # are not inflated, and the tail sweeps 0.33 m from the axle when the robot
@@ -527,13 +529,19 @@ def nearest_place(
     return name, distance
 
 
-def render_map_png(width: int, height: int, data, path: str) -> None:
-    """Write an OccupancyGrid as a grayscale PNG: free white, occupied black,
-    unknown gray. Grid row 0 is the bottom of the map, image row 0 the top."""
+def render_map_png(width: int, height: int, data, path: str, colours: dict | None = None) -> None:
+    """Write an OccupancyGrid as a PNG: free white, occupied black, unknown
+    gray, and the squares in each of `colours` ({(r, g, b): flat mask}, like
+    map_learner.changes) in that colour. Grid row 0 is the bottom of the map,
+    image row 0 the top."""
     grid = np.asarray(data, dtype=np.int16).reshape(height, width)
     pixels = np.where(grid < 0, 128, 255 - grid * 255 // 100).astype(np.uint8)
+    if colours:
+        pixels = np.stack([pixels] * 3, axis=-1)
+        for colour, squares in colours.items():
+            pixels[squares.reshape(height, width)] = colour
     temp_path = f"{path}.tmp"
-    Image.fromarray(np.flipud(pixels), "L").save(temp_path, format="PNG")
+    Image.fromarray(np.flipud(pixels)).save(temp_path, format="PNG")
     os.replace(temp_path, path)
 
 

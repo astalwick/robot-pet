@@ -21,6 +21,10 @@ the bottom, like robot_nav.load_map_file):
     own_full   the robot's own full visits, up to CHANGED_VISITS
     own_clear  its own clear visits, up to CHANGED_VISITS
 
+and two numbers: visits (the robot's own visits closed) and last_closed
+(when the last one closed, in seconds since the epoch, 0 before the first).
+The bridge keeps it in learned/<map>.npz (save_tally, load_tally).
+
 An open visit is a dict of flat counts, added to scan by scan: looks (beams
 that looked at a square), hits (beams that ended in it) and scans (scans
 that looked at it at all).
@@ -49,6 +53,9 @@ CHANGED_VISITS = 2
 
 FULL, CLEAR, NONE = 1, 0, -1
 
+# the dashboard's colours for what the learner changed (changes)
+ADDED_COLOUR, REMOVED_COLOUR, CHANGED_COLOUR = (220, 50, 50), (40, 170, 90), (240, 150, 20)
+
 
 def new_tally(data) -> dict[str, np.ndarray]:
     """A tally that starts from a saved map: black squares with three full
@@ -57,7 +64,27 @@ def new_tally(data) -> dict[str, np.ndarray]:
     marks = np.full((VISITS_KEPT, data.size), NONE, dtype=np.int8)
     marks[-SEED_VISITS:, data >= robot_nav.OCCUPIED_THRESHOLD] = FULL
     marks[-SEED_VISITS:, data == 0] = CLEAR
-    return {"marks": marks, "own_full": np.zeros(data.size, dtype=np.int8), "own_clear": np.zeros(data.size, dtype=np.int8)}
+    return {"marks": marks, "own_full": np.zeros(data.size, dtype=np.int8), "own_clear": np.zeros(data.size, dtype=np.int8), "visits": 0, "last_closed": 0.0}
+
+
+def save_tally(tally: dict[str, Any], path: str) -> None:
+    """Write the tally to an .npz, by way of a temporary file so a power cut
+    never leaves half of one."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(f"{path}.tmp", "wb") as file:
+        np.savez(file, **tally)
+    os.replace(f"{path}.tmp", path)
+
+
+def load_tally(path: str) -> dict[str, Any]:
+    with np.load(path) as saved:
+        return {
+            "marks": saved["marks"],
+            "own_full": saved["own_full"],
+            "own_clear": saved["own_clear"],
+            "visits": int(saved["visits"]),
+            "last_closed": float(saved["last_closed"]),
+        }
 
 
 def new_visit(cells: int) -> dict[str, np.ndarray]:
@@ -155,6 +182,19 @@ def planning_map(tally: dict[str, np.ndarray], settings: LocalizationSettings) -
     with np.errstate(invalid="ignore"):
         grey = np.round(100 * settings.planning_grey * full / (full + clear))
     return np.select([full + clear == 0, (strict_map(tally) == 100) & ~changed], [-1, 100], grey).astype(np.int8)
+
+
+def changes(tally: dict[str, Any], saved) -> dict[tuple[int, int, int], np.ndarray]:
+    """What the dashboard draws over the map, {colour: squares}: red where the
+    strict map is black and the saved map white, green where it is white and
+    the saved map black, and orange where a square is marked changed (drawn
+    last, over the other two)."""
+    strict, saved = strict_map(tally), np.asarray(saved)
+    return {
+        ADDED_COLOUR: (strict == 100) & (saved == 0),
+        REMOVED_COLOUR: (strict == 0) & (saved >= robot_nav.OCCUPIED_THRESHOLD),
+        CHANGED_COLOUR: (tally["own_full"] >= CHANGED_VISITS) & (tally["own_clear"] >= CHANGED_VISITS),
+    }
 
 
 def write_map_file(data, map_info: dict[str, Any], stem: str) -> None:

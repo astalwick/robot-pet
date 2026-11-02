@@ -874,7 +874,8 @@ before it touches the map.
   time"), off by default: watch mode is unchanged until it is ticked, and
   unticking puts the saved map back. The wrong-pose check from 4a now gates
   ticking it for good, not the code. The search's cache needs no change:
-  the strict map rewrites the .yaml along with the .pgm.
+  the strict map rewrites the .yaml along with the .pgm. Nav2 1.5 reads
+  `trinary_costmap` from the costmap, not the static layer.
   **Exit, on the floor:** remove the coffee table; after three visits on
   separate occasions (five, once it has filled its ten) it is gone from the
   map, and trips route through where it stood. A door shut on some visits:

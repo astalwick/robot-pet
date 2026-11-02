@@ -322,6 +322,9 @@ global_costmap:
       track_unknown_space: true
       footprint: "[[0.06, 0.166], [0.06, -0.166], [-0.284, -0.166], [-0.284, 0.166]]"
       footprint_padding: 0.0
+      # the static layer reads the planning map's greys as cost, not as free
+      # (in Nav2 1.5 this is the costmap's setting, not the layer's)
+      trinary_costmap: false
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       filters: ["keepout_filter"]
       keepout_filter:
@@ -332,9 +335,8 @@ global_costmap:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
         # the planning map; mapping mode points this back at /map
-        # (config/nav2-mapping.yaml). Not trinary, so its greys become cost.
+        # (config/nav2-mapping.yaml)
         map_topic: "/planning_map"
-        trinary_costmap: false
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
